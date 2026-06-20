@@ -1,0 +1,77 @@
+name: Build and Package
+
+on:
+  push:
+    branches: [ main ]          # 可根据需要改为 release
+  workflow_dispatch:            # 支持手动触发
+
+jobs:
+  build-and-package:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install frontend dependencies
+        run: npm install
+
+      - name: Build frontend
+        run: npm run build
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build EXE (release)
+        run: |
+          cd src-tauri
+          cargo build --release
+
+      - name: Create distribution package
+        shell: pwsh
+        run: |
+          # 读取版本号（从 package.json）
+          $version = (Get-Content -Path package.json | ConvertFrom-Json).version
+          $packageDir = "missevan-recorder-v$version"
+          
+          # 创建打包目录
+          New-Item -ItemType Directory -Path $packageDir -Force
+
+          # 复制 EXE
+          Copy-Item -Path "src-tauri/target/release/*.exe" -Destination $packageDir
+
+          # 创建空文件夹
+          New-Item -ItemType Directory -Path "$packageDir/config" -Force
+          New-Item -ItemType Directory -Path "$packageDir/ffmpeg" -Force
+
+          # 复制 README（优先 .txt，其次 .md）
+          if (Test-Path "README.txt") {
+              Copy-Item -Path "README.txt" -Destination "$packageDir/README.TXT"
+          } elseif (Test-Path "README.md") {
+              Copy-Item -Path "README.md" -Destination "$packageDir/README.TXT"
+          } else {
+              # 若项目根目录没有 README，则生成一个默认文件
+              @"
+              missevan-recorder
+              猫耳FM录制器
+
+              使用说明：
+              1. 将 ffmpeg 可执行文件放入 ffmpeg 文件夹
+              2. 运行 missevan-recorder.exe
+              3. 在软件中配置直播间 URL
+              "@ | Out-File -FilePath "$packageDir/README.TXT" -Encoding utf8
+          }
+
+          # 打包为 ZIP
+          Compress-Archive -Path "$packageDir/*" -DestinationPath "$packageDir.zip" -Force
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: missevan-recorder-package
+          path: missevan-recorder-v*.zip
