@@ -1,0 +1,7 @@
+# 示例主播配置
+# 在软件中添加主播后会生成此类文件，请勿手动编辑
+id = "example-anchor-001"
+name = "示例主播A"
+url = "https://fm.missevan.com/live/ROOM_ID_HERE"
+enable_check = true
+check_interval_secs = 30

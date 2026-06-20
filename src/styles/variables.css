@@ -1,0 +1,191 @@
+/* ============================================================
+   猫耳FM录制器 — 设计令牌 v2 (Apple Design Language)
+   风格：后现代简约 · 大厂质感 · 毛玻璃 · 精致阴影
+   ============================================================ */
+
+:root {
+  /* -------- 字体系统 (SF Pro 优先) -------- */
+  --font-family: -apple-system, 'SF Pro Display', 'SF Pro Text', 'Helvetica Neue',
+    'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
+  --font-mono: 'SF Mono', 'JetBrains Mono', ui-monospace, monospace;
+
+  /* 字体级别 — 使用黄金比例缩放 (1.25) */
+  --font-xs: clamp(10px, 0.85vw, 11px);       /* 标签/辅助 */
+  --font-sm: clamp(12px, 1vw, 13px);           /* 正文小 */
+  --font-md: clamp(14px, 1.15vw, 15px);        /* 正文 */
+  --font-lg: clamp(17px, 1.5vw, 20px);         /* 小标题 */
+  --font-xl: clamp(22px, 2vw, 28px);           /* 标题 */
+  --font-xxl: clamp(28px, 2.8vw, 34px);        /* 大标题 */
+  --font-hero: clamp(34px, 3.5vw, 48px);       /* 英雄标题 */
+
+  /* -------- 色彩系统 — Apple 风格 -------- */
+
+  /* 主色 — 蓝色 (iOS 蓝) */
+  --color-primary: #007aff;
+  --color-primary-hover: #0056cc;
+  --color-primary-active: #004999;
+  --color-primary-light: rgba(0, 122, 255, 0.1);
+  --color-primary-glow: rgba(0, 122, 255, 0.25);
+
+  /* 成功绿 (iOS 绿) */
+  --color-success: #34c759;
+  --color-success-light: rgba(52, 199, 89, 0.1);
+  --color-success-glow: rgba(52, 199, 89, 0.25);
+
+  /* 警告橙 */
+  --color-warning: #ff9500;
+  --color-warning-light: rgba(255, 149, 0, 0.1);
+
+  /* 危险红 (iOS 红) */
+  --color-danger: #ff3b30;
+  --color-danger-light: rgba(255, 59, 48, 0.1);
+
+  /* 中性色 */
+  --color-bg: #f2f2f7;
+  --color-surface: rgba(255, 255, 255, 0.72);
+  --color-surface-solid: #ffffff;
+  --color-surface-raised: rgba(255, 255, 255, 0.92);
+  --color-surface-secondary: rgba(142, 142, 147, 0.08);
+  --color-surface-tertiary: rgba(142, 142, 147, 0.04);
+
+  --color-text: #1c1c1e;
+  --color-text-secondary: #8e8e93;
+  --color-text-tertiary: #aeaeb2;
+  --color-text-inverse: #ffffff;
+
+  --color-border: rgba(60, 60, 67, 0.08);
+  --color-border-light: rgba(60, 60, 67, 0.04);
+  --color-border-focus: rgba(0, 122, 255, 0.3);
+
+  /* 毛玻璃遮罩 */
+  --color-overlay: rgba(0, 0, 0, 0.25);
+  --color-overlay-heavy: rgba(0, 0, 0, 0.45);
+  --color-overlay-glass: rgba(255, 255, 255, 0.72);
+
+  /* -------- 圆角系统 — 大厂风格 -------- */
+  --radius-xs: 6px;
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 20px;
+  --radius-2xl: 28px;
+  --radius-3xl: 34px;
+  --radius-full: 9999px;
+
+  /* -------- 阴影系统 — Apple 多层阴影 -------- */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.03), 0 1px 3px rgba(0, 0, 0, 0.05);
+  --shadow-md: 0 1px 3px rgba(0, 0, 0, 0.04), 0 4px 12px rgba(0, 0, 0, 0.06);
+  --shadow-lg: 0 2px 8px rgba(0, 0, 0, 0.04), 0 8px 24px rgba(0, 0, 0, 0.06);
+  --shadow-xl: 0 2px 12px rgba(0, 0, 0, 0.05), 0 16px 40px rgba(0, 0, 0, 0.08);
+  --shadow-2xl: 0 4px 20px rgba(0, 0, 0, 0.06), 0 24px 60px rgba(0, 0, 0, 0.1);
+  --shadow-dropdown: 0 4px 16px rgba(0, 0, 0, 0.08), 0 12px 40px rgba(0, 0, 0, 0.12);
+  --shadow-modal: 0 8px 32px rgba(0, 0, 0, 0.08), 0 24px 60px rgba(0, 0, 0, 0.14);
+
+  /* 内阴影 */
+  --shadow-inner: inset 0 1px 0.5px rgba(0, 0, 0, 0.02);
+
+  /* -------- 毛玻璃标准 -------- */
+  --glass-bg: rgba(255, 255, 255, 0.65);
+  --glass-bg-heavy: rgba(255, 255, 255, 0.82);
+  --glass-border: rgba(255, 255, 255, 0.5);
+  --glass-shadow: inset 0 0.5px 0 rgba(255, 255, 255, 0.6);
+
+  /* -------- 间距系统 (8px 网格 × 黄金比例) -------- */
+  --space-1: 2px;
+  --space-2: 4px;
+  --space-3: 6px;
+  --space-4: 8px;
+  --space-5: 10px;
+  --space-6: 12px;
+  --space-7: 14px;
+  --space-8: 16px;
+  --space-9: 20px;
+  --space-10: 24px;
+  --space-11: 28px;
+  --space-12: 32px;
+  --space-14: 36px;
+  --space-16: 40px;
+  --space-20: 48px;
+  --space-24: 56px;
+
+  /* -------- 过渡与动效 -------- */
+  --duration-instant: 0.08s;
+  --duration-fast: 0.15s;
+  --duration-normal: 0.25s;
+  --duration-slow: 0.35s;
+  --duration-slower: 0.5s;
+
+  /* Apple 弹簧曲线 */
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --ease-out: cubic-bezier(0.25, 0.1, 0.25, 1);
+  --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-smooth: cubic-bezier(0.22, 1, 0.36, 1);
+
+  /* -------- 布局 -------- */
+  --nav-height: clamp(56px, 6.5vh, 68px);
+  --nav-width: 72px;              /* 侧边导航宽度（桌面） */
+  --content-max-width: 1080px;
+  --card-min-width: clamp(260px, 28vw, 300px);
+
+  /* -------- z-index 分层 -------- */
+  --z-base: 0;
+  --z-content: 10;
+  --z-sticky: 50;
+  --z-nav: 100;
+  --z-dropdown: 500;
+  --z-overlay: 1000;
+  --z-modal: 2000;
+  --z-toast: 3000;
+  --z-notification: 3100;
+}
+
+/* -------- 暗色模式 (深色 Apple 风格) -------- */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-bg: #000000;
+    --color-surface: rgba(44, 44, 46, 0.72);
+    --color-surface-solid: #1c1c1e;
+    --color-surface-raised: rgba(44, 44, 46, 0.88);
+    --color-surface-secondary: rgba(255, 255, 255, 0.06);
+    --color-surface-tertiary: rgba(255, 255, 255, 0.03);
+
+    --color-text: #f5f5f7;
+    --color-text-secondary: #98989d;
+    --color-text-tertiary: #636366;
+    --color-text-inverse: #1c1c1e;
+
+    --color-border: rgba(255, 255, 255, 0.1);
+    --color-border-light: rgba(255, 255, 255, 0.05);
+    --color-border-focus: rgba(0, 122, 255, 0.4);
+
+    --color-overlay: rgba(0, 0, 0, 0.55);
+    --color-overlay-heavy: rgba(0, 0, 0, 0.7);
+    --color-overlay-glass: rgba(28, 28, 30, 0.82);
+
+    --glass-bg: rgba(44, 44, 46, 0.65);
+    --glass-bg-heavy: rgba(44, 44, 46, 0.82);
+    --glass-border: rgba(255, 255, 255, 0.08);
+    --glass-shadow: inset 0 0.5px 0 rgba(255, 255, 255, 0.08);
+
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.2), 0 1px 3px rgba(0, 0, 0, 0.3);
+    --shadow-md: 0 1px 3px rgba(0, 0, 0, 0.25), 0 4px 12px rgba(0, 0, 0, 0.35);
+    --shadow-lg: 0 2px 8px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.4);
+    --shadow-xl: 0 2px 12px rgba(0, 0, 0, 0.35), 0 16px 40px rgba(0, 0, 0, 0.45);
+    --shadow-2xl: 0 4px 20px rgba(0, 0, 0, 0.4), 0 24px 60px rgba(0, 0, 0, 0.5);
+    --shadow-dropdown: 0 4px 16px rgba(0, 0, 0, 0.4), 0 12px 40px rgba(0, 0, 0, 0.5);
+    --shadow-modal: 0 8px 32px rgba(0, 0, 0, 0.45), 0 24px 60px rgba(0, 0, 0, 0.55);
+  }
+}
+
+/* -------- 响应式断点适配 -------- */
+@media (max-width: 479px) {
+  :root { --card-min-width: 100%; }
+}
+
+@media (min-width: 480px) and (max-width: 767px) {
+  :root { --card-min-width: calc(50% - var(--space-8)); }
+}
+
+@media (min-width: 768px) {
+  :root { --card-min-width: clamp(280px, 27vw, 300px); }
+}

@@ -1,0 +1,159 @@
+/* ============================================================
+   猫耳FM录制器 — 全局样式 v2 (Apple Inspired)
+   ============================================================ */
+
+@import './variables.css';
+
+/* -------- Reset 重置 -------- */
+*,
+*::before,
+*::after {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  font-feature-settings: 'kern' 1, 'liga' 1;
+}
+
+html,
+body {
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+  font-family: var(--font-family);
+  font-size: var(--font-md);
+  line-height: 1.47059;  /* Apple 标准行高 */
+  letter-spacing: -0.022em; /* Apple 字间距 */
+  background: var(--color-bg);
+  color: var(--color-text);
+  transition: background var(--duration-slow) var(--ease-out),
+    color var(--duration-slow) var(--ease-out);
+}
+
+body {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+#app {
+  height: 100%;
+  width: 100%;
+  isolation: isolate;
+}
+
+/* -------- 滚动条 (精细打磨) -------- */
+::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(128, 128, 128, 0.25);
+  border-radius: 2px;
+  transition: background var(--duration-fast);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(128, 128, 128, 0.4);
+}
+
+/* Firefox 滚动条 */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(128, 128, 128, 0.25) transparent;
+}
+
+/* -------- 按钮基础 (Apple 风格) -------- */
+button {
+  font-family: inherit;
+  cursor: pointer;
+  border: none;
+  background: none;
+  font-size: inherit;
+  letter-spacing: inherit;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+button:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+/* 点击反馈 (Apple 触感) */
+button:not(:disabled):active {
+  transform: scale(0.97);
+  transition: transform var(--duration-instant);
+}
+
+/* -------- 输入框 (Apple 风格) -------- */
+input,
+select,
+textarea {
+  font-family: inherit;
+  font-size: var(--font-md);
+  letter-spacing: inherit;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: var(--color-text-tertiary);
+  font-weight: 400;
+}
+
+/* -------- 选中颜色 -------- */
+::selection {
+  background: var(--color-primary-light);
+  color: var(--color-text);
+}
+
+/* -------- 链接 -------- */
+a {
+  color: var(--color-primary);
+  text-decoration: none;
+  transition: opacity var(--duration-fast);
+}
+
+a:hover {
+  opacity: 0.7;
+}
+
+/* -------- 全局工具类 -------- */
+.glass {
+  background: var(--glass-bg);
+  backdrop-filter: blur(40px) saturate(1.4);
+  -webkit-backdrop-filter: blur(40px) saturate(1.4);
+  border: 0.5px solid var(--glass-border);
+}
+
+.glass-heavy {
+  background: var(--glass-bg-heavy);
+  backdrop-filter: blur(60px) saturate(1.6);
+  -webkit-backdrop-filter: blur(60px) saturate(1.6);
+}
+
+/* 文字截断 */
+.text-ellipsis {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 无闪烁过渡 */
+.no-flash {
+  -webkit-backface-visibility: hidden;
+  backface-visibility: hidden;
+  transform: translateZ(0);
+}

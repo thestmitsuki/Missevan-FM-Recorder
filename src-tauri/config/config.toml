@@ -1,0 +1,7 @@
+# 猫耳FM录制器全局配置
+# 首次启动自动生成此文件，可手动编辑
+output_dir = "./downloads"
+record_format = "M4A"
+segment_seconds = 0
+disk_space_limit_gb = 1.0
+anchor_ids = []

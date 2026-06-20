@@ -1,0 +1,208 @@
+/* ============================================================
+   猫耳FM录制器 — 动效系统 (Apple Spring 曲线)
+   ============================================================ */
+
+/* -------- 页面视图切换 (平滑淡入上移) -------- */
+.view-fade-enter-active {
+  transition: opacity 0.32s var(--ease-smooth),
+    transform 0.32s var(--ease-smooth);
+}
+
+.view-fade-leave-active {
+  transition: opacity 0.2s var(--ease-out),
+    transform 0.2s var(--ease-out);
+}
+
+.view-fade-enter-from {
+  opacity: 0;
+  transform: translateY(16px) scale(0.98);
+}
+
+.view-fade-leave-to {
+  opacity: 0;
+  transform: translateY(-12px) scale(0.98);
+}
+
+/* -------- 通知滑入 (弹簧效果) -------- */
+.slide-down-enter-active {
+  transition: all 0.45s var(--ease-spring);
+}
+
+.slide-down-leave-active {
+  transition: all 0.2s var(--ease-out);
+}
+
+.slide-down-enter-from {
+  opacity: 0;
+  transform: translateY(-24px) scale(0.94);
+}
+
+.slide-down-leave-to {
+  opacity: 0;
+  transform: translateY(-12px) scale(0.94);
+}
+
+/* -------- Modal 弹窗 (缩放 + 淡入 + 弹簧) -------- */
+.modal-enter-active {
+  transition: opacity 0.3s var(--ease-smooth);
+}
+
+.modal-enter-active .modal-panel {
+  transition: transform 0.45s var(--ease-spring),
+    opacity 0.3s var(--ease-out);
+}
+
+.modal-leave-active {
+  transition: opacity 0.2s var(--ease-out);
+}
+
+.modal-leave-active .modal-panel {
+  transition: transform 0.2s var(--ease-out),
+    opacity 0.15s var(--ease-out);
+}
+
+.modal-enter-from {
+  opacity: 0;
+}
+
+.modal-enter-from .modal-panel {
+  transform: scale(0.92) translateY(20px);
+  opacity: 0;
+}
+
+.modal-leave-to {
+  opacity: 0;
+}
+
+.modal-leave-to .modal-panel {
+  transform: scale(0.96) translateY(8px);
+  opacity: 0;
+}
+
+/* -------- 下拉菜单 (轻量弹出) -------- */
+.dropdown-enter-active {
+  transition: opacity 0.2s var(--ease-out),
+    transform 0.25s var(--ease-smooth);
+}
+
+.dropdown-leave-active {
+  transition: opacity 0.15s var(--ease-out),
+    transform 0.15s var(--ease-out);
+}
+
+.dropdown-enter-from {
+  opacity: 0;
+  transform: scale(0.92) translateY(-6px);
+}
+
+.dropdown-leave-to {
+  opacity: 0;
+  transform: scale(0.96) translateY(-4px);
+}
+
+/* -------- 卡片列表入场 (交错的 Apple 风格) -------- */
+@keyframes card-enter {
+  from {
+    opacity: 0;
+    transform: translateY(24px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.card-enter-active {
+  animation: card-enter 0.45s var(--ease-spring) both;
+}
+
+.card-leave-active {
+  transition: all 0.25s var(--ease-out);
+  position: absolute;
+}
+
+.card-enter-from {
+  opacity: 0;
+  transform: translateY(24px) scale(0.96);
+}
+
+.card-leave-to {
+  opacity: 0;
+  transform: translateY(-16px) scale(0.95);
+}
+
+.card-move {
+  transition: transform 0.4s var(--ease-smooth);
+}
+
+/* -------- 脉冲动画 (录制指示器) -------- */
+@keyframes pulse-ring {
+  0% { box-shadow: 0 0 0 0 var(--color-success-glow); }
+  70% { box-shadow: 0 0 0 8px rgba(52, 199, 89, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(52, 199, 89, 0); }
+}
+
+.pulse-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--color-success);
+  animation: pulse-ring 1.8s ease-out infinite;
+}
+
+/* -------- 进度条动画 -------- */
+@keyframes progress-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+/* -------- Skeleton 闪烁 -------- */
+@keyframes shimmer {
+  0% { background-position: -200% center; }
+  100% { background-position: 200% center; }
+}
+
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    var(--color-surface-secondary) 25%,
+    var(--color-surface-tertiary) 50%,
+    var(--color-surface-secondary) 75%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.8s ease-in-out infinite;
+  border-radius: var(--radius-sm);
+}
+
+/* -------- 导入动画 (App 启动时) -------- */
+@keyframes app-enter {
+  from {
+    opacity: 0;
+    transform: scale(0.98);
+    filter: blur(4px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+    filter: blur(0);
+  }
+}
+
+.app-enter {
+  animation: app-enter 0.6s var(--ease-smooth);
+}
+
+/* -------- 录制红色脉冲 (亮暗兼容) -------- */
+@keyframes record-pulse {
+  0%, 100% {
+    box-shadow: 0 0 0 0 var(--color-danger);
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+.record-pulse {
+  animation: record-pulse 1.5s ease-in-out infinite;
+}
