@@ -62,6 +62,18 @@
 | Node.js 18+ | https://nodejs.org |
 | FFmpeg | https://ffmpeg.org/download.html |
 
+### 方法一（推荐）：使用 Tauri CLI 一步完成
+
+```bash
+# 安装前端依赖
+npm install
+
+# 安装 Tauri CLI 并构建（自动编译前端 + 后端）
+npm run tauri build
+```
+
+### 方法二：分步构建
+
 ```bash
 # 1. 安装前端依赖
 npm install
@@ -69,18 +81,24 @@ npm install
 # 2. 构建前端
 npm run build
 
-# 3. 构建桌面应用
+# 3. 编译 Rust 后端（从 src-tauri/ 目录）
 cd src-tauri
 cargo build --release
 ```
 
-或使用 Tauri CLI 一步完成：
-```bash
-npm install -g @tauri-apps/cli
-npm run tauri build
-```
+> **⚠️ 注意**: 如果使用分步构建，**务必先执行 `npm run build`**。
+> 跳过此步骤会导致 `dist/` 目录缺失，编译出的程序没有界面，
+> 运行时会报 `localhost 拒绝连接` 的错误。
 
-构建产物：`src-tauri/target/release/missevan-recorder.exe`
+### 构建产物
+
+`src-tauri/target/release/missevan-recorder.exe`
+
+### 类型检查（可选）
+
+```bash
+npm run typecheck
+```
 
 ---
 
@@ -188,10 +206,11 @@ A desktop app built with **Tauri 2.x + Vue 3 + Rust** for automatically monitori
 
 ```bash
 npm install
-npm run build
-cd src-tauri
-cargo build --release
+npm run tauri build    # one-step build (frontend + backend)
 ```
+
+> **Note**: If building manually, run `npm run build` BEFORE `cargo build --release`.
+> Missing frontend build causes `localhost refused connection` error.
 
 Requires: Rust, Node.js 18+, FFmpeg
 
