@@ -1,0 +1,56 @@
+name: Build and Package
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build-and-package:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install frontend dependencies
+        run: npm install
+
+      - name: Build frontend
+        run: npm run build
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build EXE (release)
+        run: |
+          cd src-tauri
+          cargo build --release
+
+      - name: Create distribution package
+        shell: pwsh
+        run: |
+          $version = (Get-Content package.json | ConvertFrom-Json).version
+          $packageDir = "missevan-recorder-v$version"
+          New-Item -ItemType Directory -Path $packageDir -Force
+          Copy-Item -Path "src-tauri/target/release/*.exe" -Destination $packageDir
+          New-Item -ItemType Directory -Path "$packageDir/config" -Force
+          New-Item -ItemType Directory -Path "$packageDir/ffmpeg" -Force
+          # 复制 README
+          if (Test-Path "README.md") {
+              Copy-Item -Path "README.md" -Destination "$packageDir/README.TXT"
+          } elseif (Test-Path "README.txt") {
+              Copy-Item -Path "README.txt" -Destination "$packageDir/README.TXT"
+          }
+          Compress-Archive -Path "$packageDir/*" -DestinationPath "$packageDir.zip" -Force
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: missevan-recorder-package
+          path: missevan-recorder-v*.zip
