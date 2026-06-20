@@ -21,16 +21,12 @@ jobs:
       - name: Install frontend dependencies
         run: npm install
 
-      - name: Build frontend
-        run: npm run build
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
       - name: Build EXE (release)
-        run: |
-          cd src-tauri
-          cargo build --release
+        run: npm run tauri build
 
       - name: Create distribution package
         shell: pwsh
