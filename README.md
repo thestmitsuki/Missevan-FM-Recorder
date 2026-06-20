@@ -6,7 +6,6 @@
     <img src="https://img.shields.io/badge/platform-Windows-blue?style=flat-square" alt="Platform">
     <img src="https://img.shields.io/badge/tauri-2.x-purple?style=flat-square" alt="Tauri">
     <img src="https://img.shields.io/badge/vue-3.x-brightgreen?style=flat-square" alt="Vue 3">
-    <img src="https://img.shields.io/badge/license-MIT-orange?style=flat-square" alt="License">
   </p>
   <p>
     <i>简体中文</i> · <a href="#english">English</a>
