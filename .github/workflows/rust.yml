@@ -35,43 +35,18 @@ jobs:
       - name: Create distribution package
         shell: pwsh
         run: |
-          $version = (Get-Content -Path package.json | ConvertFrom-Json).version
+          $version = (Get-Content package.json | ConvertFrom-Json).version
           $packageDir = "missevan-recorder-v$version"
-          
           New-Item -ItemType Directory -Path $packageDir -Force
-
-          # 复制 EXE
           Copy-Item -Path "src-tauri/target/release/*.exe" -Destination $packageDir
-
-          # 创建空文件夹
           New-Item -ItemType Directory -Path "$packageDir/config" -Force
           New-Item -ItemType Directory -Path "$packageDir/ffmpeg" -Force
-
-          # 处理 README 文件
-          $readmeSource = $null
-          if (Test-Path "README.txt") {
-              $readmeSource = "README.txt"
-          } elseif (Test-Path "README.md") {
-              $readmeSource = "README.md"
+          # 复制 README
+          if (Test-Path "README.md") {
+              Copy-Item -Path "README.md" -Destination "$packageDir/README.TXT"
+          } elseif (Test-Path "README.txt") {
+              Copy-Item -Path "README.txt" -Destination "$packageDir/README.TXT"
           }
-
-          if ($readmeSource) {
-              Copy-Item -Path $readmeSource -Destination "$packageDir/README.TXT"
-          } else {
-              # 生成默认 README（使用单行数组避免 here-string 缩进问题）
-              $defaultReadme = @'
-missevan-recorder
-猫耳FM录制器
-
-使用说明：
-1. 将 ffmpeg 可执行文件放入 ffmpeg 文件夹
-2. 运行 missevan-recorder.exe
-3. 在软件中配置直播间 URL
-'@
-              $defaultReadme | Out-File -FilePath "$packageDir/README.TXT" -Encoding utf8
-          }
-
-          # 打包为 ZIP
           Compress-Archive -Path "$packageDir/*" -DestinationPath "$packageDir.zip" -Force
 
       - name: Upload artifact
