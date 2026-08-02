@@ -102,8 +102,8 @@ const totalCount = computed(() => logs.value.length);
             {{ t("debug.network.empty") }}
         </div>
 
-        <div v-else class="overflow-x-auto rounded-md border">
-            <Table>
+        <div v-else class="overflow-x-auto rounded-md border max-w-full">
+            <Table class="table-fixed w-full">
                 <TableHeader>
                     <TableRow class="hover:bg-transparent">
                         <TableHead class="w-20 whitespace-nowrap">{{ t("debug.network.time") }}</TableHead>
