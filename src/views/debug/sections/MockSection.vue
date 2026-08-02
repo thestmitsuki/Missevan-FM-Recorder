@@ -222,8 +222,8 @@ onBeforeUnmount(() => {
         </div>
 
         <!-- 模拟主播表格 -->
-        <div class="overflow-x-auto rounded-md border">
-            <Table>
+        <div class="overflow-x-auto rounded-md border max-w-full">
+            <Table class="table-fixed w-full">
                 <TableHeader>
                     <TableRow class="hover:bg-transparent">
                         <TableHead class="min-w-28">{{ t("debug.mock.name") }}</TableHead>
