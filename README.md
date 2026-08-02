@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-猫耳 FM（Missevan，https://fm.missevan.com）主播直播流的桌面录制工具。自动检测开播、音频录制、文件管理一站式完成，支持无人值守后台运行。
+猫耳 FM（Missevan，https://fm.missevan.com)  主播直播流的桌面录制工具。自动检测开播、音频录制、文件管理一站式完成，支持无人值守后台运行。
 
 > ⚠️ **免责声明**：本软件仅供个人学习与研究使用。请遵守猫耳 FM 平台服务条款及适用法律法规；录制内容的版权归原权利人所有。开发者不承担因使用本工具产生的任何责任。
 
