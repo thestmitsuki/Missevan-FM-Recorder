@@ -1,4 +1,73 @@
-/* 猫耳FM录制器 — 样式入口 */
-@import './variables.css';
-@import './global.css';
-@import './transitions.css';
+@import "./variables.css";
+@import "./transitions.css";
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+/* 注意：不再设置 margin/padding 全局重置——Tailwind v4 preflight 已提供，
+   且非 @layer 的全局 reset 会覆盖 @layer 内的组件 utilities（如 p-4）导致边距为 0 */
+
+html, body {
+  height: 100%;
+  font-family: "Roboto", "Noto Sans SC", system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ── 外观分类（appearanceStore）：列表密度缩放因子 ── */
+:root {
+  --density-mult: 1;
+}
+html[data-density="compact"] {
+  --density-mult: 0.85;
+}
+html[data-density="comfortable"] {
+  --density-mult: 1.15;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+}
+
+#app {
+  height: 100%;
+}
+
+/* ── 全局隐藏滚动条（保留滚动） ── */
+/* 彻底移除 WebKit 滚动条的所有部件 */
+::-webkit-scrollbar,
+::-webkit-scrollbar-button,
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-track-piece,
+::-webkit-scrollbar-thumb,
+::-webkit-scrollbar-corner,
+::-webkit-resizer {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+  background: transparent !important;
+}
+
+/* Firefox / 新版 Edge */
+html,
+body,
+#app {
+  scrollbar-width: none !important;
+}
+
+/* IE / 旧版 Edge */
+html,
+body,
+#app {
+  -ms-overflow-style: none !important;
+}
+
+/* 额外覆盖常见的滚动容器（如 page-scroll） */
+.page-scroll,
+[class*="overflow"] {
+  scrollbar-width: none !important;
+  -ms-overflow-style: none !important;
+}

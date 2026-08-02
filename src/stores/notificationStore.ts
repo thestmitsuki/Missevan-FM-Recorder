@@ -1,58 +1,76 @@
-import { defineStore } from 'pinia'
-import { ref, readonly } from 'vue'
-import type { NotificationItem, NotificationLevel } from '../types'
+import { defineStore } from "pinia";
+import { ref, computed } from "vue";
+import type { Notification } from "@/types";
+import { onNotification } from "@/services/events";
 
-export const useNotificationStore = defineStore('notification', () => {
-  const notifications = ref<NotificationItem[]>([])
-  let nextId = 0
-  const timers = new Map<number, number>()
+let unlisten: (() => void) | null = null;
 
-  function show(
-    message: string,
-    level: NotificationLevel = 'info',
-    duration = 3000
-  ) {
-    const id = nextId++
-    const item: NotificationItem = {
-      id,
-      message,
-      level,
-      duration,
-      visible: true,
+export const useNotificationStore = defineStore("notification", () => {
+  const notifications = ref<Notification[]>([]);
+  const maxNotifications = ref(50);
+
+  const unreadCount = computed(() => notifications.value.length);
+
+  const latestNotification = computed(() =>
+    notifications.value.length > 0
+      ? notifications.value[notifications.value.length - 1]
+      : null,
+  );
+
+  const hasErrors = computed(() =>
+    notifications.value.some(
+      (n) => n.level === "Error" || n.level === "Critical",
+    ),
+  );
+
+  function addNotification(notification: Notification) {
+    notifications.value.push(notification);
+    // 保持队列上限
+    while (notifications.value.length > maxNotifications.value) {
+      notifications.value.shift();
     }
-    notifications.value.push(item)
-    const timer = window.setTimeout(() => hide(id), duration)
-    timers.set(id, timer)
-    return id
   }
 
-  function hide(id: number) {
-    const timer = timers.get(id)
-    if (timer) {
-      clearTimeout(timer)
-      timers.delete(id)
-    }
-    const idx = notifications.value.findIndex((n) => n.id === id)
-    if (idx !== -1) {
-      notifications.value[idx].visible = false
-      setTimeout(() => {
-        notifications.value = notifications.value.filter((n) => n.id !== id)
-      }, 300)
-    }
+  function removeNotification(id: string) {
+    notifications.value = notifications.value.filter((n) => n.id !== id);
   }
 
   function clearAll() {
-    for (const [, timer] of timers) {
-      clearTimeout(timer)
+    notifications.value = [];
+  }
+
+  function clearBySource(source: string) {
+    notifications.value = notifications.value.filter(
+      (n) => n.source !== source,
+    );
+  }
+
+  // 启动监听（仅需调用一次）
+  function startListening() {
+    if (unlisten) return;
+    unlisten = onNotification((notification) => {
+      addNotification(notification);
+    });
+  }
+
+  function stopListening() {
+    if (unlisten) {
+      unlisten();
+      unlisten = null;
     }
-    timers.clear()
-    notifications.value = []
   }
 
   return {
-    notifications: readonly(notifications),
-    show,
-    hide,
+    notifications,
+    maxNotifications,
+    unreadCount,
+    latestNotification,
+    hasErrors,
+    addNotification,
+    removeNotification,
     clearAll,
-  }
-})
+    clearBySource,
+    startListening,
+    stopListening,
+  };
+});

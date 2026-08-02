@@ -1,35 +1,28 @@
 import { createApp } from "vue";
-import { createPinia } from "pinia";
-import { createI18n } from "vue-i18n";
-import "./styles/index.css";
 import App from "./App.vue";
-
-// 导入语言包
-import zhCN from "./locales/zh-CN";
-import en from "./locales/en";
-
-// 创建 i18n 实例
-const i18n = createI18n({
-  legacy: false, // 使用 Composition API 模式
-  locale: "zh-CN", // 默认语言
-  fallbackLocale: "zh-CN",
-  messages: {
-    "zh-CN": zhCN,
-    en: en,
-  },
-});
-
-// 创建 Pinia
-const pinia = createPinia();
+import router from "./router";
+import { createPinia } from "pinia";
+import { i18n } from "@/locales";
+import { setupEventListeners } from "@/services/events";
+import { useConfigStore } from "@/stores/configStore";
+import { useAppearanceStore } from "@/stores/appearanceStore";
+import "./styles/index.css";
+import "./styles/shadcn.css";
+// sonner 通知样式
+import "vue-sonner/style.css";
 
 const app = createApp(App);
-
-// 全局错误处理
-app.config.errorHandler = (err, _instance, info) => {
-  console.error("Vue 全局错误:", err, info);
-  // 可以在这里调用通知 store 显示错误
-};
-
+const pinia = createPinia();
 app.use(pinia);
+app.use(router);
 app.use(i18n);
+// 应用外观偏好（强调色/字体/密度，localStorage 即时生效；避免首屏闪烁）
+useAppearanceStore();
 app.mount("#app");
+
+// ── 初始化 ──
+setupEventListeners().then(() => {
+  // 加载配置
+  const configStore = useConfigStore();
+  configStore.fetchConfig();
+});

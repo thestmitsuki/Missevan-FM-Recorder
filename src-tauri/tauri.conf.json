@@ -5,36 +5,60 @@
   "identifier": "com.missevan-recorder.app",
   "build": {
     "frontendDist": "../dist",
-    "devUrl": "http://localhost:5173",
+    "devUrl": "http://localhost:1420",
     "beforeDevCommand": "npm run dev",
     "beforeBuildCommand": "npm run build"
   },
   "app": {
     "windows": [
       {
-        "title": "missevan-recorder",
-        "width": 800,
-        "height": 600,
+        "label": "wizard",
+        "title": "Missevan 录制器 设置向导",
+        "width": 560,
+        "height": 760,
+        "minWidth": 480,
+        "minHeight": 640,
         "resizable": true,
-        "fullscreen": false
+        "fullscreen": false,
+        "visible": false
+      },
+      {
+        "label": "main",
+        "title": "猫耳FM录制器",
+        "width": 800,
+        "height": 620,
+        "minWidth": 720,
+        "minHeight": 500,
+        "resizable": true,
+        "fullscreen": false,
+        "visible": false
       }
     ],
     "security": {
-      "csp": null
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' https: http: asset: http://asset.localhost data:; media-src 'self' asset: http://asset.localhost https: http:; connect-src 'self' ipc: http://ipc.localhost; font-src 'self' data:",
+      "assetProtocol": {
+        "enable": true,
+        "scope": ["$HOME/**"]
+      }
     }
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": ["nsis"],
+    "publisher": "Missevan Recorder Team",
+    "copyright": "Copyright © 2026 Missevan Recorder Team",
+    "category": "Music",
+    "shortDescription": "猫耳 FM 直播自动录制工具",
+    "longDescription": "Missevan 猫耳录制器：监控猫耳 FM 主播开播状态并自动录制直播音频，支持分段录制、文件管理与诊断报告导出。",
+    "createUpdaterArtifacts": false,
+    "licenseFile": "../LICENSE",
     "icon": [
       "icons/32x32.png",
+      "icons/64x64.png",
       "icons/128x128.png",
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ],
-    "android": {
-      "debugApplicationIdSuffix": ".debug"
-    }
+    ]
   }
 }

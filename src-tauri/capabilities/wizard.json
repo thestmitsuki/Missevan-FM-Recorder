@@ -1,0 +1,9 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "identifier": "wizard",
+  "description": "Capability for the setup wizard window (needs core:event listen for download:progress / app:notification / close-requested)",
+  "windows": ["wizard"],
+  "permissions": [
+    "core:default"
+  ]
+}

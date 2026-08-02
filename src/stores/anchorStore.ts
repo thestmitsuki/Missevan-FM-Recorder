@@ -1,179 +1,363 @@
-import { defineStore } from 'pinia'
-import { ref, computed } from 'vue'
-import { invoke } from '@tauri-apps/api/core'
-import { useNotificationStore } from './notificationStore'
-import type { AnchorConfig, AnchorInfo } from '../types'
+import { defineStore } from "pinia";
+import { computed, ref, watch } from "vue";
+import type { AnchorConfig, AnchorStatusUpdate, RecordingStatus } from "@/types";
+import { api } from "@/services/api";
+import { onRecordingStatusChanged } from "@/services/events";
 
-export const useAnchorStore = defineStore('anchor', () => {
-  const anchors = ref<AnchorInfo[]>([])
-  const loading = ref(false)
-  const error = ref<string | null>(null)
-  const notificationStore = useNotificationStore()
+/** 录制状态筛选 */
+export type RecordFilter = "all" | "recording" | "not-recording";
+/** 直播状态筛选 */
+export type LiveFilter = "all" | "live" | "not-live";
+/** 视图模式 */
+export type ViewMode = "card" | "list";
 
-  let refreshInterval: ReturnType<typeof setInterval> | null = null
-  let isRefreshing = false
+/** 筛选条件（与 localStorage 持久化结构一致） */
+export interface LiveFilters {
+  searchQuery: string;
+  /** 标签筛选（单选：固定 5 标签之一；null = 全部，不过滤） */
+  tagFilter: string | null;
+  recordFilter: RecordFilter;
+  liveFilter: LiveFilter;
+}
 
-  // 响应式头像缓存
-  const avatarCache = ref<Map<string, string>>(new Map())
-  const TRANSPARENT_PLACEHOLDER =
-    'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7'
+const VIEW_MODE_KEY = "live_view_mode";
+const FILTERS_KEY = "live_filters";
 
-  // 正在录制数量
-  const recordingCount = computed(() =>
-    anchors.value.filter((a) => a.is_recording).length
-  )
+function loadViewMode(): ViewMode {
+  try {
+    return localStorage.getItem(VIEW_MODE_KEY) === "list" ? "list" : "card";
+  } catch {
+    return "card";
+  }
+}
 
-  // 开播数量
-  const liveCount = computed(() =>
-    anchors.value.filter((a) => a.is_live).length
-  )
+/**
+ * 旧版 tagFilter 为 string[]（多选，含「无标签」哨兵 "__none__"）；
+ * 新版为 string | null（null = 全部）。旧数据迁移：取首个非空非哨兵元素近似单选。
+ */
+function loadTagFilter(raw: unknown): string | null {
+  if (typeof raw === "string") return raw || null;
+  if (Array.isArray(raw)) {
+    const first = raw.find(
+      (t): t is string => typeof t === "string" && t !== "" && t !== "__none__",
+    );
+    return first ?? null;
+  }
+  return null;
+}
 
-  // 获取主播列表（含直播状态）
-  async function fetchAnchors(force = false) {
-    if (loading.value && !force) return
-    loading.value = true
-    error.value = null
+function loadFilters(): LiveFilters {
+  const fallback: LiveFilters = {
+    searchQuery: "",
+    tagFilter: null,
+    recordFilter: "all",
+    liveFilter: "all",
+  };
+  try {
+    const raw = localStorage.getItem(FILTERS_KEY);
+    if (!raw) return fallback;
+    const parsed = JSON.parse(raw) as Partial<LiveFilters>;
+    return {
+      searchQuery:
+        typeof parsed.searchQuery === "string" ? parsed.searchQuery : "",
+      tagFilter: loadTagFilter(parsed.tagFilter),
+      recordFilter:
+        parsed.recordFilter === "recording" ||
+        parsed.recordFilter === "not-recording"
+          ? parsed.recordFilter
+          : "all",
+      liveFilter:
+        parsed.liveFilter === "live" || parsed.liveFilter === "not-live"
+          ? parsed.liveFilter
+          : "all",
+    };
+  } catch {
+    return fallback;
+  }
+}
+
+// 事件监听取消函数（模块级单例，与 notificationStore 一致）
+let unlisten: (() => void) | null = null;
+
+export const useAnchorStore = defineStore("anchor", () => {
+  // ── 数据 ──
+  const anchors = ref<AnchorConfig[]>([]);
+  const recordingStatuses = ref<RecordingStatus[]>([]);
+  // 初始为 true：直播页首帧显示 Skeleton，避免加载完成前闪现空态
+  const loading = ref(true);
+  const error = ref<unknown>(null);
+
+  /**
+   * 状态起始时间（规格「时长前端计数」）：anchor_id -> 首次获知该状态的 epoch ms。
+   * 后端不提供直播/录制的起始时间戳，故以「首次获知状态」为计数起点，
+   * 之后由前端 setInterval 递增；状态消失时删除。
+   */
+  const liveSince = ref<Record<string, number>>({});
+  const recordingSince = ref<Record<string, number>>({});
+
+  // ── 视图模式与筛选（localStorage 持久化，loadFilters 只执行一次）──
+  const initialFilters = loadFilters();
+  const viewMode = ref<ViewMode>(loadViewMode());
+  const searchQuery = ref(initialFilters.searchQuery);
+  const tagFilter = ref<string | null>(initialFilters.tagFilter);
+  const recordFilter = ref<RecordFilter>(initialFilters.recordFilter);
+  const liveFilter = ref<LiveFilter>(initialFilters.liveFilter);
+
+  watch(viewMode, (v) => {
     try {
-      const result = await invoke<AnchorInfo[]>('get_anchors')
-      anchors.value = result
-      // 并发限流加载头像 (最大 3 并发)
-      const withAvatar = result.filter((a) => a.avatar)
-      await loadAvatarsConcurrently(withAvatar, 3)
+      localStorage.setItem(VIEW_MODE_KEY, v);
+    } catch {
+      /* localStorage 不可用时忽略 */
+    }
+  });
+
+  watch(
+    [searchQuery, tagFilter, recordFilter, liveFilter],
+    () => {
+      const filters: LiveFilters = {
+        searchQuery: searchQuery.value,
+        tagFilter: tagFilter.value,
+        recordFilter: recordFilter.value,
+        liveFilter: liveFilter.value,
+      };
+      try {
+        localStorage.setItem(FILTERS_KEY, JSON.stringify(filters));
+      } catch {
+        /* 忽略 */
+      }
+    },
+    { deep: true },
+  );
+
+  // ── 派生数据 ──
+  const liveAnchors = computed(
+    () =>
+      recordingStatuses.value
+        .filter((s) => s.is_recording)
+        .map((s) => anchors.value.find((a) => a.id === s.anchor_id))
+        .filter(Boolean) as AnchorConfig[],
+  );
+
+  const recordingCount = computed(
+    () => recordingStatuses.value.filter((s) => s.is_recording).length,
+  );
+
+  /** anchor_id -> RecordingStatus 快速查找 */
+  const statusMap = computed<Record<string, RecordingStatus>>(() => {
+    const map: Record<string, RecordingStatus> = {};
+    for (const s of recordingStatuses.value) map[s.anchor_id] = s;
+    return map;
+  });
+
+  /**
+   * 筛选后的主播列表（实时生效）：
+   * - 名称模糊匹配（不区分大小写）
+   * - 标签单选：选中固定标签时仅含该标签的主播命中；「全部」（null）不过滤
+   * - 录制/直播状态单选
+   */
+  const filteredAnchors = computed(() => {
+    const q = searchQuery.value.trim().toLowerCase();
+    const tag = tagFilter.value;
+    const record = recordFilter.value;
+    const live = liveFilter.value;
+    return anchors.value.filter((a) => {
+      if (q && !(a.name ?? "").toLowerCase().includes(q)) return false;
+      if (tag !== null && !(a.tags ?? []).includes(tag)) return false;
+      const st = statusMap.value[a.id];
+      if (record === "recording" && !st?.is_recording) return false;
+      if (record === "not-recording" && st?.is_recording) return false;
+      if (live === "live" && !st?.is_live) return false;
+      if (live === "not-live" && st?.is_live) return false;
+      return true;
+    });
+  });
+
+  // ── 动作 ──
+  async function fetchAnchors() {
+    loading.value = true;
+    error.value = null;
+    try {
+      const list = await api.getAnchors();
+      // tags 由后端落盘持久化（Task A/3）；`?? []` 仅兜底旧版后端响应
+      anchors.value = list.map((a) => ({ ...a, tags: a.tags ?? [] }));
     } catch (e) {
-      error.value = e as string
-      notificationStore.show(`获取主播列表失败: ${e}`, 'error')
+      error.value = e;
     } finally {
-      loading.value = false
+      loading.value = false;
     }
   }
 
-  // 并发限流加载头像
-  async function loadAvatarsConcurrently(list: AnchorInfo[], concurrency = 3) {
-    for (let i = 0; i < list.length; i += concurrency) {
-      const chunk = list.slice(i, i + concurrency)
-      await Promise.all(
-        chunk.map((a) => (a.avatar ? loadAvatar(a.id, a.avatar!) : Promise.resolve()))
-      )
-    }
-  }
-
-  async function loadAvatar(anchorId: string, url: string) {
-    if (avatarCache.value.has(anchorId)) return
-    try {
-      const base64 = await invoke<string>('get_avatar_base64', {
-        avatarUrl: url,
-      })
-      avatarCache.value.set(anchorId, base64)
-      // 更新对应主播的 avatar 为 base64
-      const anchor = anchors.value.find((a) => a.id === anchorId)
-      if (anchor) {
-        anchor.avatar = base64
+  /**
+   * 全量状态回拉后对齐时长起点表：
+   * - 已处于直播/录制且尚无起点 → 以「当前」为起点（后端不提供起始时间戳）
+   * - 状态已消失 → 清理起点
+   */
+  function syncSinceFromStatuses() {
+    const liveIds = new Set(
+      recordingStatuses.value
+        .filter((s) => s.is_live)
+        .map((s) => s.anchor_id),
+    );
+    const recordingIds = new Set(
+      recordingStatuses.value
+        .filter((s) => s.is_recording)
+        .map((s) => s.anchor_id),
+    );
+    for (const s of recordingStatuses.value) {
+      if (s.is_live && liveSince.value[s.anchor_id] === undefined) {
+        liveSince.value[s.anchor_id] = Date.now();
       }
-    } catch (e) {
-      console.error(`加载头像失败 ${anchorId}:`, e)
-      avatarCache.value.set(anchorId, TRANSPARENT_PLACEHOLDER)
+      if (s.is_recording && recordingSince.value[s.anchor_id] === undefined) {
+        recordingSince.value[s.anchor_id] = Date.now();
+      }
+    }
+    for (const id of Object.keys(liveSince.value)) {
+      if (!liveIds.has(id)) delete liveSince.value[id];
+    }
+    for (const id of Object.keys(recordingSince.value)) {
+      if (!recordingIds.has(id)) delete recordingSince.value[id];
     }
   }
 
-  function getAvatar(anchorId: string): string {
-    return avatarCache.value.get(anchorId) ?? TRANSPARENT_PLACEHOLDER
-  }
-
-  // 开始录制
-  async function startRecording(anchorId: string) {
+  async function fetchRecordingStatuses() {
+    error.value = null;
     try {
-      await invoke('start_recording_anchor', { anchorId })
-      notificationStore.show('开始录制', 'info')
-      await fetchAnchors(true)
+      recordingStatuses.value = await api.getRecordingStatus();
+      syncSinceFromStatuses();
     } catch (e) {
-      notificationStore.show(`启动录制失败: ${e}`, 'error')
+      error.value = e;
     }
   }
 
-  // 停止录制
+  async function addAnchor(anchor: AnchorConfig) {
+    // tags 由后端持久化落盘（Task A/3），回拉即真实值，无需重新套用
+    await api.addAnchor(anchor);
+    await fetchAnchors();
+  }
+
+  async function removeAnchor(id: string) {
+    await api.removeAnchor(id);
+    await fetchAnchors();
+    // 清理已删除主播的残留状态与时长起点
+    recordingStatuses.value = recordingStatuses.value.filter(
+      (s) => s.anchor_id !== id,
+    );
+    delete liveSince.value[id];
+    delete recordingSince.value[id];
+  }
+
+  async function updateAnchor(anchorId: string, updated: AnchorConfig) {
+    // tags 由后端持久化落盘（Task A/3），回拉即真实值，无需重新套用
+    await api.updateAnchor(anchorId, updated);
+    await fetchAnchors();
+    await fetchRecordingStatuses();
+  }
+
+  /** 立即从猫耳 API 刷新主播信息（名称/头像；后端返回体含 tags 与最新 avatar_url） */
+  async function refreshAnchor(anchorId: string) {
+    const fresh = await api.refreshAnchor(anchorId);
+    const idx = anchors.value.findIndex((a) => a.id === anchorId);
+    if (idx !== -1) {
+      anchors.value[idx] = fresh;
+    }
+  }
+
   async function stopRecording(anchorId: string) {
-    try {
-      await invoke('stop_recording_anchor', { anchorId })
-      notificationStore.show('已停止录制', 'info')
-      await fetchAnchors(true)
-    } catch (e) {
-      notificationStore.show(`停止录制失败: ${e}`, 'error')
+    await api.stopRecording(anchorId);
+    await fetchRecordingStatuses();
+  }
+
+  function isAnchorRecording(anchorId: string): boolean {
+    return statusMap.value[anchorId]?.is_recording ?? false;
+  }
+
+  /**
+   * 事件推送更新：只更新对应主播的单条状态，不重建列表（规格「状态实时更新」）。
+   * 同时维护时长起点：状态由 off -> on 记起点，on -> off 清起点。
+   */
+  function updateStatusFromEvent(update: AnchorStatusUpdate) {
+    const prev = statusMap.value[update.anchor_id];
+    const prevLive = prev?.is_live ?? false;
+    const prevRecording = prev?.is_recording ?? false;
+
+    if (update.is_live && !prevLive) {
+      liveSince.value[update.anchor_id] = Date.now();
+    } else if (!update.is_live && prevLive) {
+      delete liveSince.value[update.anchor_id];
+    }
+    if (update.is_recording && !prevRecording) {
+      recordingSince.value[update.anchor_id] = Date.now();
+    } else if (!update.is_recording && prevRecording) {
+      delete recordingSince.value[update.anchor_id];
+    }
+
+    const idx = recordingStatuses.value.findIndex(
+      (s) => s.anchor_id === update.anchor_id,
+    );
+    if (idx !== -1) {
+      recordingStatuses.value[idx] = { ...update };
+    } else {
+      recordingStatuses.value.push({ ...update });
     }
   }
 
-  // 添加主播
-  async function addAnchor(name: string, url: string) {
-    try {
-      const newAnchor = await invoke<AnchorConfig>('add_anchor', { name, url })
-      await fetchAnchors(true)
-      notificationStore.show(`主播 ${name} 添加成功`, 'info')
-      return newAnchor
-    } catch (e) {
-      notificationStore.show(`添加主播失败: ${e}`, 'error')
-      throw e
-    }
+  /** 直播时长起点（epoch ms）；未直播返回 undefined */
+  function liveSinceOf(anchorId: string): number | undefined {
+    return liveSince.value[anchorId];
   }
 
-  // 删除主播
-  async function removeAnchor(anchorId: string) {
-    try {
-      await invoke('remove_anchor', { anchorId })
-      await fetchAnchors(true)
-      notificationStore.show('主播已删除', 'info')
-    } catch (e) {
-      notificationStore.show(`删除主播失败: ${e}`, 'error')
-    }
+  /** 录制时长起点（epoch ms）；未录制返回 undefined */
+  function recordingSinceOf(anchorId: string): number | undefined {
+    return recordingSince.value[anchorId];
   }
 
-  // 更新主播配置
-  async function updateAnchorConfig(anchorConfig: AnchorConfig) {
-    try {
-      await invoke('update_anchor_config', { anchorConfig })
-      await fetchAnchors(true)
-      notificationStore.show('主播配置已更新', 'info')
-    } catch (e) {
-      notificationStore.show(`更新配置失败: ${e}`, 'error')
-    }
+  function clearFilters() {
+    searchQuery.value = "";
+    tagFilter.value = null;
+    recordFilter.value = "all";
+    liveFilter.value = "all";
   }
 
-  // 自动轮询（每 5 秒）
-  function startAutoRefresh() {
-    if (refreshInterval) return
-    refreshInterval = window.setInterval(() => {
-      if (!isRefreshing) {
-        isRefreshing = true
-        fetchAnchors(false).finally(() => {
-          isRefreshing = false
-        })
-      }
-    }, 5000)
+  // ── 事件订阅（统一走 events.ts 层，页面内不直接 listen）──
+  function startListening() {
+    if (unlisten) return;
+    unlisten = onRecordingStatusChanged((update) =>
+      updateStatusFromEvent(update),
+    );
   }
 
-  function stopAutoRefresh() {
-    if (refreshInterval) {
-      clearInterval(refreshInterval)
-      refreshInterval = null
-    }
+  function stopListening() {
+    unlisten?.();
+    unlisten = null;
   }
-
-  // 初始化
-  fetchAnchors()
-  startAutoRefresh()
 
   return {
     anchors,
+    recordingStatuses,
     loading,
     error,
+    viewMode,
+    searchQuery,
+    tagFilter,
+    recordFilter,
+    liveFilter,
+    liveAnchors,
     recordingCount,
-    liveCount,
+    statusMap,
+    filteredAnchors,
     fetchAnchors,
-    getAvatar,
-    startRecording,
-    stopRecording,
+    fetchRecordingStatuses,
     addAnchor,
     removeAnchor,
-    updateAnchorConfig,
-    startAutoRefresh,
-    stopAutoRefresh,
-  }
-})
+    updateAnchor,
+    refreshAnchor,
+    stopRecording,
+    isAnchorRecording,
+    liveSinceOf,
+    recordingSinceOf,
+    updateStatusFromEvent,
+    clearFilters,
+    startListening,
+    stopListening,
+  };
+});

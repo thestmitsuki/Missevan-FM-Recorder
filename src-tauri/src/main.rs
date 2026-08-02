@@ -1,5 +1,6 @@
+// Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    missevan_recorder_lib::run_app();
+    missevan_recorder_lib::run()
 }

@@ -1,220 +1,101 @@
-<div align="center">
-  <h1>🎙️ 猫耳FM录制器</h1>
-  <p><strong>Missevan FM Recorder</strong></p>
-  <p>猫耳FM (missevan.com) 主播直播流自动录制工具</p>
-  <p>
-    <img src="https://img.shields.io/badge/platform-Windows-blue?style=flat-square" alt="Platform">
-    <img src="https://img.shields.io/badge/tauri-2.x-purple?style=flat-square" alt="Tauri">
-    <img src="https://img.shields.io/badge/vue-3.x-brightgreen?style=flat-square" alt="Vue 3">
-  </p>
-  <p>
-    <i>简体中文</i> · <a href="#english">English</a>
-  </p>
-</div>
+# Missevan FM Recorder
 
----
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-## 📖 简介
+猫耳 FM（Missevan，https://fm.missevan.com/）主播直播流的桌面录制工具。自动检测开播、音频录制、文件管理一站式完成，支持无人值守后台运行。
 
-**猫耳FM录制器** 是一款基于 Tauri 2.x 的桌面应用，用于自动监测和录制猫耳FM（Missevan FM）平台主播的直播流。
+> ⚠️ **免责声明**：本软件仅供个人学习与研究使用。请遵守猫耳 FM 平台服务条款及适用法律法规；录制内容的版权归原权利人所有。开发者不承担因使用本工具产生的任何责任。
 
-核心功能：
-- ⏱️ **自动监测** — 定时检测主播直播状态，开播即录
-- 🔄 **自动重连** — 录制中断自动重试，确保不丢片段
-- 🎚️ **灵活格式** — 支持 M4A / MP3 录制格式
-- 📂 **文件管理** — 内置文件浏览器，支持重命名、删除、系统打开
-- 🌐 **代理支持** — 每位主播可独立配置代理和 Cookie
-- 🖥️ **优雅界面** — Apple 设计语言，毛玻璃质感，明暗主题自适应
+## 功能特性
 
----
+- 🎙️ **直播监控** — 自动检测关注主播的开播状态，检测间隔与随机抖动可配置（默认 120s + 0-60s 抖动，降低平台风控风险）
+- 📹 **自动录制** — 检测到开播自动启动 FFmpeg 录制（仅音频轨），支持 M4A / MP3 格式、分段录制、比特率选择（最高 320k）
+- 📁 **文件管理** — 录制文件按日期分组、分段组折叠、搜索/筛选、内置播放器连续播放、重命名/删除
+- 🏷️ **主播标签** — 固定 5 类标签（音乐/唱歌/日常/ASMR/杂谈）筛选与归类
+- 🔔 **系统通知** — Windows 原生 toast 通知（应用身份，非 PowerShell）+ 系统默认提示音，事件类型可配置
+- 🖥️ **系统托盘** — 最小化到托盘后台运行，托盘菜单显示录制状态与最近文件
+- 🌐 **中英双语** — 完整 i18n，主题亮/暗/跟随系统，强调色可调
+- 🧪 **调试面板** — 实时日志、网络请求记录、检测/录制引擎状态、Mock 模拟直播环境（默认关闭，可在设置-关于开启）
 
-## 🚀 快速开始
+## 截图
 
-### 系统要求
+<!-- 在此添加应用截图（建议 2-3 张：直播页 / 文件页 / 设置页） -->
 
-- **Windows 10 / Windows 11** (64位)
-- [FFmpeg](https://ffmpeg.org/download.html)（录制必需）
+## 系统要求
 
-### 下载
+- Windows 10 / 11（需要 WebView2 Runtime，Windows 11 自带）
+- [FFmpeg](https://ffmpeg.org/) — 首次启动的引导向导可自动下载安装便携版；或自行放入程序目录 `ffmpeg/` 文件夹
 
-从 [Releases](https://github.com/your-username/missevan-recorder/releases) 页面下载最新版本安装包。
+## 安装
 
-### 首次使用
+1. 前往 [Releases](https://github.com/thestmitsuki/Missevan-FM-Recorder/releases) 下载最新安装包（NSIS 安装程序）
+2. 运行安装程序，按向导完成首次配置（输出目录、格式、环境检查）
+3. 在直播页点击 **+** 添加主播，粘贴直播间 URL（如 `https://fm.missevan.com/live/100000001`）
 
-1. **安装 FFmpeg**（任选一种）：
-   - 将 `ffmpeg.exe` 放入程序目录下的 `ffmpeg/` 文件夹
-   - 或将 FFmpeg 添加到系统 PATH
-   - 或在软件「设置」中手动指定路径
-2. **启动程序**，点击「添加主播」卡片
-3. 填写 **主播名称** 和 **直播间 URL**（如 `https://fm.missevan.com/live/123456`）
-4. 添加成功，卡片自动出现在监控网格中
+## 使用说明
 
-> 💡 配置代理/Cookie：点击卡片 `···` 菜单 →「直播间设置」
+### 获取直播间 URL
 
----
+- 猫耳 FM 手机 App 或网页端进入直播间，复制地址栏链接，格式为 `https://fm.missevan.com/live/数字`
+- 在应用内添加主播时粘贴该 URL，会自动提取房间号并获取主播名称与头像
 
-## 🛠️ 从源码构建
+### 常见问题（FAQ）
 
-| 依赖 | 安装方式 |
-|------|---------|
-| Rust | https://rustup.rs |
-| Node.js 18+ | https://nodejs.org |
-| FFmpeg | https://ffmpeg.org/download.html |
+- **为什么检测不到开播？** 检查主播是否已开启"自动检测"开关；检测间隔默认为 120 秒，开播后最多等待一个周期
+- **录制没有声音/文件为空？** 确认 FFmpeg 已安装（设置-高级或引导向导环境检查）；个别直播间可能需要 Cookie（在主播设置中填写）
+- **下载 FFmpeg 失败？** 引导向导提供手动下载链接，或从 https://ffmpeg.org 手动获取并放入 `ffmpeg/` 目录
+- **提示音没有？** 检查系统"专注助手/免打扰"设置；通知声音跟随系统默认提示音
+- **误报"直播中"但无录制？** 状态为双重验证（API + 录制状态）结果，API 抖动时短暂偏差属正常，下一轮检测自动校正
 
-### 方法一（推荐）：使用 Tauri CLI 一步完成
+### 已知限制
 
-```bash
-# 安装前端依赖
-npm install
+- 设置页标注「重启生效」/「暂未生效」的字段（文件名模板、录制后动作、代理、日志级别等）为界面预留，尚未接入运行时逻辑
+- 全局快捷键为占位展示，暂未绑定实际按键
+- 性能监控模块为实验性占位
+- 弹幕录制不在计划内（仅音频录制）
 
-# 安装 Tauri CLI 并构建（自动编译前端 + 后端）
-npm run tauri build
-```
+## 开发
 
-### 方法二：分步构建
+### 技术栈
+
+- 前端：Vue 3 · Vite · TypeScript · Pinia · vue-i18n · Tailwind CSS v4 · shadcn-vue（本地组件）
+- 后端：Rust · Tauri 2 · tokio · reqwest
+
+### 构建
 
 ```bash
-# 1. 安装前端依赖
-npm install
+# 前端
+npm ci
+npm run build        # vue-tsc + vite build
 
-# 2. 构建前端
-npm run build
-
-# 3. 编译 Rust 后端（从 src-tauri/ 目录）
+# 后端（Windows）
 cd src-tauri
-cargo build --release
+cargo check
+cargo test
+cd ..
+npm run tauri dev    # 开发运行
+npm run tauri build  # 打包安装程序
 ```
 
-> **⚠️ 注意**: 如果使用分步构建，**务必先执行 `npm run build`**。
-> 跳过此步骤会导致 `dist/` 目录缺失，编译出的程序没有界面，
-> 运行时会报 `localhost 拒绝连接` 的错误。
-
-### 构建产物
-
-`src-tauri/target/release/missevan-recorder.exe`
-
-### 类型检查（可选）
-
-```bash
-npm run typecheck
-```
-
----
-
-## ⚙️ 功能详情
-
-<details>
-<summary><b>直播监控</b></summary>
-
-- 主播卡片网格展示，实时状态一目了然
-- 每 5 秒自动刷新直播状态
-- 支持主播头像缓存加载
-</details>
-
-<details>
-<summary><b>自动录制</b></summary>
-
-- 检测开播后自动启动 FFmpeg 录制
-- 录制期间每 10 秒检测直播状态，直播结束自动停止
-- 支持断线重连（最多 3 次）
-- 实时监测磁盘空间，不足自动停止
-</details>
-
-<details>
-<summary><b>录制配置</b></summary>
-
-- 输出格式：M4A (AAC) / MP3 (libmp3lame)，码率 320k
-- 分段录制：按指定秒数分割文件
-- 磁盘空间阈值设置
-</details>
-
-<details>
-<summary><b>文件管理</b></summary>
-
-- 按主播文件夹分组查看
-- 搜索、排序（日期/名称/大小）
-- 重命名、删除
-- 调用系统默认播放器打开
-</details>
-
----
-
-## 🧩 技术栈
-
-| 层 | 技术 |
-|----|------|
-| 桌面框架 | Tauri 2.x |
-| 前端 | Vue 3 + Pinia + vue-i18n |
-| 样式 | CSS 自定义属性 + 毛玻璃设计 |
-| 后端 | Rust (tokio, reqwest) |
-| 录制 | FFmpeg 子进程 |
-| 配置 | TOML 文件 |
-
----
-
-## 📁 文件结构
+### 目录结构
 
 ```
-config/
-├── config.toml           # 全局配置
-└── anchors/              # 主播独立配置
-    └── *.toml
-
-downloads/
-└── 猫耳FM直播/
-    └── 主播名/           # 按主播自动分类
-        └── *.m4a
+src/              前端（views/stores/services/components/ui）
+src-tauri/src/    后端（api 命令 / domain 领域 / infrastructure 基础设施）
+docs/             设计文档与实施计划
 ```
 
----
+## 报告问题
 
-## 🤝 贡献
+遇到问题请通过 [GitHub Issues](https://github.com/thestmitsuki/Missevan-FM-Recorder/issues) 反馈，请附上：
 
-1. Fork 本仓库
-2. `git checkout -b feature/amazing-feature`
-3. `git commit -m 'feat: add amazing feature'`
-4. `git push origin feature/amazing-feature`
-5. 创建 Pull Request
+- 应用版本（设置-关于）
+- 操作系统与架构
+- 复现步骤
+- 应用日志（`%APPDATA%\missevan-recorder\logs\`）
 
----
+## 许可
 
+[MIT](LICENSE) © thestmitsuki
 
-## ⚠️ 免责声明
-
-- 本工具仅用于个人学习研究，请遵守猫耳FM平台服务条款
-- 录制内容请勿用于商业用途或二次分发
-- 请尊重主播版权
-
----
-
-<h2 id="english">English</h2>
-
-## Missevan FM Recorder
-
-A desktop app built with **Tauri 2.x + Vue 3 + Rust** for automatically monitoring and recording live streams from [Missevan FM](https://fm.missevan.com).
-
-### Features
-
-- **Auto Monitoring** — Periodically checks live status, records automatically
-- **Auto Reconnect** — Retries up to 3 times on failure
-- **Flexible Formats** — M4A (AAC) / MP3 at 320kbps
-- **File Manager** — Browse, rename, delete, play with system player
-- **Per-broadcaster Config** — Independent proxy, cookie, check interval
-
-### Quick Start
-
-```bash
-npm install
-npm run tauri build    # one-step build (frontend + backend)
-```
-
-> **Note**: If building manually, run `npm run build` BEFORE `cargo build --release`.
-> Missing frontend build causes `localhost refused connection` error.
-
-Requires: Rust, Node.js 18+, FFmpeg
-
----
-
-<p align="center">
-  <sub>Made with ❤️ for the Missevan FM community</sub>
-</p>
+内置 FFmpeg 二进制遵循其自身的 LGPL/GPL 许可。

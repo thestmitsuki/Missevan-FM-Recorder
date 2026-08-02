@@ -1,303 +1,109 @@
-<template>
-  <div class="app-container app-enter">
-    <NotificationBanner />
-
-    <!-- 桌面端侧边导航 + 移动端底部导航 -->
-    <div class="app-layout">
-      <!-- 侧边栏（桌面端） -->
-      <nav class="sidebar glass" v-if="isDesktop">
-        <div class="sidebar-brand">
-          <div class="brand-icon">
-            <span class="material-symbols-outlined">radio</span>
-          </div>
-          <span class="brand-text">猫耳FM</span>
-        </div>
-
-        <div class="sidebar-nav">
-          <button
-            v-for="tab in tabs"
-            :key="tab.key"
-            @click="currentTab = tab.key"
-            class="sidebar-item"
-            :class="{ active: currentTab === tab.key }"
-          >
-            <span class="material-symbols-outlined sidebar-item-icon">{{ tab.icon }}</span>
-            <span class="sidebar-item-label">{{ $t(`nav.${tab.key}`) }}</span>
-          </button>
-        </div>
-
-        <div class="sidebar-footer">
-          <div class="recording-badge" v-if="anchorStore.recordingCount > 0">
-            <span class="badge-dot record-pulse"></span>
-            <span>{{ anchorStore.recordingCount }}</span>
-          </div>
-        </div>
-      </nav>
-
-      <!-- 主内容区 -->
-      <main class="main-area">
-        <div class="main-scroll">
-          <Transition name="view-fade" mode="out-in">
-            <KeepAlive>
-              <component :is="currentView" :key="currentTab" />
-            </KeepAlive>
-          </Transition>
-        </div>
-      </main>
-    </div>
-
-    <!-- 移动端底部导航 -->
-    <nav class="bottom-nav glass-heavy" v-if="!isDesktop">
-      <button
-        v-for="tab in tabs"
-        :key="tab.key"
-        @click="currentTab = tab.key"
-        class="bottom-nav-item"
-        :class="{ active: currentTab === tab.key }"
-      >
-        <span class="material-symbols-outlined bottom-nav-icon">{{ tab.icon }}</span>
-        <span class="bottom-nav-label">{{ $t(`nav.${tab.key}`) }}</span>
-      </button>
-    </nav>
-
-    <AudioPlayer ref="audioPlayerRef" />
-  </div>
-</template>
-
 <script setup lang="ts">
-import { ref, shallowRef, watch, provide } from 'vue'
-import { useResponsive } from './composables/useResponsive'
-import { useNotificationStore } from './stores/notificationStore'
-import { useAnchorStore } from './stores/anchorStore'
-import type { TabKey, TabItem } from './types'
-import LiveView from './components/live/LiveView.vue'
-import FilesView from './components/files/FilesView.vue'
-import SettingsView from './components/settings/SettingsView.vue'
-import AudioPlayer from './components/player/AudioPlayer.vue'
-import NotificationBanner from './components/common/NotificationBanner.vue'
+import { ref, watch, onMounted, onUnmounted } from "vue";
+import { useRouter } from "vue-router";
+import ErrorBoundary from "@/components/common/ErrorBoundary.vue";
+import AppLayout from "@/layouts/AppLayout.vue";
+import { useNotificationStore } from "@/stores/notificationStore";
+import { useAnchorStore } from "@/stores/anchorStore";
+import { useConfigStore } from "@/stores/configStore";
+import Toast from "@/components/common/Toast.vue";
+import { isWizardWindow } from "@/services/window";
+import { onTrayOpenLivePage } from "@/services/events";
 
-const notificationStore = useNotificationStore()
-const anchorStore = useAnchorStore()
-const { isDesktop } = useResponsive()
+const notifStore = useNotificationStore();
+const anchorStore = useAnchorStore();
+const configStore = useConfigStore();
+const toastMessage = ref("");
+const toastKey = ref(0);
+const router = useRouter();
 
-provide('showNotification', (message: string, level: 'info' | 'warning' | 'error' = 'info', duration = 3000) => {
-  notificationStore.show(message, level, duration)
-})
+// ── 双窗口：向导窗口只渲染向导路由，主窗口渲染完整布局。
+// 路由跳转已由 router 全局守卫接管（src/router/index.ts），此处仅做渲染分支 ──
+const isWizard = isWizardWindow();
 
-const tabs: TabItem[] = [
-  { key: 'live', icon: 'mic' },
-  { key: 'files', icon: 'folder' },
-  { key: 'settings', icon: 'settings' },
-]
+// ── 托盘 → 直播页导航（Task 17 emit `tray:open_live_page`，Task 20 前端接线）──
+let stopTrayOpen: (() => void) | null = null;
 
-const currentTab = ref<TabKey>('live')
-const currentView = shallowRef(LiveView)
+// ── 生命周期 ──
 
-watch(currentTab, (tab) => {
-  if (tab === 'live') currentView.value = LiveView
-  else if (tab === 'files') currentView.value = FilesView
-  else currentView.value = SettingsView
-})
+onMounted(async () => {
+    // 1. 启动通知监听（必须）
+    notifStore.startListening();
+
+    // 2. 启动主播状态推送监听（recording_status_changed，统一 events.ts 层）
+    anchorStore.startListening();
+
+    // 2. 托盘「录制中：N」点击 → 导航到直播页（仅主窗口）
+    if (!isWizard) {
+        stopTrayOpen = onTrayOpenLivePage(() => {
+            router.push("/");
+        });
+    }
+
+    // 3. 加载配置
+    try {
+        await configStore.fetchConfig();
+    } catch (e) {
+        console.error("Failed to load config", e);
+    }
+});
+
+onUnmounted(() => {
+    // 4. 清理监听
+    stopTrayOpen?.();
+    notifStore.stopListening();
+    anchorStore.stopListening();
+});
+
+
+// ── 监听最新通知，显示 Snackbar ──
+
+watch(
+    () => notifStore.latestNotification,
+    (n) => {
+        if (n) {
+            toastMessage.value = n.message;
+            toastKey.value++; // 每次新通知都改变 key，强制重建组件
+        } else {
+            toastMessage.value = ""; // 清空消息
+            toastKey.value = 0; // 重置 key（或设为 null）
+        }
+    },
+    { immediate: false },
+);
 </script>
 
-<style scoped>
-.app-container {
-  display: flex;
-  flex-direction: column;
-  height: 100dvh;
-  width: 100%;
-  background: var(--color-bg);
-  font-family: var(--font-family);
-  overflow: hidden;
-}
+<template>
+    <ErrorBoundary>
+        <RouterView v-if="isWizard" />
+        <AppLayout v-else />
+    </ErrorBoundary>
+    <!--- ##引发过消息残留## --->
+    <Toast :key="toastKey" :message="toastMessage" :duration="3000" />
+</template>
 
-/* -------- 桌面布局 (侧边栏 + 内容) -------- */
-.app-layout {
-  display: flex;
-  flex: 1;
-  overflow: hidden;
+<style>
+/* 注意：不在此做全局 margin/padding 重置——非 @layer 的全局规则会覆盖
+   Tailwind v4 @layer 内的组件 utilities（如 p-4/mt-2），导致组件边距为 0。
+   preflight 已提供等价重置。 */
+* {
+    box-sizing: border-box;
 }
-
-/* 侧边栏 */
-.sidebar {
-  width: 200px;
-  flex-shrink: 0;
-  display: flex;
-  flex-direction: column;
-  padding: var(--space-6) 0;
-  border-right: 0.5px solid var(--color-border);
-  z-index: var(--z-nav);
+html,
+body,
+#app {
+    height: 100%;
+    width: 100%;
 }
-
-.sidebar-brand {
-  display: flex;
-  align-items: center;
-  gap: var(--space-4);
-  padding: var(--space-4) var(--space-8) var(--space-8);
-  margin-bottom: var(--space-4);
-}
-
-.brand-icon {
-  width: 32px;
-  height: 32px;
-  border-radius: var(--radius-md);
-  background: var(--color-primary);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  box-shadow: 0 2px 8px var(--color-primary-glow);
-}
-
-.brand-icon .material-symbols-outlined {
-  color: white;
-  font-size: 20px;
-}
-
-.brand-text {
-  font-size: var(--font-lg);
-  font-weight: 700;
-  letter-spacing: -0.03em;
-  color: var(--color-text);
-}
-
-.sidebar-nav {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 0 var(--space-4);
-}
-
-.sidebar-item {
-  display: flex;
-  align-items: center;
-  gap: var(--space-4);
-  padding: var(--space-4) var(--space-6);
-  border-radius: var(--radius-md);
-  font-size: var(--font-sm);
-  font-weight: 500;
-  color: var(--color-text-secondary);
-  transition: all var(--duration-fast) var(--ease-out);
-  text-align: left;
-  width: 100%;
-}
-
-.sidebar-item:hover {
-  background: var(--color-surface-secondary);
-  color: var(--color-text);
-}
-
-.sidebar-item.active {
-  background: var(--color-primary-light);
-  color: var(--color-primary);
-}
-
-.sidebar-item-icon {
-  font-size: 20px !important;
-}
-
-.sidebar-footer {
-  padding: var(--space-4);
-  display: flex;
-  justify-content: center;
-}
-
-.recording-badge {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-2) var(--space-4);
-  background: var(--color-danger-light);
-  color: var(--color-danger);
-  border-radius: var(--radius-full);
-  font-size: var(--font-xs);
-  font-weight: 600;
-}
-
-.badge-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--color-danger);
-}
-
-/* -------- 主内容区 -------- */
-.main-area {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  min-width: 0;
-}
-
-.main-scroll {
-  flex: 1;
-  overflow-y: auto;
-  overflow-x: hidden;
-  padding: var(--space-10) var(--space-10) var(--space-10);
-}
-
-/* -------- 移动端底部导航 -------- */
-.bottom-nav {
-  position: fixed;
-  bottom: 0;
-  left: 0;
-  right: 0;
-  display: flex;
-  justify-content: space-around;
-  align-items: center;
-  height: var(--nav-height);
-  border-top: 0.5px solid var(--color-border);
-  padding: var(--space-2) var(--space-4) var(--space-5);
-  z-index: var(--z-nav);
-}
-
-.bottom-nav-item {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 1px;
-  padding: var(--space-2) var(--space-8);
-  border-radius: var(--radius-full);
-  font-size: 10px;
-  color: var(--color-text-secondary);
-  transition: all var(--duration-fast) var(--ease-out);
-  position: relative;
-}
-
-.bottom-nav-item.active {
-  color: var(--color-primary);
-}
-
-.bottom-nav-icon {
-  font-size: 24px !important;
-  transition: transform var(--duration-fast) var(--ease-out);
-}
-
-.bottom-nav-item:active .bottom-nav-icon {
-  transform: scale(0.85);
-}
-
-.bottom-nav-item.active .bottom-nav-icon {
-  font-variation-settings: 'FILL' 1;
-}
-
-.bottom-nav-label {
-  font-weight: 500;
-  font-size: 10px;
-  letter-spacing: 0.01em;
-}
-
-/* -------- 响应式调整 -------- */
-@media (max-width: 767px) {
-  .main-scroll {
-    padding: var(--space-8) var(--space-6) calc(var(--nav-height) + var(--space-8)) var(--space-6);
-  }
-}
-
-@media (max-width: 479px) {
-  .main-scroll {
-    padding: var(--space-6) var(--space-4) calc(var(--nav-height) + var(--space-6)) var(--space-4);
-  }
+body {
+    font-family:
+        "Noto Sans SC",
+        "PingFang SC",
+        system-ui,
+        -apple-system,
+        sans-serif;
+    background: var(--background);
+    color: var(--foreground);
+    -webkit-font-smoothing: antialiased;
 }
 </style>
