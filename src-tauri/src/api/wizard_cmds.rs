@@ -392,6 +392,14 @@ pub(crate) async fn finish_wizard(
     config_manager: State<'_, Arc<ConfigManager>>,
     detection_wake: State<'_, Arc<tokio::sync::Notify>>,
 ) -> Result<(), AppError> {
+    // 0. 标记引导完成（主 AGENT 引导逻辑修复）：config.toml 在第 3 步已写盘，
+    //    is_first_run 依赖 wizard_completed——置 true 后再次启动不再进引导
+    if let Ok(mut config) = config_manager.load() {
+        if !config.global.wizard_completed {
+            config.global.wizard_completed = true;
+            let _ = config_manager.save_global(&config.global);
+        }
+    }
     // 1. 销毁向导窗口（向导流程结束）
     //    必须用 destroy() 而非 close()：前端 WizardView 注册了 onCloseRequested 并
     //    prevent_default()，Tauri 语义下只要存在 close-requested 监听器，close() 就被

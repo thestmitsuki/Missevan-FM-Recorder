@@ -75,6 +75,8 @@ export interface GlobalConfig {
   detector_jitter_secs: number;
   /** 快捷键映射（id → 组合键；由 ShortcutSection 经 set_shortcut 命令落盘，设置页保存不透传） */
   shortcuts: Record<string, string>;
+  /** 引导完成标记（默认 true=已完成；首次向导写盘时显式 false，finish_wizard 置 true） */
+  wizard_completed: boolean;
 }
 
 /** `import_config` 命令返回的导入汇总（与后端 manager.rs ImportSummary 对齐） */

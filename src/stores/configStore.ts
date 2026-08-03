@@ -56,6 +56,7 @@ export const DEFAULT_CONFIG: GlobalConfig = {
   detector_jitter_secs: 60,
   // 快捷键映射：由 ShortcutSection 经 set_shortcut 命令落盘，表单默认空
   shortcuts: {},
+  wizard_completed: true,
 };
 
 export const useConfigStore = defineStore("config", () => {

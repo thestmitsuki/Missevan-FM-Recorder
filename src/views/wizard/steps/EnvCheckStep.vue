@@ -162,6 +162,9 @@ async function saveConfigNow(): Promise<boolean> {
     await configStore.fetchConfig();
     const merged = {
       ...configStore.config,
+      // 首次引导写盘：标记未完成（第 4 步 finish_wizard 才置 true）——
+      // 若用户在写盘后、进入应用前退出，再次启动仍进引导窗（规格要求）
+      wizard_completed: false,
       output_dir: staged.value.outputDir.trim(),
       record_format: staged.value.recordFormat,
       segment_seconds: staged.value.segmentSeconds,

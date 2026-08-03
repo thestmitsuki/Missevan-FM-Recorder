@@ -392,9 +392,20 @@ impl ConfigManager {
         Ok(())
     }
 
-    /// 判断是否首次运行（无任何配置文件）
+    /// 判断是否首次运行（无配置文件，或配置存在但引导未完成）。
+    ///
+    /// 引导完成标记：首次向导第 3 步检查通过即写盘（config.toml 存在），但
+    /// 用户未到第 4 步「进入应用」就退出时引导未完成——此时必须再次打开引导窗
+    /// （规格「若用户未完成配置而关闭，再次启动时仍会重新打开引导窗口」）。
     pub fn is_first_run(&self) -> bool {
-        !self.global_config_path().exists()
+        if !self.global_config_path().exists() {
+            return true;
+        }
+        // 配置存在但引导未完成（wizard_completed=false，首次写盘时显式设置）
+        match self.load() {
+            Ok(config) => !config.global.wizard_completed,
+            Err(_) => true, // 配置损坏：保守视为首次运行（引导可重建）
+        }
     }
 
     /// 删除全部配置（config.toml + anchors/），供 reset_config 使用。
@@ -967,6 +978,37 @@ mod tests {
     }
 
     #[test]
+    fn first_run_depends_on_wizard_completed_not_config_existence() {
+        // 首次引导：第 3 步写盘后（wizard_completed=false）退出 → 再次启动仍引导
+        let dir = std::env::temp_dir().join(format!(
+            "missevan-wizard-test-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let manager = ConfigManager::new(dir.clone());
+        let mut cfg = crate::domain::config::model::Config::default();
+        cfg.global.wizard_completed = false;
+        manager.save_global(&cfg.global).unwrap();
+        assert!(manager.is_first_run(), "写盘但未完成引导 → 应视为首次运行");
+        // 第 4 步 finish_wizard 置 true → 不再引导
+        cfg.global.wizard_completed = true;
+        manager.save_global(&cfg.global).unwrap();
+        assert!(!manager.is_first_run(), "引导完成 → 不应再进引导");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn old_config_without_wizard_field_is_not_first_run() {
+        // 老用户配置无 wizard_completed 字段 → serde default true → 已完成（无回归）
+        let dir = std::env::temp_dir().join("missevan-test-config-wizard-old");
+        let _ = std::fs::remove_dir_all(&dir);
+        let manager = ConfigManager::new(dir.clone());
+        std::fs::create_dir_all(manager.global_config_path().parent().unwrap()).unwrap();
+        std::fs::write(manager.global_config_path(), "output_dir = \"./recordings\"\n").unwrap();
+        assert!(!manager.is_first_run(), "老配置无字段应视为已完成");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     fn test_save_and_load_global() {
         let dir = std::env::temp_dir().join("missevan-test-config-2");
         let _ = std::fs::remove_dir_all(&dir);

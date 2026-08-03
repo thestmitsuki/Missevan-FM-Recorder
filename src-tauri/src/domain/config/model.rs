@@ -61,6 +61,18 @@ pub struct GlobalConfig {
     pub detector_jitter_secs: u32,
     // —— 快捷键（§11.2 set_shortcut；前端当前用 localStorage 展示，后端命令可选接线）——
     pub shortcuts: HashMap<String, String>, // id -> 组合键；空字符串值 = 未绑定
+    // —— 引导完成标记（主 AGENT 引导逻辑分析修复）——
+    /// 是否已完成引导。`is_first_run` 以此为准：config.toml 存在 ≠ 引导完成——
+    /// 首次引导第 3 步环境检查通过即写盘（规格要求），若用户在写盘后、第 4 步
+    /// 「进入应用」前退出，配置已存在但引导未完成，必须再次打开引导窗。
+    /// **serde default = true**：老用户配置无此字段 → 视为已完成（无回归）；
+    /// 首次引导写盘时前端显式传 false，finish_wizard 置 true。
+    #[serde(default = "default_wizard_completed")]
+    pub wizard_completed: bool,
+}
+
+fn default_wizard_completed() -> bool {
+    true
 }
 
 /// 支持的录制格式白名单（M1 审查跟进：record_format 会被拼入输出文件扩展名，
@@ -126,6 +138,7 @@ impl Default for GlobalConfig {
             ffprobe_path: String::new(),
             detector_jitter_secs: 60,
             shortcuts: HashMap::new(),
+            wizard_completed: true,
         }
     }
 }
