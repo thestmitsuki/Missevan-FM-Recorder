@@ -5,9 +5,14 @@
 //! `retention_days == 0` 表示不按天数清理；`max_total_gb == 0` 表示不限制总大小
 //! （与 GlobalConfig 字段注释一致）。
 
+use crate::domain::config::manager::ConfigManager;
+use crate::domain::services::file_cache::{FileCacheHandle, FileCacheManager};
 use crate::infrastructure::error::types::AppError;
+use crate::infrastructure::state::app_state::AppStateHandle;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::SystemTime;
+use tauri::WebviewWindow;
 
 /// 与文件缓存一致的录制文件扩展名
 const RECORDING_EXTENSIONS: [&str; 4] = ["m4a", "aac", "mp3", "flac"];
@@ -74,6 +79,72 @@ pub fn plan_cleanup(
     }
 
     to_delete
+}
+
+/// 执行一次录制文件清理（`run_cleanup_now` 命令与定时调度共用）：
+/// 扫描输出目录 → 过滤录制中的文件 → plan_cleanup → 删除 → 刷新文件缓存
+///（内部 emit `recording_files_changed`，前端文件列表即时更新）。
+pub async fn run_cleanup(
+    window: WebviewWindow,
+    cache: FileCacheHandle,
+    config_manager: Arc<ConfigManager>,
+    app_state: AppStateHandle,
+) -> Result<CleanupSummary, AppError> {
+    let config = config_manager.load()?;
+    let output_dir = Path::new(&config.global.output_dir);
+    // 录制中的文件跳过清理（FFmpeg 正在写入，删除会损坏录制）
+    let active_paths = app_state.lock().await.active_output_paths();
+    let candidates: Vec<CleanupCandidate> = scan_recording_files(output_dir)?
+        .into_iter()
+        .filter(|c| {
+            !active_paths.contains(&crate::domain::services::file_cache::path_key(
+                &c.path.to_string_lossy(),
+            ))
+        })
+        .collect();
+    let planned = plan_cleanup(
+        &candidates,
+        config.global.retention_days,
+        config.global.max_total_gb as u64,
+        SystemTime::now(),
+    );
+    let to_delete: std::collections::HashSet<&PathBuf> = planned.iter().collect();
+
+    let mut files_deleted = 0usize;
+    let mut bytes_freed = 0u64;
+    for path in &to_delete {
+        if let Ok(meta) = std::fs::metadata(path) {
+            bytes_freed += meta.len();
+        }
+        match std::fs::remove_file(path) {
+            Ok(_) => files_deleted += 1,
+            Err(e) => tracing::warn!("清理失败 {:?}: {}", path, e),
+        }
+    }
+    let mut files_remaining = 0usize;
+    let mut bytes_remaining = 0u64;
+    for c in &candidates {
+        if !to_delete.contains(&c.path) {
+            files_remaining += 1;
+            bytes_remaining += c.size;
+        }
+    }
+    tracing::info!(
+        "录制文件清理完成: 删除 {} 个文件 / 释放 {} 字节",
+        files_deleted,
+        bytes_freed
+    );
+
+    // 刷新文件缓存（内部 emit recording_files_changed）
+    let manager = FileCacheManager::new(window, cache);
+    manager.refresh(&config_manager, &app_state).await?;
+
+    Ok(CleanupSummary {
+        files_deleted,
+        bytes_freed,
+        files_remaining,
+        bytes_remaining,
+    })
 }
 
 /// 递归扫描输出目录下的录制文件（扩展名与文件缓存一致）

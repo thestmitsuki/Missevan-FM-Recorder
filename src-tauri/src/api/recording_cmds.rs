@@ -82,9 +82,21 @@ pub async fn stop_recording(
             tracing::info!("录制已停止: anchor_id={}", anchor_id);
             Ok(())
         }
-        None => Err(AppError::recording(
-            crate::infrastructure::error::types::RC_STREAM_UNAVAILABLE,
-            format!("主播 {} 未在录制中", anchor_id),
-        )),
+        None => {
+            // pre_record_delay 延迟窗口内的启动尚未注册进 tasks——
+            // 从 pending_starts 取消（取消令牌触发后 lib.rs 的 select! 放弃启动）
+            if app_state.cancel_pending_start(&anchor_id) {
+                tracing::info!(
+                    "已取消延迟中的录制启动: anchor_id={}",
+                    anchor_id
+                );
+                Ok(())
+            } else {
+                Err(AppError::recording(
+                    crate::infrastructure::error::types::RC_STREAM_UNAVAILABLE,
+                    format!("主播 {} 未在录制中", anchor_id),
+                ))
+            }
+        }
     }
 }

@@ -1,3 +1,4 @@
+use crate::domain::config::model::GlobalConfig;
 use crate::infrastructure::error::types::AppError;
 use crate::infrastructure::logging::network::{self, NetworkLog};
 use serde::{Deserialize, Serialize};
@@ -214,31 +215,71 @@ impl Clone for MissevanClient {
 }
 
 impl MissevanClient {
+    /// 默认客户端（无代理，30s 超时）。生产路径统一走 `from_config`
+    ///（全局代理 + api_timeout_secs），本构造仅供测试构造 client。
+    #[cfg(test)]
     pub fn new() -> Result<Self, AppError> {
-        let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
-            .connect_timeout(std::time::Duration::from_secs(10))
-            .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-            .build()
-            .map_err(|e| AppError::internal(format!("创建 HTTP 客户端失败: {}", e)))?;
-
-        Ok(Self { client })
+        Self::build_client(None, 30)
     }
 
-    /// 带代理的客户端
-    ///
-    /// 预留公共 API：代理设置（GlobalConfig.proxy_*）尚未接线到检测/录制请求，
-    /// 设置页相应字段标注「暂未生效」；接线后由这里按 proxy_type/addr/port 构建。
-    #[allow(dead_code)]
-    pub fn with_proxy(proxy_url: &str) -> Result<Self, AppError> {
-        let proxy = reqwest::Proxy::all(proxy_url)
-            .map_err(|e| AppError::config(format!("代理配置无效: {}", e)))?;
+    /// 按全局配置构建客户端（§11.1 网络分类接线）：
+    /// - 全局代理（proxy_type: none | http | socks5 + proxy_addr/proxy_port，
+    ///   proxy_auth 时经 reqwest basic_auth 附带账号密码）——检测循环 / 录制
+    ///   monitor / 主播简介获取 / 头像请求共用 MissevanClient，统一生效；
+    /// - API 请求超时（api_timeout_secs，≥1 秒兜底）；
+    /// - 代理配置非法（地址空/端口 0/URL 构造失败）→ 降级直连并记 warn，
+    ///   不阻断应用启动。
+    pub fn from_config(config: &GlobalConfig) -> Result<Self, AppError> {
+        let proxy = Self::proxy_from_config(config);
+        Self::build_client(proxy, config.api_timeout_secs.max(1) as u64)
+    }
 
-        let client = reqwest::Client::builder()
-            .proxy(proxy)
-            .timeout(std::time::Duration::from_secs(30))
+    /// 从配置构造 reqwest 代理（纯逻辑，便于单测）：
+    /// proxy_type=none / 地址空 / 端口 0 → None；http → `http://host:port`；
+    /// socks5 → `socks5://host:port`（reqwest `socks` feature）；未知类型或
+    /// URL 非法 → 记 warn 返回 None（降级直连）。
+    fn proxy_from_config(config: &GlobalConfig) -> Option<reqwest::Proxy> {
+        if config.proxy_type == "none"
+            || config.proxy_addr.trim().is_empty()
+            || config.proxy_port == 0
+        {
+            return None;
+        }
+        let url = match config.proxy_type.as_str() {
+            "http" => format!("http://{}:{}", config.proxy_addr, config.proxy_port),
+            "socks5" => format!("socks5://{}:{}", config.proxy_addr, config.proxy_port),
+            other => {
+                tracing::warn!("未知代理类型（降级为直连）: {}", other);
+                return None;
+            }
+        };
+        let proxy = reqwest::Proxy::all(&url);
+        match proxy {
+            Ok(p) => Some(if config.proxy_auth {
+                p.basic_auth(&config.proxy_username, &config.proxy_password)
+            } else {
+                p
+            }),
+            Err(e) => {
+                tracing::warn!("代理配置无效（降级为直连）: {}", e);
+                None
+            }
+        }
+    }
+
+    /// 构建客户端：可选代理 + API 超时（秒）
+    fn build_client(
+        proxy: Option<reqwest::Proxy>,
+        timeout_secs: u64,
+    ) -> Result<Self, AppError> {
+        let mut builder = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(timeout_secs))
             .connect_timeout(std::time::Duration::from_secs(10))
-            .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+            .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
+        if let Some(proxy) = proxy {
+            builder = builder.proxy(proxy);
+        }
+        let client = builder
             .build()
             .map_err(|e| AppError::internal(format!("创建 HTTP 客户端失败: {}", e)))?;
 
@@ -629,5 +670,66 @@ mod tests {
         assert!(mk(CheckErrorKind::Format).is_transient());
         // Other（4XX 明确不可用）不算瞬时错误：可据此判离线
         assert!(!mk(CheckErrorKind::Other).is_transient());
+    }
+
+    // ── 全局代理接线（from_config / proxy_from_config）──
+
+    fn proxy_config(proxy_type: &str) -> GlobalConfig {
+        let mut c = GlobalConfig::default();
+        c.proxy_type = proxy_type.to_string();
+        c.proxy_addr = "127.0.0.1".to_string();
+        c.proxy_port = 8080;
+        c
+    }
+
+    #[test]
+    fn proxy_none_or_empty_config_yields_no_proxy() {
+        // 默认配置（proxy_type=none）→ 无代理
+        assert!(MissevanClient::proxy_from_config(&GlobalConfig::default()).is_none());
+        // 类型非 none 但地址空 / 端口 0 → 视为未配置
+        let mut c = proxy_config("http");
+        c.proxy_addr = "  ".to_string();
+        assert!(MissevanClient::proxy_from_config(&c).is_none());
+        let mut c = proxy_config("http");
+        c.proxy_port = 0;
+        assert!(MissevanClient::proxy_from_config(&c).is_none());
+    }
+
+    #[test]
+    fn proxy_http_and_socks5_build_successfully() {
+        assert!(MissevanClient::proxy_from_config(&proxy_config("http")).is_some());
+        assert!(MissevanClient::proxy_from_config(&proxy_config("socks5")).is_some());
+        // 认证开启时带账号密码（basic_auth）同样可构建
+        let mut c = proxy_config("http");
+        c.proxy_auth = true;
+        c.proxy_username = "user".to_string();
+        c.proxy_password = "pass".to_string();
+        assert!(MissevanClient::proxy_from_config(&c).is_some());
+    }
+
+    #[test]
+    fn proxy_unknown_type_falls_back_to_none() {
+        let c = proxy_config("ftp");
+        assert!(MissevanClient::proxy_from_config(&c).is_none());
+    }
+
+    #[test]
+    fn from_config_applies_proxy_and_api_timeout() {
+        // 带代理：客户端构建成功（连接不会发出，仅验证构造路径）
+        let c = proxy_config("http");
+        assert!(MissevanClient::from_config(&c).is_ok());
+
+        // 代理非法（地址非 IP/域名的畸形串会构造失败）→ 降级直连，不报错
+        let mut c = proxy_config("http");
+        c.proxy_addr = "http://bad url with spaces".to_string();
+        assert!(
+            MissevanClient::from_config(&c).is_ok(),
+            "代理配置非法应降级直连而非报错"
+        );
+
+        // api_timeout_secs=0 → 兜底 1s（不 panic、不创建 0 超时）
+        let mut c = GlobalConfig::default();
+        c.api_timeout_secs = 0;
+        assert!(MissevanClient::from_config(&c).is_ok());
     }
 }

@@ -42,11 +42,23 @@ pub async fn start_ffmpeg_recording(
     // 检测循环的门控检查（loop.rs:355-358）发生在 spawn 调度前，此处关闭
     // spawn → 实际执行 间隙的竞态窗口（双录根因候选③）；
     // 与 insert_process 的锁内检查（防御 #2）构成注册前/注册时两道防线。
+    // 同一锁区间内完成并发上限检查（max_concurrent_recordings，≥1 生效）
+    // 与录制序号分配（filename_template {index}）。
+    let recording_seq: u32;
     {
-        let state = app_state.lock().await;
+        let mut state = app_state.lock().await;
         if state.tasks.contains_key(&anchor.id) {
             return Err(already_recording_err(&anchor.id));
         }
+        // 并发录制上限：活跃任务数 ≥ 上限时拒绝（0 = 不限制）。
+        // 检查点设在任务注册前的最后一道门（与已录制检查同锁），
+        // 检测循环的触发点到实际 spawn 之间的并发启动在此收敛。
+        check_concurrency_limit(
+            state.active_count(),
+            config.max_concurrent_recordings,
+            &anchor.name,
+        )?;
+        recording_seq = state.next_recording_seq(&anchor.id);
     }
     if recorder.is_recording(&anchor.id) {
         return Err(already_recording_err(&anchor.id));
@@ -57,40 +69,37 @@ pub async fn start_ffmpeg_recording(
     let anchor_name = anchor.name.clone();
     let room_id = anchor.room_id.clone();
 
-    // 输出路径（H1：主播名/房间号来自外部 API/用户输入/导入配置，拼接路径前
-    // 必须消毒——剔除 Windows 非法字符、控制字符与路径穿越段）
-    let output_dir = &config.output_dir;
-    let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
+    // 输出路径（filename_template 渲染，H1：主播名/房间号来自外部 API/用户输入/
+    // 导入配置，渲染后逐路径组件消毒——剔除 Windows 非法字符、控制字符与路径穿越段；
+    // 模板含子目录时自动创建）
+    let output_dir = config.output_dir.trim_end_matches(['/', '\\']);
     let ext = &config.record_format;
-    let safe_name = sanitize_path_component(&anchor_name);
-    let safe_room = sanitize_path_component(&room_id);
-    let anchor_dir = format!("{}-{}", safe_name, safe_room);
-    let full_output_dir = format!("{}/{}", output_dir, anchor_dir);
-    std::fs::create_dir_all(&full_output_dir)?;
-    let output_path = format!("{}/{}_{}.{}", full_output_dir, safe_name, timestamp, ext);
+    let rendered = crate::domain::recorder::template::render_filename_template(
+        &config.filename_template,
+        &crate::domain::recorder::template::TemplateContext {
+            anchor_name: &anchor_name,
+            room_id: &room_id,
+            now: chrono::Local::now(),
+            index: recording_seq,
+            ext,
+        },
+    );
+    let output_path =
+        build_recording_output_path(output_dir, &rendered, ext, config.segment_seconds);
+    if let Some(parent) = std::path::Path::new(&output_path).parent() {
+        std::fs::create_dir_all(parent).map_err(|e| {
+            AppError::system(
+                "DIR_CREATE_FAIL",
+                format!("创建输出目录失败: {}", parent.display()),
+            )
+            .with_technical(format!("{}", e))
+        })?;
+    }
     tracing::info!("[录制] 文件路径: {}", output_path);
     // 如果需要打印绝对路径（解决相对路径问题）
     if let Ok(abs_path) = std::path::absolute(&output_path) {
         tracing::info!("[录制] 绝对路径: {}", abs_path.display());
     }
-
-    std::fs::create_dir_all(output_dir).map_err(|e| {
-        AppError::system(
-            "DIR_CREATE_FAIL",
-            format!("创建输出目录失败: {}", output_dir),
-        )
-        .with_technical(format!("{}", e))
-    })?;
-
-    let output_dir = &config.output_dir;
-    // 确保目录存在
-    std::fs::create_dir_all(output_dir).map_err(|e| {
-        AppError::system(
-            "DIR_CREATE_FAIL",
-            format!("创建输出目录失败: {}", output_dir),
-        )
-        .with_technical(format!("{}", e))
-    })?;
 
     // 构建 FFmpeg 命令（注意 mut）
     let mut ffmpeg_cmd =
@@ -172,6 +181,9 @@ pub async fn start_ffmpeg_recording(
     });
 
     // 注册任务
+    // 最终注册复检（下方）需要主播名拼错误信息——Task 会移走 anchor_name，
+    // 此处先克隆一份（其余克隆见上：anchor_id_for_insert / anchor_id_for_event）
+    let anchor_name_for_recheck = anchor_name.clone();
     let task = Task {
         anchor_id: anchor_id.clone(), // 或 anchor_id_for_insert.clone()
         cancel_token,
@@ -187,9 +199,36 @@ pub async fn start_ffmpeg_recording(
     // 在 insert_task 之前克隆一份用于事件
     let anchor_id_for_event = anchor_id_for_insert.clone();
 
-    let mut state = app_state.lock().await;
-    state.insert_task(anchor_id_for_insert, task);
-    drop(state);
+    // 最终注册前锁内复检（并发上限 TOCTOU 修复）：入口并发检查（函数开头）
+    // 发生在 ffmpeg spawn 之前——跨主播并发启动时，B 可能在 A 注册进任务表
+    // 之前通过上限检查，双双越过 max_concurrent_recordings。此处与 insert_task
+    // 同一锁区间内重新核对：
+    //   1. 同主播已注册（双录防御 #3 的注册时复检：spawn 窗口内检测循环重入 /
+    //      手动触发都可能重复启动）
+    //   2. 活跃任务数已达并发上限（拒绝）
+    // 拒绝路径复用双录防御的拒绝模式：终止已 spawn 的进程（recorder.stop 发 q
+    // 优雅退出）并 abort monitor 任务——录制从未真正开始，monitor 的清理流程
+    // （通知/历史摘要/录制后动作）不应执行。监控任务与任务表均未登记，无残留。
+    {
+        let mut state = app_state.lock().await;
+        if state.tasks.contains_key(&anchor_id_for_insert) {
+            drop(state);
+            task.handle.abort();
+            let _ = recorder.stop(&anchor_id).await;
+            return Err(already_recording_err(&anchor_id_for_insert));
+        }
+        if let Err(err) = check_concurrency_limit(
+            state.active_count(),
+            config.max_concurrent_recordings,
+            &anchor_name_for_recheck,
+        ) {
+            drop(state);
+            task.handle.abort();
+            let _ = recorder.stop(&anchor_id).await;
+            return Err(err);
+        }
+        state.insert_task(anchor_id_for_insert, task);
+    }
 
     let update = AnchorStatusUpdate {
         anchor_id: anchor_id_for_event, // 使用预先克隆的副本
@@ -340,6 +379,92 @@ fn already_recording_err(anchor_id: &str) -> AppError {
         crate::infrastructure::error::types::RC_ALREADY_RECORDING,
         format!("主播 {} 已在录制中", anchor_id),
     )
+}
+
+/// 输出路径去重（实装审查跟进，数据丢失风险兜底）：目标文件已存在（如同秒
+/// 碰撞——两个同名主播同时录制，或上次录制残留）时在扩展名前追加 `_2`、`_3`
+/// …（最多 100 次，之后放弃追加原样返回）。
+///
+/// best-effort：检查与 ffmpeg 实际创建之间仍有极小竞态窗口，但默认模板含
+/// `{index}`（每主播单调递增）已消除常规碰撞；此处主要兜底跨主播同秒同名
+/// 与用户自定模板不含序号的情况。
+fn deduplicate_output_path(path: &str) -> String {
+    if !std::path::Path::new(path).exists() {
+        return path.to_string();
+    }
+    // 最后一个 `.` 作为扩展名分隔（目录名含点不影响：rsplit_once 取最后一段）
+    let (stem, ext) = match path.rsplit_once('.') {
+        Some((s, e)) if !e.is_empty() => (s, e),
+        _ => (path, ""),
+    };
+    for n in 2..=100u32 {
+        let candidate = if ext.is_empty() {
+            format!("{}_{}", stem, n)
+        } else {
+            format!("{}_{}.{}", stem, n, ext)
+        };
+        if !std::path::Path::new(&candidate).exists() {
+            return candidate;
+        }
+    }
+    path.to_string()
+}
+
+/// 构造录制输出路径（纯函数，便于单测）：`{output_dir}/{模板渲染结果}`。
+///
+/// 模板渲染结果（render_filename_template）含**完整**相对路径——模板的子目录
+/// 部分与音频文件名部分都来自用户模板（如默认模板
+/// `{anchor_name}/{date}_{time}_{anchor_name}_{index}.{ext}` → 子目录
+/// `主播A/` + 文件名 `2026-08-07_12-30-45_主播A_001.m4a`）；本函数只做三段收尾：
+/// - 拼接输出目录；
+/// - 分段模式：去掉尾部 `.{ext}`，由 builder 追加 `_%03d.{ext}` 输出 pattern
+///   （builder 契约：分段模式 output_path 不带扩展名，避免 `xxx.m4a_000.m4a`）；
+/// - 非分段模式：模板文件名部分未写 `{ext}` 时补上真实格式扩展名——否则
+///   ffmpeg 无法从扩展名推断封装格式直接失败，且文件缓存/清理服务的扩展名
+///   白名单（m4a/aac/mp3/flac）扫不到该文件（与分段模式 builder 恒追加
+///   `_%03d.{ext}` 的行为对齐）；随后目标文件已存在（同秒碰撞——两个同名
+///   主播同时录制 / 上次残留）时自动追加序号，防 ffmpeg `-y` 覆盖已有录制。
+///   分段模式由 ffmpeg 自带 `%03d` 序号管理，不在此去重。
+fn build_recording_output_path(
+    output_dir: &str,
+    rendered: &str,
+    ext: &str,
+    segment_seconds: u64,
+) -> String {
+    let mut output_path = format!("{}/{}", output_dir, rendered);
+    let suffix = format!(".{}", ext);
+    if segment_seconds > 0 {
+        if let Some(stripped) = output_path.strip_suffix(&suffix) {
+            output_path = stripped.to_string();
+        }
+    } else {
+        if !output_path.ends_with(&suffix) {
+            output_path.push_str(&suffix);
+        }
+        output_path = deduplicate_output_path(&output_path);
+    }
+    output_path
+}
+
+/// 并发录制上限检查（纯函数，便于单测）：`max_concurrent > 0` 且活跃数
+/// 达到上限 → `Err(RC_CONCURRENCY_LIMIT)`（记录日志）；`0` = 不限制。
+fn check_concurrency_limit(
+    active_count: usize,
+    max_concurrent: u32,
+    anchor_name: &str,
+) -> Result<(), AppError> {
+    if max_concurrent > 0 && active_count >= max_concurrent as usize {
+        let err = AppError::recording(
+            crate::infrastructure::error::types::RC_CONCURRENCY_LIMIT,
+            format!(
+                "已达并发录制上限（{} 个），拒绝启动新录制: {}",
+                max_concurrent, anchor_name
+            ),
+        );
+        tracing::warn!("[录制] {}", err.message);
+        return Err(err);
+    }
+    Ok(())
 }
 
 #[async_trait::async_trait]
@@ -508,6 +633,162 @@ mod tests {
             sanitize_path_component("100000001")
         );
         assert_eq!(dir, "主播A-100000001");
+    }
+
+    // ── 并发录制上限（max_concurrent_recordings 接线）──
+
+    #[test]
+    fn concurrency_limit_rejects_when_at_or_over_cap() {
+        // 上限 2：活跃 2（等于上限）→ 拒绝；上限 0 = 不限制
+        let err = check_concurrency_limit(2, 2, "主播A").unwrap_err();
+        assert_eq!(
+            err.code, crate::infrastructure::error::types::RC_CONCURRENCY_LIMIT,
+            "达到上限必须拒绝: {}",
+            err
+        );
+        let err = check_concurrency_limit(5, 2, "主播A").unwrap_err();
+        assert_eq!(err.code, crate::infrastructure::error::types::RC_CONCURRENCY_LIMIT);
+        assert!(err.message.contains("2"), "错误信息应含上限值: {}", err.message);
+    }
+
+    #[test]
+    fn concurrency_limit_passes_below_cap_and_when_disabled() {
+        // 上限 2、活跃 1 → 放行
+        assert!(check_concurrency_limit(1, 2, "主播A").is_ok());
+        // 上限 0 = 不限制（默认配置）
+        assert!(check_concurrency_limit(10, 0, "主播A").is_ok());
+    }
+
+    // ── 输出路径去重（防 ffmpeg -y 覆盖已有文件）──
+
+    /// 唯一临时目录（并行测试隔离）
+    fn unique_dir(tag: &str) -> std::path::PathBuf {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static COUNTER: AtomicUsize = AtomicUsize::new(0);
+        std::env::temp_dir().join(format!(
+            "missevan-dedup-{}-{}-{}",
+            tag,
+            std::process::id(),
+            COUNTER.fetch_add(1, Ordering::SeqCst)
+        ))
+    }
+
+    #[test]
+    fn dedup_appends_suffix_when_target_exists() {
+        let dir = unique_dir("exists");
+        std::fs::create_dir_all(&dir).unwrap();
+        let base = dir.join("live.m4a");
+        std::fs::write(&base, b"x").unwrap();
+        let base_s = base.to_string_lossy().into_owned();
+        let expect_2 = dir.join("live_2.m4a").to_string_lossy().into_owned();
+        assert_eq!(deduplicate_output_path(&base_s), expect_2, "已存在 → 追加 _2");
+        // _2 也被占用 → _3
+        std::fs::write(&expect_2, b"x").unwrap();
+        let expect_3 = dir.join("live_3.m4a").to_string_lossy().into_owned();
+        assert_eq!(deduplicate_output_path(&base_s), expect_3);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn dedup_returns_path_unchanged_when_free() {
+        let dir = unique_dir("free");
+        std::fs::create_dir_all(&dir).unwrap();
+        let base = dir.join("never-exists.m4a");
+        assert_eq!(
+            deduplicate_output_path(&base.to_string_lossy()),
+            base.to_string_lossy().into_owned(),
+            "目标不存在 → 原样返回"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn dedup_handles_no_extension_and_dotted_dirs() {
+        let dir = unique_dir("noext");
+        std::fs::create_dir_all(&dir).unwrap();
+        // 无扩展名
+        let base = dir.join("clip");
+        std::fs::write(&base, b"x").unwrap();
+        assert_eq!(
+            deduplicate_output_path(&base.to_string_lossy()),
+            dir.join("clip_2").to_string_lossy().into_owned()
+        );
+        // 目录名含点：最后一个 . 是扩展名分隔符，_2 追加在文件名上
+        let nested = dir.join("with.dot").join("live.m4a");
+        std::fs::create_dir_all(nested.parent().unwrap()).unwrap();
+        std::fs::write(&nested, b"x").unwrap();
+        assert_eq!(
+            deduplicate_output_path(&nested.to_string_lossy()),
+            dir.join("with.dot")
+                .join("live_2.m4a")
+                .to_string_lossy()
+                .into_owned()
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── 输出路径构造（模板渲染结果 → 录制输出路径；音频文件名按模板渲染）──
+
+    #[test]
+    fn output_path_keeps_template_directory_and_filename() {
+        // 模板含子目录：目录与音频文件名都来自模板渲染结果，不收尾改动
+        let p = build_recording_output_path(
+            "D:/rec",
+            "主播A/2026-08-07_12-30-45_主播A_001.m4a",
+            "m4a",
+            0,
+        );
+        assert_eq!(p, "D:/rec/主播A/2026-08-07_12-30-45_主播A_001.m4a");
+    }
+
+    #[test]
+    fn output_path_no_subdir_template_stays_single_component() {
+        // 模板无子目录（渲染结果单组件）：输出路径不产生多余目录
+        let p = build_recording_output_path(
+            "D:/rec",
+            "2026-08-07_12-30-45_主播A_001.m4a",
+            "m4a",
+            0,
+        );
+        assert_eq!(p, "D:/rec/2026-08-07_12-30-45_主播A_001.m4a");
+        // 模板文件名部分未写 {ext} → 补上真实格式扩展名（否则 ffmpeg 无法
+        // 推断封装格式，且扩展名白名单扫不到）
+        let p2 = build_recording_output_path("D:/rec", "主播A/001", "m4a", 0);
+        assert_eq!(p2, "D:/rec/主播A/001.m4a");
+        let p3 = build_recording_output_path("D:/rec", "主播A/001", "mp3", 0);
+        assert_eq!(p3, "D:/rec/主播A/001.mp3");
+    }
+
+    #[test]
+    fn output_path_segment_strips_extension_for_builder_pattern() {
+        // 分段模式：去掉尾部 .{ext}（builder 追加 _%03d.{ext}，不产生
+        // `xxx.m4a_000.m4a`）
+        let p = build_recording_output_path(
+            "D:/rec",
+            "主播A/2026-08-07_12-30-45_主播A_001.m4a",
+            "m4a",
+            600,
+        );
+        assert_eq!(p, "D:/rec/主播A/2026-08-07_12-30-45_主播A_001");
+        // 模板未写 {ext} 的分段输出：没有可剥离的扩展名，原样保留——
+        // builder 追加 _%03d.{ext} 仍产出真实扩展名
+        let p2 = build_recording_output_path("D:/rec", "主播A/001", "m4a", 600);
+        assert_eq!(p2, "D:/rec/主播A/001");
+    }
+
+    #[test]
+    fn output_path_dedup_still_applied_in_non_segment() {
+        // deduplicate_output_path 保留：非分段且目标已存在 → 追加 _2
+        let dir = unique_dir("build-path");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("主播A.m4a"), b"x").unwrap();
+        let p = build_recording_output_path(&dir.to_string_lossy(), "主播A.m4a", "m4a", 0);
+        assert_eq!(
+            p,
+            format!("{}/主播A_2.m4a", dir.to_string_lossy()),
+            "目标已存在 → 追加 _2"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[tokio::test]

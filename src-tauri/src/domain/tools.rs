@@ -5,7 +5,52 @@
 //! **配置指定路径（若非空）→ `{exe_dir}/ffmpeg/<工具>.exe`（若存在）→ PATH**，
 //! 否则可能出现「配置里没写路径 → 找不到已下载的 FFmpeg」的漏匹配。
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+use crate::infrastructure::error::types::AppError;
+
+/// 用资源管理器打开/选中路径（文件或目录，Windows：`explorer /select,{path}`；
+/// explorer 是 GUI 程序，spawn 后立即返回）。供 `open_output_dir` 命令、
+/// 托盘「最近录制」菜单与录制后动作（post_record_action=open_folder）复用。
+#[cfg(windows)]
+pub fn open_in_explorer(path: &Path) -> Result<(), AppError> {
+    std::process::Command::new("explorer")
+        .arg(format!("/select,{}", path.display()))
+        .spawn()
+        .map_err(|e| {
+            AppError::system(
+                crate::infrastructure::error::types::INT_UNEXPECTED,
+                "打开资源管理器失败",
+            )
+            .with_technical(e.to_string())
+        })?;
+    Ok(())
+}
+
+/// 非 Windows 平台：暂不支持
+#[cfg(not(windows))]
+pub fn open_in_explorer(_path: &Path) -> Result<(), AppError> {
+    Err(AppError::internal("当前平台不支持打开资源管理器"))
+}
+
+/// Windows：为子进程设置 `CREATE_NO_WINDOW`（0x08000000），禁止新建控制台窗口。
+///
+/// 发布构建 `windows_subsystem = "windows"`（main.rs）父进程无控制台；此时 spawn
+/// 控制台子系统子进程（ffmpeg / ffprobe / cmd）且未设此标志，Windows 会为子进程
+/// **新建一个控制台窗口**（黑窗口闪现，子进程退出即消失）。录制引擎已内置同款
+/// 处理（recorder/builder.rs）；本辅助供工具探测（debug_cmds / wizard_cmds /
+/// checks）与录制后命令（monitor.rs）共用。tokio 命令调用方传入
+/// `cmd.as_std_mut()`（tokio 的 Command 包装 std Command，spawn 时生效）。
+///
+/// 取舍说明：`CREATE_NO_WINDOW` 只影响**控制台窗口**的创建——`cmd /C <用户命令>`
+/// 的控制台被隐藏，但用户命令里启动的 GUI 程序窗口仍正常显示（GUI 子系统进程
+/// 本就不创建控制台）。
+#[cfg(windows)]
+pub fn apply_create_no_window(cmd: &mut std::process::Command) {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+    cmd.creation_flags(CREATE_NO_WINDOW);
+}
 
 /// 可执行文件所在目录（与 lib.rs 中的 exe_dir 计算保持一致）
 pub fn exe_dir() -> PathBuf {
@@ -91,6 +136,18 @@ mod tests {
         assert_eq!(cands.len(), 2);
         assert_eq!(cands[0], exe_dir().join("ffmpeg").join("ffprobe.exe"));
         assert_eq!(cands[1], PathBuf::from("ffprobe"));
+    }
+
+    /// Windows：应用 CREATE_NO_WINDOW 后进程仍可正常 spawn 并执行
+    ///（控制台被隐藏不影响启动，仅丢弃控制台输出——`/C exit /b 0` 无输出）。
+    #[cfg(windows)]
+    #[test]
+    fn apply_create_no_window_keeps_spawn_working() {
+        let mut cmd = std::process::Command::new("cmd");
+        cmd.args(["/C", "exit /b 0"]);
+        apply_create_no_window(&mut cmd);
+        let status = cmd.status().expect("spawn 不应失败");
+        assert!(status.success());
     }
 
     #[test]

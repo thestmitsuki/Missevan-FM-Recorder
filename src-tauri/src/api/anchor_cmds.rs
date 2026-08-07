@@ -21,7 +21,8 @@ pub async fn get_anchors(
     avatar_cache: State<'_, AvatarCache>,
 ) -> Result<Vec<AnchorConfig>, AppError> {
     let mut config = config_manager.load()?;
-    let client = MissevanClient::new()?; // 保留 client，用于缓存缺失时请求
+    // 网络分类接线：全局代理 + api_timeout_secs 统一生效（头像/简介请求同 client）
+    let client = MissevanClient::from_config(&config.global)?;
 
     for anchor in &mut config.anchors {
         // 1. 检查缓存
@@ -114,6 +115,10 @@ pub async fn stop_anchors_recording(
         // 如果想等待任务结束，可以 task.handle.await，但这里避免阻塞，仅取消
         tracing::info!("已停止录制: {}", anchor_id);
         Ok(())
+    } else if guard.cancel_pending_start(&anchor_id) {
+        // pre_record_delay 窗口内的启动尚未注册进 tasks——从 pending_starts 取消
+        tracing::info!("已取消延迟中的录制启动: {}", anchor_id);
+        Ok(())
     } else {
         Err(AppError {
             code: "RECORDING_NOT_FOUND",
@@ -171,7 +176,9 @@ pub async fn add_anchor(
     }
 
     // 2. 调用 API 获取主播真实名称（自定义名称非空时保留，留空则自动获取）
-    let client = MissevanClient::new()?;
+    let config = config_manager.load()?;
+    // 网络分类接线：全局代理 + api_timeout_secs
+    let client = MissevanClient::from_config(&config.global)?;
     let profile = match client.get_anchor_profile(&anchor.room_id).await {
         Ok(p) => p,
         Err(e) => {
@@ -283,6 +290,10 @@ pub async fn remove_anchor(
         tracing::info!("已停止录制任务: {}", id);
         // 释放锁（因为 remove_task 可能已修改状态，我们继续持有锁）
     }
+    // 2b. pre_record_delay 窗口内的启动尚未注册进 tasks——同样取消
+    if app_state.cancel_pending_start(&id) {
+        tracing::info!("已取消延迟中的录制启动: {}", id);
+    }
     drop(app_state); // 尽早释放锁，避免后续阻塞
 
     // 3. 清理直播状态缓存
@@ -345,8 +356,8 @@ pub async fn refresh_anchor(
         anchor.room_id.clone()
     };
 
-    // 3. 调用猫耳 API 获取最新信息
-    let client = MissevanClient::new()?;
+    // 3. 调用猫耳 API 获取最新信息（网络分类接线：全局代理 + api_timeout_secs）
+    let client = MissevanClient::from_config(&config.global)?;
     let profile = client.get_anchor_profile(&room_id).await?;
 
     // 4. 更新主播配置（名称和头像 URL）
@@ -410,7 +421,9 @@ pub async fn update_anchor(
         .clone();
 
     // 3. 调用 API 获取最新主播名和头像（别名非空时保留，留空使用官方名称）
-    let client = MissevanClient::new()?;
+    let config = config_manager.load()?;
+    // 网络分类接线：全局代理 + api_timeout_secs
+    let client = MissevanClient::from_config(&config.global)?;
     let profile = match client.get_anchor_profile(&anchor.room_id).await {
         Ok(p) => p,
         Err(e) => {
@@ -482,9 +495,14 @@ pub async fn update_anchor(
 }
 
 /// 获取主播公开资料（名称/头像/简介），供设置面板「主播简介」显示
+/// （网络分类接线：全局代理 + api_timeout_secs 经配置构建 client）
 #[tauri::command]
-pub async fn get_anchor_profile(room_id: String) -> Result<AnchorProfile, AppError> {
-    let client = MissevanClient::new()?;
+pub async fn get_anchor_profile(
+    room_id: String,
+    config_manager: State<'_, Arc<ConfigManager>>,
+) -> Result<AnchorProfile, AppError> {
+    let config = config_manager.load()?;
+    let client = MissevanClient::from_config(&config.global)?;
     client.get_anchor_profile(&room_id).await
 }
 
@@ -523,7 +541,9 @@ async fn stop_recording_if_check_disabled(
             task.cancel_token.cancel();
             true
         }
-        None => false,
+        // pre_record_delay 窗口内的启动：同样取消（延迟结束复检也会放弃，
+        // 此处立即取消，避免主播已关检测还要空等剩余延迟）
+        None => guard.cancel_pending_start(anchor_id),
     }
 }
 

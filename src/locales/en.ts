@@ -240,7 +240,7 @@ export default {
       segmentSeconds: "Segment Interval (seconds)",
       templateTitle: "File Name Template",
       templateDesc: "Variables supported; a sample file name is previewed live",
-      templatePlaceholder: "{anchor_name}/{date}_{time}_{anchor_name}.{ext}",
+      templatePlaceholder: "{anchor_name}/{date}_{time}_{anchor_name}_{index}.{ext}",
       tplVars: "Variables",
       tplVarAnchorName: "Anchor name",
       tplVarRoomId: "Room ID",
@@ -262,7 +262,15 @@ export default {
       postCommand: "Run a custom command",
       postCommandLabel: "Custom command",
       postCommandPlaceholder: "e.g. ffmpeg -i {file} -c:a libmp3lame ...",
-      postCommandHint: "Variables supported (e.g. {file} is the recording path)",
+      postCommandHintTitle: "Available variables (auto-replaced with actual values)",
+      postCommandVarFile: "Full path of the recorded file (with extension)",
+      postCommandVarOutputDir: "Directory of the recorded file (includes template subdirectories)",
+      postCommandVarAnchor: "Anchor name",
+      postCommandVarRoom: "Room ID",
+      postCommandHintShell:
+        "The command runs via cmd /C (sh -c elsewhere) and is not waited on; values containing spaces are wrapped in double quotes automatically (no double quoting if you already quoted them)",
+      postCommandHintExample:
+        'Example: ffmpeg -i "{file}" -c:a libmp3lame "D:/out/{anchor_name}.mp3"',
     },
     // ── Files ──
     files: {
@@ -362,7 +370,7 @@ export default {
     // ── Advanced ──
     advanced: {
       logLevelTitle: "Log Level",
-      logLevelHint: "Switch to Debug for more information when troubleshooting",
+      logLevelHint: "Switch to Debug for more information when troubleshooting. Changes take effect on the next app start.",
       logLevel: {
         error: "Error",
         warn: "Warn",

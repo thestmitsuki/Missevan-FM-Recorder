@@ -24,7 +24,6 @@ import {
 } from "@/components/ui/select";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Switch } from "@/components/ui/switch";
-import NotEffectiveBadge from "@/components/common/NotEffectiveBadge.vue";
 
 const props = defineProps<{
     config: SettingsForm;
@@ -66,7 +65,11 @@ interface TemplateVar {
     sampleKey?: string;
 }
 
-const templateInput = ref<HTMLInputElement | null>(null);
+// ref 绑定 Input 组件实例（script setup 无 defineExpose）——按 { $el } 形态访问原生 input
+const templateInput = ref<{ $el?: HTMLInputElement } | null>(null);
+/** 模板输入框是否聚焦：无焦点时变量按钮回退为追加到行尾（未聚焦的 input
+ *  selectionStart 恒为 0，直接插入会把变量塞到最前面） */
+const templateFocused = ref(false);
 const templateVars: TemplateVar[] = [
     { token: "{anchor_name}", labelKey: "settings.recording.tplVarAnchorName", sample: "sample", sampleKey: "settings.recording.tplSampleAnchorName" },
     { token: "{room_id}", labelKey: "settings.recording.tplVarRoomId", sample: "123456" },
@@ -77,22 +80,25 @@ const templateVars: TemplateVar[] = [
 ];
 
 function insertVariable(token: string) {
-    const el = templateInput.value;
+    // ref 绑定的是 Input 组件实例（script setup 无 defineExpose）——用 $el 取
+    // 其单根元素（原生 <input>）才能访问 selectionStart/focus/setSelectionRange
+    const el = templateInput.value?.$el as HTMLInputElement | undefined;
     const current = props.config.filename_template;
-    if (el) {
-        const start = el.selectionStart ?? current.length;
-        const end = el.selectionEnd ?? current.length;
-        props.config.filename_template =
-            current.slice(0, start) + token + current.slice(end);
-        // 光标移到插入内容之后（下一 tick）
-        requestAnimationFrame(() => {
-            el.focus();
-            const pos = start + token.length;
-            el.setSelectionRange(pos, pos);
-        });
-    } else {
+    // 无输入框 / 输入框未聚焦（无真实光标）→ 回退追加到行尾
+    if (!el || !templateFocused.value) {
         props.config.filename_template = current + token;
+        return;
     }
+    const start = el.selectionStart ?? current.length;
+    const end = el.selectionEnd ?? current.length;
+    props.config.filename_template =
+        current.slice(0, start) + token + current.slice(end);
+    // 光标移到插入内容之后（下一帧，等 v-model 值渲染进 DOM 后再设选区）
+    requestAnimationFrame(() => {
+        el.focus();
+        const pos = start + token.length;
+        el.setSelectionRange(pos, pos);
+    });
 }
 
 /** 模板实时预览（规格：实时预览当前模板生成的示例文件名） */
@@ -214,13 +220,15 @@ const postActions = [
         <!-- ── 文件名模板 ── -->
         <div class="rounded-lg border p-4">
             <h3 class="mb-1 text-sm font-semibold">
-                {{ t("settings.recording.templateTitle") }}<NotEffectiveBadge />
+                {{ t("settings.recording.templateTitle") }}
             </h3>
             <p class="mb-3 text-xs text-muted-foreground">{{ t("settings.recording.templateDesc") }}</p>
             <div class="space-y-1.5">
                 <Input
                     ref="templateInput"
                     v-model="config.filename_template"
+                    @focus="templateFocused = true"
+                    @blur="templateFocused = false"
                     :class="errors.filename_template ? 'border-destructive focus-visible:ring-destructive/40' : ''"
                     :aria-invalid="!!errors.filename_template"
                     :placeholder="t('settings.recording.templatePlaceholder')"
@@ -258,7 +266,7 @@ const postActions = [
                 {{ t("settings.recording.concurrencyHint") }}
             </p>
             <div class="space-y-1.5">
-                <Label for="cfg-max-concurrent">{{ t("settings.recording.maxConcurrent") }}<NotEffectiveBadge /></Label>
+                <Label for="cfg-max-concurrent">{{ t("settings.recording.maxConcurrent") }}</Label>
                 <Input
                     id="cfg-max-concurrent"
                     v-model="maxConcurrentText"
@@ -278,7 +286,7 @@ const postActions = [
             <h3 class="mb-1 text-sm font-semibold">{{ t("settings.recording.preDelayTitle") }}</h3>
             <p class="mb-3 text-xs text-muted-foreground">{{ t("settings.recording.preDelayHint") }}</p>
             <div class="space-y-1.5">
-                <Label for="cfg-pre-delay">{{ t("settings.recording.preRecordDelay") }}<NotEffectiveBadge /></Label>
+                <Label for="cfg-pre-delay">{{ t("settings.recording.preRecordDelay") }}</Label>
                 <Input
                     id="cfg-pre-delay"
                     v-model="preRecordDelayText"
@@ -296,7 +304,7 @@ const postActions = [
         <!-- ── 录制后动作 ── -->
         <div class="rounded-lg border p-4">
             <h3 class="mb-3 text-sm font-semibold">
-                {{ t("settings.recording.postActionTitle") }}<NotEffectiveBadge />
+                {{ t("settings.recording.postActionTitle") }}
             </h3>
             <RadioGroup v-model="config.post_record_action" class="mb-4 flex flex-col gap-2">
                 <div v-for="a in postActions" :key="a.value" class="flex items-center gap-2">
@@ -317,7 +325,29 @@ const postActions = [
                     :aria-invalid="!!errors.post_record_command"
                     :placeholder="t('settings.recording.postCommandPlaceholder')"
                 />
-                <p class="text-xs text-muted-foreground">{{ t("settings.recording.postCommandHint") }}</p>
+                <div class="space-y-1 rounded-md bg-muted/60 px-3 py-2 text-xs text-muted-foreground">
+                    <p class="font-medium text-foreground">{{ t("settings.recording.postCommandHintTitle") }}</p>
+                    <ul class="space-y-0.5">
+                        <li>
+                            <code class="rounded bg-background/80 px-1 font-mono">{file}</code>
+                            <span class="ml-1">{{ t("settings.recording.postCommandVarFile") }}</span>
+                        </li>
+                        <li>
+                            <code class="rounded bg-background/80 px-1 font-mono">{output_dir}</code>
+                            <span class="ml-1">{{ t("settings.recording.postCommandVarOutputDir") }}</span>
+                        </li>
+                        <li>
+                            <code class="rounded bg-background/80 px-1 font-mono">{anchor_name}</code>
+                            <span class="ml-1">{{ t("settings.recording.postCommandVarAnchor") }}</span>
+                        </li>
+                        <li>
+                            <code class="rounded bg-background/80 px-1 font-mono">{room_id}</code>
+                            <span class="ml-1">{{ t("settings.recording.postCommandVarRoom") }}</span>
+                        </li>
+                    </ul>
+                    <p>{{ t("settings.recording.postCommandHintShell") }}</p>
+                    <p class="font-mono text-foreground">{{ t("settings.recording.postCommandHintExample") }}</p>
+                </div>
                 <p v-if="errors.post_record_command" class="text-xs text-destructive">
                     {{ errors.post_record_command }}
                 </p>

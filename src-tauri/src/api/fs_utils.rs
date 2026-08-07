@@ -1,6 +1,8 @@
 //! 文件系统辅助命令（§11.2 托盘/系统：`open_output_dir`）
 //!
 //! Windows 上用资源管理器打开（选中）输出目录；目录不存在时先创建。
+//! 打开实现（open_in_explorer）位于 `domain::tools`——录制后动作
+//! （post_record_action=open_folder）与托盘「最近录制」菜单复用同一实现。
 
 use std::sync::Arc;
 use tauri::State;
@@ -24,28 +26,5 @@ pub(crate) async fn open_output_dir(
             .with_technical(e.to_string())
         })?;
     }
-    open_in_explorer(dir)
-}
-
-/// Windows 实现：`explorer /select,{path}`（explorer 是 GUI 程序，spawn 后立即返回）
-/// pub(crate)：托盘「最近录制」菜单复用（Task 17）
-#[cfg(windows)]
-pub(crate) fn open_in_explorer(dir: &std::path::Path) -> Result<(), AppError> {
-    std::process::Command::new("explorer")
-        .arg(format!("/select,{}", dir.display()))
-        .spawn()
-        .map_err(|e| {
-            AppError::system(
-                crate::infrastructure::error::types::INT_UNEXPECTED,
-                "打开资源管理器失败",
-            )
-            .with_technical(e.to_string())
-        })?;
-    Ok(())
-}
-
-/// 非 Windows 平台：暂不支持
-#[cfg(not(windows))]
-pub(crate) fn open_in_explorer(_dir: &std::path::Path) -> Result<(), AppError> {
-    Err(AppError::internal("当前平台不支持打开资源管理器"))
+    crate::domain::tools::open_in_explorer(dir)
 }

@@ -16,14 +16,11 @@ use crate::infrastructure::state::app_state::AppState;
 use crate::infrastructure::state::mock_store::MockStore;
 use tauri::WebviewWindow;
 
-/// 每轮单主播最大请求次数（含首次；Server/Network 类错误指数退避重试，
-/// 规格「直播状态异常修复」：5XX/429 与本地网络错误均不判离线）
-const MAX_ATTEMPTS: u32 = 3;
-
-/// 重试退避（毫秒）：attempt 从 1 起指数增长（2s / 4s / 8s），上限 8s
-fn retry_delay_ms(attempt: u32) -> u64 {
+/// 重试退避（毫秒）：以 `retry_delay_secs` 为基线指数增长（1×/2×/4×），
+/// 上限 4× 基线。示例（基线 2s）：2s / 4s / 8s。
+fn retry_delay_ms(base_secs: u64, attempt: u32) -> u64 {
     let shift = attempt.saturating_sub(1).min(2);
-    (2000u64 << shift).min(8000)
+    base_secs.saturating_mul(1000).saturating_mul(1u64 << shift)
 }
 
 /// 429 冷却时长（毫秒）：指数退避 60s × 2^(n-1)（60s/120s/240s），上限 5 分钟
@@ -173,6 +170,11 @@ impl DetectionLoop {
             // 修改后下一轮立即生效，无需重启；max(1) 兜底避免 0 死锁）
             let semaphore =
                 Arc::new(Semaphore::new(config.global.detector_concurrency.max(1) as usize));
+            // 重试参数每轮从配置读取（§11.1 网络分类接线）：
+            // max_retries = 每轮单主播最大请求次数（含首次，沿用原 MAX_ATTEMPTS 语义；
+            // max(1) 兜底）；retry_delay_secs = 指数退避基线（1×/2×/4× 增长）
+            let max_attempts = config.global.max_retries.max(1);
+            let retry_base_secs = config.global.retry_delay_secs.max(1);
 
             // 等待下轮检测；finish_wizard 等场景可通过 wake 信号立即唤醒；
             // 退出信号（Task 17：shutdown_notify.notify_waiters()）到达则立即停止循环
@@ -209,6 +211,9 @@ impl DetectionLoop {
                 let mock_store = self.mock_store.clone();
                 let stats = self.stats.clone();
                 let rate_limits = self.rate_limits.clone();
+                // 重试参数（Copy：u32/u64，闭包内直接使用）
+                let max_attempts = max_attempts;
+                let retry_base_secs = retry_base_secs;
 
                 let handle = tokio::spawn(async move {
                     // 每次主播检测计数
@@ -260,7 +265,8 @@ impl DetectionLoop {
                         }
                     } else {
                         // —— 真实检测：错误分类处理（规格「直播状态异常修复」）——
-                        // Server(5XX)/Network 类：指数退避重试（最多 MAX_ATTEMPTS 次）；
+                        // Server(5XX)/Network 类：指数退避重试（最多 max_attempts 次，
+                        // 次数来自配置 max_retries，退避基线 retry_delay_secs）；
                         // 429：记录冷却（指数退避 60s×2^(n-1)，上限 5min），本轮放弃重试；
                         // Format：不重试（格式变化重试无意义）；Other：不重试（视为离线）。
                         let mut attempt = 1u32;
@@ -300,14 +306,14 @@ impl DetectionLoop {
                                         e.kind,
                                         CheckErrorKind::Server | CheckErrorKind::Network
                                     );
-                                    if retryable && attempt < MAX_ATTEMPTS {
-                                        let delay = retry_delay_ms(attempt);
+                                    if retryable && attempt < max_attempts {
+                                        let delay = retry_delay_ms(retry_base_secs, attempt);
                                         tracing::warn!(
                                             "[检测] 检测失败({:?})，{}s 后重试 {}/{}: {} (room_id={})",
                                             e.kind,
                                             delay / 1000,
                                             attempt,
-                                            MAX_ATTEMPTS - 1,
+                                            max_attempts - 1,
                                             anchor_clone.name,
                                             anchor_clone.room_id
                                         );
@@ -420,16 +426,30 @@ impl DetectionLoop {
 mod tests {
     use super::*;
 
-    // ── 重试退避（Server/Network 类错误）──
+    // ── 重试退避（Server/Network 类错误；基线来自配置 retry_delay_secs）──
 
     #[test]
     fn retry_delay_grows_exponentially_then_caps() {
-        assert_eq!(retry_delay_ms(1), 2000);
-        assert_eq!(retry_delay_ms(2), 4000);
-        assert_eq!(retry_delay_ms(3), 8000);
-        // 上限 8s，不再增长
-        assert_eq!(retry_delay_ms(4), 8000);
-        assert_eq!(retry_delay_ms(10), 8000);
+        // 基线 2s（原硬编码行为）：2s / 4s / 8s，上限 4× 基线不再增长
+        assert_eq!(retry_delay_ms(2, 1), 2000);
+        assert_eq!(retry_delay_ms(2, 2), 4000);
+        assert_eq!(retry_delay_ms(2, 3), 8000);
+        assert_eq!(retry_delay_ms(2, 4), 8000);
+        assert_eq!(retry_delay_ms(2, 10), 8000);
+    }
+
+    #[test]
+    fn retry_delay_uses_config_base() {
+        // 基线 5s（配置默认）：5s / 10s / 20s
+        assert_eq!(retry_delay_ms(5, 1), 5000);
+        assert_eq!(retry_delay_ms(5, 2), 10000);
+        assert_eq!(retry_delay_ms(5, 3), 20000);
+        assert_eq!(retry_delay_ms(5, 4), 20000);
+        // 基线 1s
+        assert_eq!(retry_delay_ms(1, 1), 1000);
+        assert_eq!(retry_delay_ms(1, 2), 2000);
+        // 极长基线不溢出（saturating_mul）
+        assert_eq!(retry_delay_ms(u64::MAX, 4), u64::MAX);
     }
 
     // ── 429 冷却（指数退避）──

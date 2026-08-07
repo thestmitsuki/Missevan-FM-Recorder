@@ -27,7 +27,6 @@ import {
     SelectTrigger,
     SelectValue,
 } from "@/components/ui/select";
-import NotEffectiveBadge from "@/components/common/NotEffectiveBadge.vue";
 import {
     Dialog,
     DialogContent,
@@ -106,7 +105,7 @@ async function copyExport() {
         <!-- ── 日志级别 ── -->
         <div class="rounded-lg border p-4">
             <h3 class="mb-1 text-sm font-semibold">
-                {{ t("settings.advanced.logLevelTitle") }}<NotEffectiveBadge />
+                {{ t("settings.advanced.logLevelTitle") }}
             </h3>
             <p class="mb-3 text-xs text-muted-foreground">{{ t("settings.advanced.logLevelHint") }}</p>
             <Select v-model="config.log_level">

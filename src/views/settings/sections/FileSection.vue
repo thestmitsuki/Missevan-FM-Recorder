@@ -22,7 +22,6 @@ import {
     SelectValue,
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
-import NotEffectiveBadge from "@/components/common/NotEffectiveBadge.vue";
 
 const props = defineProps<{
     config: SettingsForm;
@@ -66,7 +65,7 @@ function onCleanupPreset(value: unknown) {
         <div class="rounded-lg border p-4">
             <div class="mb-4 flex items-center justify-between gap-4">
                 <div>
-                    <Label for="cfg-cleanup-enable">{{ t("settings.files.cleanupEnable") }}<NotEffectiveBadge /></Label>
+                    <Label for="cfg-cleanup-enable">{{ t("settings.files.cleanupEnable") }}</Label>
                     <p class="mt-0.5 text-xs text-muted-foreground">
                         {{ t("settings.files.cleanupEnableHint") }}
                     </p>
@@ -111,7 +110,7 @@ function onCleanupPreset(value: unknown) {
                 </div>
 
                 <div class="space-y-1.5">
-                    <Label for="cfg-cleanup-time">{{ t("settings.files.cleanupTime") }}<NotEffectiveBadge /></Label>
+                    <Label for="cfg-cleanup-time">{{ t("settings.files.cleanupTime") }}</Label>
                     <div class="flex flex-wrap items-center gap-3">
                         <Select
                             :model-value="hasPreset(config.cleanup_time) ? config.cleanup_time : 'custom'"

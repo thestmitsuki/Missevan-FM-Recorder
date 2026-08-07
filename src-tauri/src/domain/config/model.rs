@@ -105,7 +105,9 @@ impl Default for GlobalConfig {
             check_updates: true,
             bitrate_kbps: 128,
             audio_only: true,
-            filename_template: String::from("{anchor_name}/{date}_{time}_{anchor_name}.{ext}"),
+            filename_template: String::from(
+                "{anchor_name}/{date}_{time}_{anchor_name}_{index}.{ext}",
+            ),
             max_concurrent_recordings: 3,
             pre_record_delay_secs: 0,
             post_record_action: String::from("none"),
@@ -237,6 +239,22 @@ segment_seconds = 0
     }
 
     #[test]
+    fn old_stored_filename_template_is_preserved_on_load() {
+        // 实装审查跟进：默认模板改为含 {index} 只影响**新默认值**；已存用户
+        // 配置里的旧模板由 serde 原样保留（default 仅在字段缺失时生效），
+        // 用户自定模板不被悄悄改写。
+        let old = r#"
+filename_template = "{anchor_name}/{date}_{time}_{anchor_name}.{ext}"
+"#;
+        let cfg: GlobalConfig = toml::from_str(old).unwrap();
+        assert_eq!(
+            cfg.filename_template,
+            "{anchor_name}/{date}_{time}_{anchor_name}.{ext}",
+            "旧模板必须原样保留"
+        );
+    }
+
+    #[test]
     fn default_matches_design_doc_11_1() {
         let cfg = GlobalConfig::default();
         // 通用
@@ -249,7 +267,13 @@ segment_seconds = 0
         assert!(cfg.audio_only);
         assert_eq!(
             cfg.filename_template,
-            "{anchor_name}/{date}_{time}_{anchor_name}.{ext}"
+            "{anchor_name}/{date}_{time}_{anchor_name}_{index}.{ext}"
+        );
+        // 默认模板含 {index}（实装审查跟进：防同名主播同秒文件互相覆盖）
+        assert!(
+            cfg.filename_template.contains("{index}"),
+            "默认模板必须含 {{index}}: {}",
+            cfg.filename_template
         );
         assert_eq!(cfg.max_concurrent_recordings, 3);
         assert_eq!(cfg.pre_record_delay_secs, 0);

@@ -18,7 +18,8 @@ pub struct LogGuard {
 
 /// 初始化结构化日志系统。
 ///
-/// - 控制台输出：`RUST_LOG` 环境变量控制级别，默认 `info`
+/// - 控制台输出：`RUST_LOG` 环境变量优先，其次 `level` 参数（来自
+///   GlobalConfig.log_level，仅接受 error/warn/info/debug/trace，非法回退 info）
 /// - 文件输出：`{app_data_dir}/logs/missevan-recorder.log`，按日轮转（需外部清理旧日志）
 /// - 内存环形缓冲（Task 15）：捕获全部日志事件写入 `LogBuffer`（容量 1000）
 ///   并 emit `debug:log`（节流 100 条/秒）；app_handle 由 setup() 注入后事件生效
@@ -27,10 +28,15 @@ pub struct LogGuard {
 /// `sanitize_message` 过滤（Cookie / Authorization / Password 值 → `***`），
 /// 与调试缓冲层（Task 15）同规则——所有日志出口共用同一脱敏函数。
 ///
+/// `level` 采用「重启生效」语义：设置页修改 log_level 后，下次启动时
+/// lib.rs run() 读取配置并传入（运行中不做 reload——tracing_subscriber 三层
+/// 共享 filter 的 reload handle 改造成本高、收益低，见 wire-fields 报告 §log_level）。
+///
 /// # Panics
 /// 如果日志系统初始化失败（例如无法创建日志目录），会 panic。
 pub fn init_logging(
     app_data_dir: &std::path::Path,
+    level: &str,
 ) -> (LogGuard, Arc<LogBuffer>, Arc<Mutex<Option<AppHandle>>>) {
     let log_dir = app_data_dir.join("logs");
     std::fs::create_dir_all(&log_dir).expect("Failed to create log directory");
@@ -39,7 +45,14 @@ pub fn init_logging(
     let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
 
     // 构建多层订阅者：控制台（脱敏文本）+ 文件（脱敏 JSON）+ 调试缓冲（内存环形缓冲 + 事件）
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    // 级别来源：RUST_LOG（开发/诊断）> 配置 log_level（白名单校验）> info
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+        EnvFilter::new(if matches!(level, "error" | "warn" | "info" | "debug" | "trace") {
+            level
+        } else {
+            "info"
+        })
+    });
 
     // Stdout 无直接 MakeWriter 实现：用零捕获闭包（FnMut() -> Stdout）包装
     let console_layer = SanitizedFmtLayer::new(|| std::io::stdout(), false)

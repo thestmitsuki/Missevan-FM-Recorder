@@ -11,6 +11,9 @@ pub struct FfmpegCommandBuilder {
     audio_only: bool,
     /// 音频编码码率 kbps（0 = 不传，由 ffmpeg 默认；Task 20 收尾接线 bitrate_kbps）
     bitrate_kbps: u32,
+    /// 流媒体读超时秒数（0 = 不传 `-rw_timeout`；>0 → 传微秒值，
+    /// 适用 HTTP/flv/m3u8 拉流——网络中断超过该时长时 ffmpeg 报错退出）
+    stream_timeout_secs: u32,
 }
 
 impl FfmpegCommandBuilder {
@@ -23,6 +26,7 @@ impl FfmpegCommandBuilder {
             segment_seconds: 0,
             audio_only: true,
             bitrate_kbps: 0,
+            stream_timeout_secs: 0,
         }
     }
 
@@ -61,6 +65,11 @@ impl FfmpegCommandBuilder {
         self
     }
 
+    pub fn stream_timeout_secs(mut self, secs: u32) -> Self {
+        self.stream_timeout_secs = secs;
+        self
+    }
+
     /// 构建 tokio::process::Command
     pub fn build(&self) -> tokio::process::Command {
         let mut cmd = tokio::process::Command::new(&self.ffmpeg_path);
@@ -69,6 +78,15 @@ impl FfmpegCommandBuilder {
             .stderr(std::process::Stdio::piped());
 
         cmd.arg("-y"); // 覆盖已有文件
+
+        // 流媒体读超时（stream_timeout_secs → `-rw_timeout` 微秒）：HTTP/flv/m3u8
+        // 拉流下网络中断超过该时长，ffmpeg 报错退出（monitor 统一收尾），
+        // 避免进程悬挂。0 = 不传（保持 ffmpeg 默认阻塞行为）。
+        if self.stream_timeout_secs > 0 {
+            cmd.arg("-rw_timeout")
+                .arg((self.stream_timeout_secs as u64 * 1_000_000).to_string());
+        }
+
         cmd.arg("-i").arg(&self.input_url);
 
         // audio_only=false 时不传 -vn（保留视频流；默认 true 与原行为一致）
@@ -134,6 +152,8 @@ impl FfmpegCommandBuilder {
             // Task 20 收尾接线：audio_only → -vn 参数；bitrate_kbps → 音频编码码率
             .audio_only(config.audio_only)
             .bitrate_kbps(config.bitrate_kbps)
+            // 网络分类：stream_timeout_secs → -rw_timeout（微秒；0 = 不传）
+            .stream_timeout_secs(config.stream_timeout_secs)
     }
 }
 
@@ -268,6 +288,49 @@ mod tests {
             .collect();
         assert!(args3.contains(&"out.m4a".to_string()));
         assert!(!args3.iter().any(|a| a.contains("%03d")));
+    }
+
+    #[test]
+    fn build_applies_stream_timeout_as_rw_timeout_microseconds() {
+        let args: Vec<String> = FfmpegCommandBuilder::new()
+            .input_url("http://x/live.flv")
+            .output_path("out.m4a")
+            .format("m4a")
+            .stream_timeout_secs(30)
+            .build()
+            .as_std()
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert!(args.contains(&"-rw_timeout".to_string()));
+        assert!(
+            args.contains(&"30000000".to_string()),
+            "30s 应换算为 30_000_000 微秒: {:?}",
+            args
+        );
+    }
+
+    #[test]
+    fn build_omits_rw_timeout_when_zero() {
+        // 默认 0 → 不传 -rw_timeout（保持 ffmpeg 默认行为）
+        let args: Vec<String> = FfmpegCommandBuilder::new()
+            .input_url("http://x/live.flv")
+            .output_path("out.m4a")
+            .format("m4a")
+            .build()
+            .as_std()
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert!(!args.contains(&"-rw_timeout".to_string()));
+    }
+
+    #[test]
+    fn from_config_wires_stream_timeout() {
+        let mut config = GlobalConfig::default();
+        config.stream_timeout_secs = 15;
+        let builder = FfmpegCommandBuilder::from_config(&config, "http://x", "out.m4a");
+        assert_eq!(builder.stream_timeout_secs, 15);
     }
 
     #[test]

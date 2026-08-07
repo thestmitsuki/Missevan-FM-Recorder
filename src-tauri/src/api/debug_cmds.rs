@@ -57,11 +57,14 @@ async fn probe_tool(candidates: Vec<std::path::PathBuf>) -> ToolStatus {
         if !is_bare && !cand.exists() {
             continue;
         }
-        let result = tokio::time::timeout(
-            TOOL_PROBE_TIMEOUT,
-            tokio::process::Command::new(&cand).arg("-version").output(),
-        )
-        .await;
+        // 隐藏控制台：发布构建无控制台，探测 spawn 的 ffmpeg/ffprobe（控制台
+        // 子系统）缺 CREATE_NO_WINDOW 会闪现黑窗口——调试页每 60s 探测一次，
+        // 是「黑窗口闪现」的最频繁来源（tools.rs::apply_create_no_window）
+        let mut probe = tokio::process::Command::new(&cand);
+        probe.arg("-version");
+        #[cfg(windows)]
+        crate::domain::tools::apply_create_no_window(probe.as_std_mut());
+        let result = tokio::time::timeout(TOOL_PROBE_TIMEOUT, probe.output()).await;
         match result {
             Ok(Ok(out)) if out.status.success() => {
                 let version = String::from_utf8_lossy(&out.stdout)

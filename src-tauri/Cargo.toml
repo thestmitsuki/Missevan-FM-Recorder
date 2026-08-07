@@ -47,7 +47,8 @@ winreg = "0.55"
 # base64 0.22（rust-version 1.60 ≤ MSRV 1.89.0；已在锁文件——Task 18 敏感字段混淆）
 base64 = "0.22"
 url = "2"
-reqwest = { version = "0.12", features = ["json", "stream"] }
+# socks feature：全局代理 socks5 支持（spider::proxy_from_config 用 Proxy::all("socks5://…")）
+reqwest = { version = "0.12", features = ["json", "stream", "socks"] }
 # zip 4.3+ 需要 rustc >= 1.82（≤ MSRV 1.89.0，MSRV 可接受）；仍精确锁定 4.2.0
 #（rust-version 1.75）——锁文件稳定，避免重解析引入新版本
 zip = { version = "=4.2.0", default-features = false, features = ["deflate"] }

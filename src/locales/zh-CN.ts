@@ -235,7 +235,7 @@ export default {
       segmentSeconds: "分段间隔（秒）",
       templateTitle: "文件名模板",
       templateDesc: "支持变量，实时预览生成的示例文件名",
-      templatePlaceholder: "{anchor_name}/{date}_{time}_{anchor_name}.{ext}",
+      templatePlaceholder: "{anchor_name}/{date}_{time}_{anchor_name}_{index}.{ext}",
       tplVars: "变量",
       tplVarAnchorName: "主播名",
       tplVarRoomId: "房间号",
@@ -258,7 +258,15 @@ export default {
       postCommand: "执行自定义命令",
       postCommandLabel: "自定义命令",
       postCommandPlaceholder: "如 ffmpeg -i {file} -c:a libmp3lame ...",
-      postCommandHint: "支持变量（如 {file} 为录制文件路径）",
+      postCommandHintTitle: "可用变量（自动替换为实际值）",
+      postCommandVarFile: "录制文件完整路径（含扩展名）",
+      postCommandVarOutputDir: "录制文件所在目录（含模板子目录）",
+      postCommandVarAnchor: "主播名",
+      postCommandVarRoom: "房间号",
+      postCommandHintShell:
+        "命令通过 cmd /C 执行（其他平台 sh -c），不等待完成；变量值含空格时自动加双引号，已自带引号则不会重复包裹",
+      postCommandHintExample:
+        '示例：ffmpeg -i "{file}" -c:a libmp3lame "D:/out/{anchor_name}.mp3"',
     },
     // ── 文件管理 ──
     files: {
@@ -358,7 +366,7 @@ export default {
     // ── 高级 ──
     advanced: {
       logLevelTitle: "日志级别",
-      logLevelHint: "调试时可改为 Debug 以获取更多信息",
+      logLevelHint: "调试时可改为 Debug 以获取更多信息；更改将在下次启动时生效",
       logLevel: {
         error: "Error",
         warn: "Warn",

@@ -206,8 +206,18 @@ impl TrayManager {
             })
             .build(app)
             .map_err(|e| format!("创建托盘失败: {}", e))?;
-        tray.set_visible(visible)
-            .map_err(|e| format!("设置托盘图标可见性失败: {}", e))?;
+        // 启动双重 NIM_ADD 修复（tray-icon 0.24.1 vendored 源码核验）：
+        // `TrayIcon::new` 即 register_tray_icon（NIM_ADD，userdata.visible 初始
+        // true）；随后 `set_visible(true)` 经 WM_USER_SHOW_TRAYICON **无条件再次
+        // NIM_ADD**（无 visible 状态守卫）——启动时双重注册是「偶尔出现多个
+        // 图标」的候选根因之一（另一候选 = 崩溃残留幽灵图标，见 clean_exit
+        // 标记）。修复：visible=true 时跳过 set_visible（build 时已可见）；
+        // 仅 visible=false 才 set_visible(false)（NIM_DELETE 隐藏，运行中可经
+        // set_enabled 随时显示，无需重建托盘）
+        if !visible {
+            tray.set_visible(false)
+                .map_err(|e| format!("设置托盘图标可见性失败: {}", e))?;
+        }
 
         Ok(Arc::new(Self {
             app: app.clone(),
@@ -289,6 +299,61 @@ pub fn reconcile_tray(app: &AppHandle, show_tray: bool) {
     }
 }
 
+/// ── 上次退出干净度标记（托盘幽灵图标缓解，Windows）──
+///
+/// Windows shell 对**死进程**的通知区图标不主动清理（悬停通知区或 explorer
+/// 重启才移除）——应用被强杀/崩溃后，旧图标残留并与新实例图标并存，表现为
+/// 「偶尔出现多个图标」（悬停后旧图标消失，是幽灵图标特征）。代码层无法
+/// 删除死进程的图标，只能缓解：
+/// - 启动时检查 `{exe_dir}/.clean_exit`：存在 = 上次启动后未走统一优雅退出
+///   （崩溃/强杀），提示用户「悬停通知区可清除残留图标」；
+/// - 正常退出（[`request_shutdown`] → [`do_shutdown`]，全应用唯一退出路径：
+///   托盘「退出」/ 主窗关闭 / 向导「退出」）时删除该标记。
+///
+/// 标记写入/删除均为尽力而为（失败仅记 warning）：安装目录只读（如 Program
+/// Files 但非管理员）时检测功能优雅降级为不可用，不影响其余功能。
+/// 标记文件放 `{exe_dir}` 与 config 目录同侧（ConfigManager 已在该目录写配置，
+/// 不存在额外的权限假设）。
+const CLEAN_EXIT_MARKER: &str = ".clean_exit";
+
+/// 上次退出是否干净：true = 上次启动后未移除标记（崩溃/强杀）。
+///
+/// 注意：本函数**不删除**标记——标记在本次运行期持续存在，直到正常退出时
+/// 移除；因此本次运行若再异常退出，下次启动仍能检测到。调用方（lib.rs setup）
+/// 随后应 [`write_clean_exit_marker`] 确保标记在位。
+pub fn clean_exit_marker_exists() -> bool {
+    let path = crate::domain::tools::exe_dir().join(CLEAN_EXIT_MARKER);
+    if path.exists() {
+        tracing::warn!(
+            "检测到上次异常退出（标记文件 {} 存在）：若托盘中残留旧图标，可鼠标悬停通知区清除",
+            path.display()
+        );
+        true
+    } else {
+        false
+    }
+}
+
+/// 启动时写入「本次运行尚未正常结束」标记（与 [`clean_exit_marker_exists`] 配套；
+/// 幂等）。尽力而为，失败仅记日志。
+pub fn write_clean_exit_marker() {
+    let path = crate::domain::tools::exe_dir().join(CLEAN_EXIT_MARKER);
+    if let Err(e) = std::fs::write(&path, b"") {
+        tracing::warn!("写入退出标记失败（异常退出检测将不可用）: {}", e);
+    }
+}
+
+/// 正常退出时移除「未结束」标记（[`do_shutdown`] 在 `app.exit(0)` 前调用）。
+/// 尽力而为：文件不存在 / 删除失败均只记日志，绝不阻塞退出。
+pub fn remove_clean_exit_marker() {
+    let path = crate::domain::tools::exe_dir().join(CLEAN_EXIT_MARKER);
+    if let Err(e) = std::fs::remove_file(&path) {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            tracing::warn!("移除退出标记失败: {}", e);
+        }
+    }
+}
+
 /// 优雅退出入口（托盘「退出」、主窗关闭 close_behavior≠tray、向导「退出」共用）。
 ///
 /// 流程：保存配置 → `shutdown_notify.notify_waiters()`（检测循环收到后立即停止，
@@ -338,6 +403,12 @@ async fn do_shutdown(app: &AppHandle) {
     }
 
     tracing::info!("优雅退出完成");
+    // 上次退出干净度标记：统一退出路径在此移除（崩溃/强杀时标记残留，下次
+    // 启动据此提示用户清理托盘幽灵图标——见 clean_exit_marker_exists 注释）。
+    // 应用退出后 TrayManager 由托管状态 drop → TrayIcon drop → NIM_DELETE，
+    // 无需显式 drop（tray-icon Drop 实现 remove_tray_icon，vendored 源码核验）
+    #[cfg(windows)]
+    remove_clean_exit_marker();
     app.exit(0);
 }
 
@@ -443,7 +514,7 @@ fn open_recent_file(data: &std::sync::Mutex<TrayMenuData>, index: usize) {
         .get(index)
         .map(|f| f.path.clone());
     if let Some(path) = path {
-        if let Err(e) = crate::api::fs_utils::open_in_explorer(Path::new(&path)) {
+        if let Err(e) = crate::domain::tools::open_in_explorer(Path::new(&path)) {
             tracing::warn!("打开最近录制所在文件夹失败（{}）: {}", path, e.message);
         }
     }
@@ -556,6 +627,19 @@ mod tests {
         assert_eq!(decide_close_action("tray", false, Some(true)), Exit);
         assert_eq!(decide_close_action("exit", true, Some(true)), Exit);
         assert_eq!(decide_close_action("exit", false, Some(true)), Exit);
+    }
+
+    #[test]
+    fn clean_exit_marker_roundtrip() {
+        // 写入 → 存在；移除 → 不存在；重复移除幂等。
+        // 路径 = exe_dir（测试二进制所在目录 target/debug/deps），测试结束已清理
+        remove_clean_exit_marker();
+        assert!(!clean_exit_marker_exists(), "干净状态不应报异常退出");
+        write_clean_exit_marker();
+        assert!(clean_exit_marker_exists(), "标记写入后应检测到上次未正常退出");
+        remove_clean_exit_marker();
+        assert!(!clean_exit_marker_exists(), "移除后应恢复干净状态");
+        remove_clean_exit_marker(); // 重复移除（NotFound）不 panic
     }
 
     #[test]

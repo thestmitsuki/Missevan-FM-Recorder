@@ -1,15 +1,12 @@
-use std::collections::HashSet;
 use std::sync::Arc;
-use std::time::SystemTime;
 use tauri::{Manager, State};
 
 use crate::domain::config::autostart::{apply_autostart, AutostartStore};
 use crate::domain::config::manager::{ConfigManager, ImportSummary};
 use crate::domain::config::model::GlobalConfig;
-use crate::domain::services::cleanup::{
-    plan_cleanup, scan_recording_files, CleanupCandidate, CleanupSummary,
-};
-use crate::domain::services::file_cache::{FileCacheHandle, FileCacheManager};
+use crate::domain::services::cleanup::{run_cleanup, CleanupSummary};
+use crate::domain::services::cleanup_scheduler::CleanupScheduler;
+use crate::domain::services::file_cache::FileCacheHandle;
 use crate::infrastructure::error::types::AppError;
 use crate::infrastructure::notification::dispatcher::NotificationDispatcher;
 use crate::infrastructure::state::app_state::RecorderState;
@@ -97,6 +94,10 @@ pub async fn save_config(
     if let Err(e) = allow_output_dir(&app, config_manager.inner()) {
         tracing::warn!("保存配置后放行输出目录失败: {}", e);
     }
+
+    // 自动清理定时调度重建（auto_cleanup_enabled / cleanup_time / retention_days /
+    // max_total_gb 变化即时生效：取消旧任务，按新配置重新 spawn 每日任务）
+    app.state::<CleanupScheduler>().reschedule(app.clone());
     Ok(())
 }
 
@@ -224,6 +225,7 @@ pub(crate) async fn set_shortcut(
 /// 按 `retention_days`（0 = 不按天数）删 N 天前的旧文件；若总量超
 /// `max_total_gb`（0 = 不限制）按最旧优先删除直到达标或清空。
 /// 清理完成后刷新文件缓存（emit `recording_files_changed`）。
+/// 实现与定时调度共用 `domain::services::cleanup::run_cleanup`。
 #[tauri::command]
 pub(crate) async fn run_cleanup_now(
     window: tauri::WebviewWindow,
@@ -231,61 +233,11 @@ pub(crate) async fn run_cleanup_now(
     config_manager: State<'_, Arc<ConfigManager>>,
     recorder_state: State<'_, RecorderState>,
 ) -> Result<CleanupSummary, AppError> {
-    let config = config_manager.load()?;
-    let output_dir = std::path::Path::new(&config.global.output_dir);
-    // 录制中的文件跳过清理（FFmpeg 正在写入，删除会损坏录制）
-    let active_paths = recorder_state.state.lock().await.active_output_paths();
-    let candidates: Vec<CleanupCandidate> = scan_recording_files(output_dir)?
-        .into_iter()
-        .filter(|c| {
-            !active_paths.contains(&crate::domain::services::file_cache::path_key(
-                &c.path.to_string_lossy(),
-            ))
-        })
-        .collect();
-    let planned = plan_cleanup(
-        &candidates,
-        config.global.retention_days,
-        config.global.max_total_gb as u64,
-        SystemTime::now(),
-    );
-    let to_delete: HashSet<&std::path::PathBuf> = planned.iter().collect();
-
-    let mut files_deleted = 0usize;
-    let mut bytes_freed = 0u64;
-    for path in &to_delete {
-        if let Ok(meta) = std::fs::metadata(path) {
-            bytes_freed += meta.len();
-        }
-        match std::fs::remove_file(path) {
-            Ok(_) => files_deleted += 1,
-            Err(e) => tracing::warn!("清理失败 {:?}: {}", path, e),
-        }
-    }
-    let mut files_remaining = 0usize;
-    let mut bytes_remaining = 0u64;
-    for c in &candidates {
-        if !to_delete.contains(&c.path) {
-            files_remaining += 1;
-            bytes_remaining += c.size;
-        }
-    }
-    tracing::info!(
-        "录制文件清理完成: 删除 {} 个文件 / 释放 {} 字节",
-        files_deleted,
-        bytes_freed
-    );
-
-    // 刷新文件缓存（内部 emit recording_files_changed）
-    let manager = FileCacheManager::new(window, cache.inner().clone());
-    manager
-        .refresh(&config_manager, &recorder_state.state)
-        .await?;
-
-    Ok(CleanupSummary {
-        files_deleted,
-        bytes_freed,
-        files_remaining,
-        bytes_remaining,
-    })
+    run_cleanup(
+        window,
+        cache.inner().clone(),
+        config_manager.inner().clone(),
+        recorder_state.state.clone(),
+    )
+    .await
 }

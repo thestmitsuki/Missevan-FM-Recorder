@@ -21,6 +21,7 @@ use crate::domain::config::autostart::AutostartStore;
 use crate::domain::config::autostart::WinregAutostart;
 #[cfg(not(windows))]
 use crate::domain::config::autostart::NoopAutostart;
+use crate::domain::services::cleanup_scheduler::CleanupScheduler;
 use crate::domain::services::file_cache::{FileCache, FileCacheHandle, FileCacheManager};
 use domain::config::manager::ConfigManager;
 use domain::config::model::{AnchorConfig, Config};
@@ -62,9 +63,55 @@ fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> String {
     }
 }
 
+/// 主播「启用检测与自动录制」当前值（从最新加载的配置判断）。
+/// 录制启动前与延迟结束复检共用——延迟窗口内用户可能关闭检测，两处都必须
+/// 读最新配置而非启动时的快照。
+fn anchor_check_enabled(config: &Config, anchor_id: &str) -> bool {
+    config
+        .anchors
+        .iter()
+        .any(|a| a.id == anchor_id && a.enable_check)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::config::model::GlobalConfig;
+
+    #[test]
+    fn anchor_check_enabled_reflects_latest_config() {
+        let config = Config {
+            global: GlobalConfig::default(),
+            anchors: vec![
+                AnchorConfig {
+                    id: "a1".into(),
+                    name: "主播A".into(),
+                    url: "https://fm.missevan.com/live/1".into(),
+                    room_id: "1".into(),
+                    proxy: None,
+                    cookie: None,
+                    enable_check: true,
+                    avatar_url: None,
+                    tags: Vec::new(),
+                },
+                AnchorConfig {
+                    id: "a2".into(),
+                    name: "主播B".into(),
+                    url: "https://fm.missevan.com/live/2".into(),
+                    room_id: "2".into(),
+                    proxy: None,
+                    cookie: None,
+                    enable_check: false,
+                    avatar_url: None,
+                    tags: Vec::new(),
+                },
+            ],
+        };
+        assert!(anchor_check_enabled(&config, "a1"), "开启检测 → true");
+        assert!(!anchor_check_enabled(&config, "a2"), "关闭检测 → false");
+        // 主播已删除 / 不存在 → false（延迟结束复检据此放弃启动）
+        assert!(!anchor_check_enabled(&config, "gone"));
+    }
 
     #[test]
     fn panic_payload_message_extracts_str_and_string() {
@@ -84,7 +131,19 @@ pub fn run() {
     let app_data_dir = dirs::data_dir()
         .map(|p| p.join("missevan-recorder"))
         .unwrap_or_else(|| std::path::PathBuf::from("./data"));
-    let (_log_guard, log_buffer, log_handle_slot) = init_logging(&app_data_dir);
+    // 日志级别（高级分类 log_level 接线，「重启生效」语义）：init_logging 之前
+    // 读取配置，本次启动的日志级别 = 上次保存的值。配置缺失/损坏/字段非法
+    // 一律回退 "info"，不阻断启动。
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|p| p.to_path_buf()))
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    let config_dir = exe_dir.join("config");
+    let log_level = ConfigManager::new(config_dir.clone())
+        .load()
+        .map(|c| c.global.log_level.clone())
+        .unwrap_or_else(|_| String::from("info"));
+    let (_log_guard, log_buffer, log_handle_slot) = init_logging(&app_data_dir, &log_level);
     // 注册进程级 panic hook：panic 先写 tracing（文件 + 缓冲 + 控制台），再链式调用
     // 默认 hook（stderr）——修复「线程 panic 被 JoinHandle 静默吞掉」问题
     //（曾导致录制启动 panic 后无日志、无录音文件——panic 只进 stderr 且被异步框架
@@ -106,12 +165,6 @@ pub fn run() {
         tracing::warn!("检测到应用已在运行（单实例互斥体被占用），本实例退出");
         return;
     };
-
-    let exe_dir = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|p| p.to_path_buf()))
-        .unwrap_or_else(|| std::path::PathBuf::from("."));
-    let config_dir = exe_dir.join("config");
 
     let notifier = Arc::new(NotificationDispatcher::new());
     // Task 18：ConfigManager 注入通知分发器（备份恢复通知 + 通知设置同步）。
@@ -150,6 +203,7 @@ pub fn run() {
         .manage(detection_wake.clone()) // 检测循环唤醒信号（finish_wizard 触发一次立即检测）
         .manage(log_buffer.clone()) // 调试日志环形缓冲（get_logs / clear_logs）
         .manage(network_store.clone()) // 网络请求插桩缓冲（get_network_logs / clear_network_logs）
+        .manage(CleanupScheduler::new()) // 自动清理每日定时调度（save_config 重建）
         // ── 关闭行为（Task 17：规格 1.1 / 设计 §11.5）──
         // 决策见 infrastructure::tray::decide_close_action（配置矩阵 × 托盘实际可用性）：
         //   tray × show_tray=true 且托盘存在且可见 → prevent_close + hide（驻留托盘）
@@ -273,6 +327,10 @@ pub fn run() {
             // --minimized（Task 14 自启参数）：仅当托盘创建成功时生效，
             // 否则回退为显示主窗口——托盘失败 + 窗口不可见 = 应用「人间蒸发」
             let startup_config = app.state::<Arc<ConfigManager>>().load().unwrap_or_default();
+            // 自动清理定时调度（文件分类接线）：启动时按配置重建每日任务；
+            // 配置变更经 save_config 的 reschedule 重建（auto_cleanup_enabled /
+            // cleanup_time 变化即时生效）。
+            app.state::<CleanupScheduler>().reschedule(handle.clone());
             // Task 20（Important-2）：启动时恢复输出目录的 asset protocol 放行。
             // allow_directory 是运行时态，重启后 scope 回 tauri.conf.json 默认
             // `$HOME/**`——输出目录在 $HOME 外且本次启动未保存设置时，内置播放器
@@ -339,6 +397,34 @@ pub fn run() {
             let recorder_state = app.state::<RecorderState>();
             let app_state_arc = recorder_state.state.clone();
 
+            // ── 上次退出干净度检查（托盘幽灵图标缓解，Windows）──
+            // Windows shell 对死进程的托盘图标不主动清理（悬停通知区才移除）——
+            // 应用被强杀/崩溃后重启，旧幽灵图标与新图标并存（「偶尔出现多个
+            // 图标」候选根因之一，见 infrastructure::tray 模块注释）。检查
+            // `{exe_dir}/.clean_exit` 标记：存在 = 上次退出不干净 → 提示用户
+            // 「悬停通知区可清除残留图标」。标记随后常驻，直到统一优雅退出
+            // （tray::request_shutdown → do_shutdown）时移除。
+            #[cfg(windows)]
+            {
+                let unclean_exit = tray::clean_exit_marker_exists();
+                tray::write_clean_exit_marker();
+                if unclean_exit {
+                    let notifier = notifier_arc.clone();
+                    tauri::async_runtime::spawn(async move {
+                        // 延迟 1s：setup 期前端可能尚未挂载 app:notification
+                        // 监听，立即 emit 会被吞掉（通知文本双语文案，见报告）
+                        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                        notifier
+                            .warning(
+                                "TRAY_GHOST_HINT",
+                                "检测到上次异常退出 (Abnormal exit detected)",
+                                "若托盘中残留旧图标，可将鼠标悬停通知区清除。If an old tray icon remains, hover over the notification area to clear it.",
+                            )
+                            .await;
+                    });
+                }
+            }
+
             // ── 系统托盘（Task 17：规格 1.1 / 设计 §11.5）──
             // 图标 + 右键菜单（显示主窗口 / 录制中：N / 最近录制 5 条 / 退出应用）；
             // show_tray=false 时创建但隐藏（运行中可经设置页 reconcile_tray 切换可见性）
@@ -372,8 +458,9 @@ pub fn run() {
                 }
             }
 
-            // 创建 MissevanClient （DetectionLoop 唯一使用）
-            let client_for_detector = match MissevanClient::new() {
+            // 创建 MissevanClient （DetectionLoop 唯一使用；网络分类接线：
+            // 全局代理 + api_timeout_secs 从启动配置读取）
+            let client_for_detector = match MissevanClient::from_config(&startup_config.global) {
                 Ok(c) => c,
                 Err(e) => {
                     tracing::error!("创建 MissevanClient 失败: {}", e);
@@ -454,19 +541,95 @@ pub fn run() {
                         // 保存 enable_check=false，update_anchor 的"保存即停"看不到未
                         // 注册的任务）——此处读磁盘最新配置，已关闭检测则直接放弃，
                         // 杜绝"保存后仍启动录制、延迟才被 monitor 兜底停止"。
-                        let check_enabled = config_full
-                            .anchors
-                            .iter()
-                            .any(|a| a.id == anchor.id && a.enable_check);
-                        if !check_enabled {
+                        if !anchor_check_enabled(&config_full, &anchor.id) {
                             tracing::info!(
                                 "[录制] 主播 {} 已关闭自动检测，取消录制启动",
                                 anchor.name
                             );
                             return;
                         }
-                        let config = config_full.global;
-                        let client = match MissevanClient::new() {
+                        // 录制前延迟（pre_record_delay_secs）：检测到开播后延迟 N 秒
+                        // 再启动录制（等流稳定）。延迟窗口可取消——期间用户停止
+                        // 录制/关闭检测/应用退出则放弃本次录制启动。
+                        let config = if config_full.global.pre_record_delay_secs > 0 {
+                            tracing::info!(
+                                "[录制] {} 秒后开始录制: {}",
+                                config_full.global.pre_record_delay_secs,
+                                anchor.name
+                            );
+                            // 延迟窗口可取消（实装审查回归修复）：任务尚未注册进
+                            // tasks 表，stop_recording/remove_anchor 找不到任务会
+                            // 返回"未在录制中"——先把本次启动注册进
+                            // AppState.pending_starts（含取消令牌），停止命令据此
+                            // 取消；延迟结束复检通过后才真正启动 ffmpeg。
+                            if !app_state
+                                .lock()
+                                .await
+                                .register_pending_start(&anchor.id, cancel.clone())
+                            {
+                                tracing::info!(
+                                    "[录制] 已有延迟中的录制启动，跳过重复触发: {}",
+                                    anchor.name
+                                );
+                                return;
+                            }
+                            let global_cancel = app_state.lock().await.global_cancel.clone();
+                            tokio::select! {
+                                _ = tokio::time::sleep(std::time::Duration::from_secs(
+                                    config_full.global.pre_record_delay_secs as u64,
+                                )) => {}
+                                // 用户停止（stop_recording/remove_anchor 取消
+                                // pending_starts 中的令牌）
+                                _ = cancel.cancelled() => {}
+                                // 应用退出（global_cancel 由优雅退出路径取消）
+                                _ = global_cancel.cancelled() => {}
+                            }
+                            // 清理 pending 注册（幂等：若停止命令已取消并移除，
+                            // 这里不再动作）。先查令牌再放行——停止命令可能在
+                            // sleep 完成与清理之间的窗口内触发。
+                            app_state.lock().await.remove_pending_start(&anchor.id);
+                            if app_state.lock().await.global_cancel.is_cancelled() {
+                                tracing::info!(
+                                    "[录制] 应用正在退出（延迟期间），取消录制启动: {}",
+                                    anchor.name
+                                );
+                                return;
+                            }
+                            if cancel.is_cancelled() {
+                                tracing::info!(
+                                    "[录制] 录制已取消（延迟期间），放弃录制: {}",
+                                    anchor.name
+                                );
+                                return;
+                            }
+                            // 延迟结束复检（实装审查回归修复）：延迟期间用户可能
+                            // 关闭检测/退出应用——重新读磁盘最新配置，检测已关则
+                            // 放弃启动（正是上方既有注释要杜绝的场景：延迟结束后
+                            // 仍启动、只靠 monitor 兜底 ≤10s 才停）。
+                            let config_recheck = match config_manager.load() {
+                                Ok(c) => c,
+                                Err(e) => {
+                                    tracing::error!(
+                                        "加载全局配置失败（延迟结束复检）: {}",
+                                        e
+                                    );
+                                    return;
+                                }
+                            };
+                            if !anchor_check_enabled(&config_recheck, &anchor.id) {
+                                tracing::info!(
+                                    "[录制] 主播 {} 已关闭自动检测（延迟结束复检），取消录制启动",
+                                    anchor.name
+                                );
+                                return;
+                            }
+                            config_recheck.global
+                        } else {
+                            config_full.global
+                        };
+                        // 录制 monitor 客户端：与检测循环同一代理/超时配置
+                        //（网络分类接线：proxy_* / api_timeout_secs 全局生效）
+                        let client = match MissevanClient::from_config(&config) {
                             Ok(c) => c,
                             Err(e) => {
                                 tracing::error!("创建 MissevanClient 失败: {}", e);

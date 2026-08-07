@@ -90,10 +90,16 @@ impl HealthCheck for FfmpegCheck {
                 continue;
             }
             // 试运行 `-version` 验证可执行性；5s 超时防损坏/挂起的可执行文件卡住
-            // 整个检查（与 debug_cmds::probe_tool 的 TOOL_PROBE_TIMEOUT 一致）
+            // 整个检查（与 debug_cmds::probe_tool 的 TOOL_PROBE_TIMEOUT 一致）。
+            // 隐藏控制台（tools.rs::apply_create_no_window）：健康检查 spawn 的
+            // ffmpeg 是控制台子系统，发布构建无控制台时会弹黑窗口
+            let mut probe = tokio::process::Command::new(path);
+            probe.arg("-version");
+            #[cfg(windows)]
+            crate::domain::tools::apply_create_no_window(probe.as_std_mut());
             let probe = tokio::time::timeout(
                 std::time::Duration::from_secs(5),
-                tokio::process::Command::new(path).arg("-version").output(),
+                probe.output(),
             )
             .await;
             match probe {

@@ -21,7 +21,7 @@ export const DEFAULT_CONFIG: GlobalConfig = {
   check_updates: true,
   bitrate_kbps: 128,
   audio_only: true,
-  filename_template: "{anchor_name}/{date}_{time}_{anchor_name}.{ext}",
+  filename_template: "{anchor_name}/{date}_{time}_{anchor_name}_{index}.{ext}",
   max_concurrent_recordings: 3,
   pre_record_delay_secs: 0,
   post_record_action: "none",

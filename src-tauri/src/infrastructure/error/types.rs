@@ -15,6 +15,8 @@ pub const RC_PROCESS_CRASH: &str = "RC_PROCESS_CRASH";
 pub const RC_STREAM_UNAVAILABLE: &str = "RC_STREAM_UNAVAILABLE";
 /// 双录防御：同主播已有录制任务/进程在运行，拒绝重复启动
 pub const RC_ALREADY_RECORDING: &str = "RC_ALREADY_RECORDING";
+/// 并发录制上限（max_concurrent_recordings ≥ 1 时，活跃任务数达上限拒绝新录制）
+pub const RC_CONCURRENCY_LIMIT: &str = "RC_CONCURRENCY_LIMIT";
 /// IO 类错误
 pub const IO_DISK_FULL: &str = "IO_DISK_FULL";
 pub const IO_WRITE_FAIL: &str = "IO_WRITE_FAIL";

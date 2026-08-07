@@ -59,7 +59,7 @@ const proxyEnabled = () => props.config.proxy_type !== "none";
         <!-- ── 全局代理设置 ── -->
         <div class="rounded-lg border p-4">
             <h3 class="mb-4 text-sm font-semibold">
-                {{ t("settings.network.proxyTitle") }}<NotEffectiveBadge />
+                {{ t("settings.network.proxyTitle") }}
             </h3>
 
             <div class="space-y-4">
@@ -163,7 +163,7 @@ const proxyEnabled = () => props.config.proxy_type !== "none";
             <h3 class="mb-4 text-sm font-semibold">{{ t("settings.network.connTitle") }}</h3>
             <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 <div class="space-y-1.5">
-                    <Label for="cfg-api-timeout">{{ t("settings.network.apiTimeout") }}<NotEffectiveBadge /></Label>
+                    <Label for="cfg-api-timeout">{{ t("settings.network.apiTimeout") }}</Label>
                     <Input
                         id="cfg-api-timeout"
                         v-model="apiTimeoutText"
@@ -176,7 +176,7 @@ const proxyEnabled = () => props.config.proxy_type !== "none";
                     </p>
                 </div>
                 <div class="space-y-1.5">
-                    <Label for="cfg-stream-timeout">{{ t("settings.network.streamTimeout") }}<NotEffectiveBadge /></Label>
+                    <Label for="cfg-stream-timeout">{{ t("settings.network.streamTimeout") }}</Label>
                     <Input
                         id="cfg-stream-timeout"
                         v-model="streamTimeoutText"
@@ -189,7 +189,7 @@ const proxyEnabled = () => props.config.proxy_type !== "none";
                     </p>
                 </div>
                 <div class="space-y-1.5">
-                    <Label for="cfg-max-retries">{{ t("settings.network.retries") }}<NotEffectiveBadge /></Label>
+                    <Label for="cfg-max-retries">{{ t("settings.network.retries") }}</Label>
                     <Input
                         id="cfg-max-retries"
                         v-model="retriesText"
@@ -202,7 +202,7 @@ const proxyEnabled = () => props.config.proxy_type !== "none";
                     </p>
                 </div>
                 <div class="space-y-1.5">
-                    <Label for="cfg-retry-delay">{{ t("settings.network.retryDelay") }}<NotEffectiveBadge /></Label>
+                    <Label for="cfg-retry-delay">{{ t("settings.network.retryDelay") }}</Label>
                     <Input
                         id="cfg-retry-delay"
                         v-model="retryDelayText"

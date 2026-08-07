@@ -33,7 +33,13 @@ const FFMPEG_ZIP_TARGETS: [&str; 2] = ["ffmpeg.exe", "ffprobe.exe"];
 
 /// 执行 `{exe} -version`，成功时返回首行版本信息
 async fn probe_tool_version(exe: &std::path::Path) -> Option<String> {
-    match tokio::process::Command::new(exe).arg("-version").output().await {
+    // 隐藏控制台（tools.rs::apply_create_no_window）：首启向导环境检查 / 下载后
+    // 验证会 spawn ffmpeg/ffprobe（控制台子系统），发布构建无控制台时会弹黑窗口
+    let mut probe = tokio::process::Command::new(exe);
+    probe.arg("-version");
+    #[cfg(windows)]
+    crate::domain::tools::apply_create_no_window(probe.as_std_mut());
+    match probe.output().await {
         Ok(out) if out.status.success() => {
             String::from_utf8_lossy(&out.stdout)
                 .lines()
