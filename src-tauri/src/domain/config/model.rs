@@ -31,6 +31,9 @@ pub struct GlobalConfig {
     pub auto_cleanup_enabled: bool,
     pub retention_days: u32,
     pub max_total_gb: u32, // 0 = 不限制总大小
+    /// **已废弃**：原「每日定时清理」时间（"HH:MM"）。定时调度已移除，自动清理
+    /// 改为每次录制任务结束时触发（monitor.rs cleanup_on_recording_end）。
+    /// 字段仅保留用于兼容旧配置文件（serde 反序列化不报错），不再被任何逻辑使用。
     pub cleanup_time: String,
     // —— 网络（§11.1）——
     pub proxy_type: String, // none | http | socks5

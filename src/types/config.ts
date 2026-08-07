@@ -45,6 +45,11 @@ export interface GlobalConfig {
   auto_cleanup_enabled: boolean;
   retention_days: number;
   max_total_gb: number;
+  /**
+   * 已废弃：原「每日定时清理」时间（HH:MM）。定时调度已移除，自动清理改为
+   * 每次录制结束时触发（后端 monitor.rs cleanup_on_recording_end）；字段保留
+   * 仅为后端 serde 兼容旧配置文件，前端不再展示/使用。
+   */
   cleanup_time: string;
   // —— 网络（§11.1）——
   proxy_type: string; // none | http | socks5

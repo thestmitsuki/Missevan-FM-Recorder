@@ -1,11 +1,16 @@
-//! 录制文件清理（§11.2 `run_cleanup_now` / 后续定时清理共用）
+//! 录制文件清理（§11.2 `run_cleanup_now` 命令 / 录制结束自动清理共用）
 //!
 //! 策略（规格 文件分类）：先按 mtime 删除 N 天前的旧文件；若总量仍超
 //! `max_total_gb`，按最旧优先继续删除直到达标或文件清空。
 //! `retention_days == 0` 表示不按天数清理；`max_total_gb == 0` 表示不限制总大小
 //! （与 GlobalConfig 字段注释一致）。
+//!
+//! 触发方式：`run_cleanup_now` 命令（手动）与每次录制任务结束（monitor.rs
+//! 统一出口，见 `cleanup_on_recording_end`）共用同一实现；原 cleanup_time
+//! 每日定时调度（cleanup_scheduler）已移除。
 
 use crate::domain::config::manager::ConfigManager;
+use crate::domain::config::model::GlobalConfig;
 use crate::domain::services::file_cache::{FileCacheHandle, FileCacheManager};
 use crate::infrastructure::error::types::AppError;
 use crate::infrastructure::state::app_state::AppStateHandle;
@@ -81,7 +86,7 @@ pub fn plan_cleanup(
     to_delete
 }
 
-/// 执行一次录制文件清理（`run_cleanup_now` 命令与定时调度共用）：
+/// 执行一次录制文件清理（`run_cleanup_now` 命令与录制结束触发共用）：
 /// 扫描输出目录 → 过滤录制中的文件 → plan_cleanup → 删除 → 刷新文件缓存
 ///（内部 emit `recording_files_changed`，前端文件列表即时更新）。
 pub async fn run_cleanup(
@@ -145,6 +150,43 @@ pub async fn run_cleanup(
         files_remaining,
         bytes_remaining,
     })
+}
+
+/// 是否启用自动清理（纯函数）：仅 `auto_cleanup_enabled` 为 true 时在每次
+/// 录制任务结束时执行清理。手动 `run_cleanup_now` 命令不受此开关限制。
+pub fn should_cleanup(config: &GlobalConfig) -> bool {
+    config.auto_cleanup_enabled
+}
+
+/// 录制结束自动清理入口（每次录制任务结束时触发一次，替代原 cleanup_time
+/// 每日定时调度）：读**最新**配置（而非录制启动时的快照），`auto_cleanup_enabled`
+/// 时执行与 `run_cleanup_now` 命令完全相同的清理（内部刷新文件缓存并 emit
+/// `recording_files_changed`，前端文件列表即时更新）。失败仅记 warn，不阻断
+/// 录制结束流程。
+pub async fn cleanup_on_recording_end(
+    window: WebviewWindow,
+    cache: FileCacheHandle,
+    config_manager: Arc<ConfigManager>,
+    app_state: AppStateHandle,
+) {
+    let config = match config_manager.load() {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!("[录制结束] 读取配置失败，跳过自动清理: {}", e);
+            return;
+        }
+    };
+    if !should_cleanup(&config.global) {
+        return;
+    }
+    match run_cleanup(window, cache, config_manager, app_state).await {
+        Ok(summary) => tracing::info!(
+            "[录制结束] 自动清理完成: 删除 {} 个文件 / 释放 {} 字节",
+            summary.files_deleted,
+            summary.bytes_freed
+        ),
+        Err(e) => tracing::warn!("[录制结束] 自动清理失败: {}", e),
+    }
 }
 
 /// 递归扫描输出目录下的录制文件（扩展名与文件缓存一致）
@@ -284,6 +326,15 @@ mod tests {
         let now = SystemTime::now();
         let candidates = vec![entry("x.m4a", 100 * 86400, 999)];
         assert!(plan_cleanup(&candidates, 0, 0, now).is_empty());
+    }
+
+    #[test]
+    fn should_cleanup_reflects_toggle() {
+        let mut cfg = GlobalConfig::default();
+        cfg.auto_cleanup_enabled = false;
+        assert!(!should_cleanup(&cfg), "关闭自动清理 → 录制结束不清理");
+        cfg.auto_cleanup_enabled = true;
+        assert!(should_cleanup(&cfg), "开启自动清理 → 录制结束执行清理");
     }
 
     #[test]

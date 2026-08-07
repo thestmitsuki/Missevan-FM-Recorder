@@ -275,13 +275,10 @@ export default {
     // ── Files ──
     files: {
       cleanupEnable: "Enable Auto Cleanup",
-      cleanupEnableHint: "Periodically delete old files based on conditions",
+      cleanupEnableHint: "Auto-delete old files when each recording ends",
       retentionDays: "Retention (days)",
       maxTotalGb: "Max Total Size (GB)",
       maxTotalGbHint: "Delete oldest files when total size exceeds this; 0 = no limit",
-      cleanupTime: "Cleanup Time",
-      cleanupTimeDaily: "daily",
-      cleanupTimeCustom: "Custom…",
       diskTitle: "Disk Space Protection",
       diskHint: "Pause new recordings and warn when free space drops below this value",
       diskSpaceLimitGb: "Minimum Free Space (GB)",
@@ -430,7 +427,6 @@ export default {
       retentionRange: "Retention must be an integer 1 ~ 3650",
       maxTotalRange: "Max total must be an integer 0 ~ 100000 (0 = no limit)",
       diskSpaceRange: "Minimum free space must be an integer 1 ~ 100000",
-      cleanupTimeInvalid: "Cleanup time must use HH:MM format",
       timeoutRange: "Timeout must be an integer 1 ~ 600",
       streamTimeoutRange: "Timeout must be an integer 1 ~ 3600",
       retriesRange: "Retries must be an integer 0 ~ 20",

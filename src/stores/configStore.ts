@@ -29,6 +29,7 @@ export const DEFAULT_CONFIG: GlobalConfig = {
   auto_cleanup_enabled: false,
   retention_days: 30,
   max_total_gb: 0,
+  // 已废弃（兼容字段）：原每日定时清理时间，保留与后端 GlobalConfig 对齐；前端不再使用
   cleanup_time: "03:00",
   proxy_type: "none",
   proxy_addr: "",

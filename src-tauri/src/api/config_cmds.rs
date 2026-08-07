@@ -5,7 +5,6 @@ use crate::domain::config::autostart::{apply_autostart, AutostartStore};
 use crate::domain::config::manager::{ConfigManager, ImportSummary};
 use crate::domain::config::model::GlobalConfig;
 use crate::domain::services::cleanup::{run_cleanup, CleanupSummary};
-use crate::domain::services::cleanup_scheduler::CleanupScheduler;
 use crate::domain::services::file_cache::FileCacheHandle;
 use crate::infrastructure::error::types::AppError;
 use crate::infrastructure::notification::dispatcher::NotificationDispatcher;
@@ -95,9 +94,8 @@ pub async fn save_config(
         tracing::warn!("保存配置后放行输出目录失败: {}", e);
     }
 
-    // 自动清理定时调度重建（auto_cleanup_enabled / cleanup_time / retention_days /
-    // max_total_gb 变化即时生效：取消旧任务，按新配置重新 spawn 每日任务）
-    app.state::<CleanupScheduler>().reschedule(app.clone());
+    // 自动清理不再有定时调度（cleanup_scheduler 已删除）：录制结束时按最新
+    // 配置即时触发（monitor.rs cleanup_on_recording_end），保存配置无需重建任何任务。
     Ok(())
 }
 
@@ -225,7 +223,7 @@ pub(crate) async fn set_shortcut(
 /// 按 `retention_days`（0 = 不按天数）删 N 天前的旧文件；若总量超
 /// `max_total_gb`（0 = 不限制）按最旧优先删除直到达标或清空。
 /// 清理完成后刷新文件缓存（emit `recording_files_changed`）。
-/// 实现与定时调度共用 `domain::services::cleanup::run_cleanup`。
+/// 实现与录制结束自动触发共用 `domain::services::cleanup::run_cleanup`。
 #[tauri::command]
 pub(crate) async fn run_cleanup_now(
     window: tauri::WebviewWindow,

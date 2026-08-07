@@ -6,6 +6,7 @@ use tokio_util::sync::CancellationToken;
 use crate::domain::config::manager::ConfigManager;
 use crate::domain::config::model::{AnchorStatusUpdate, GlobalConfig};
 use crate::domain::recorder::engine::{FfmpegRecorder, RecorderEngine};
+use crate::domain::services::cleanup::cleanup_on_recording_end;
 use crate::domain::services::file_cache::{FileCacheHandle, FileCacheManager};
 use crate::domain::spider::MissevanClient;
 use crate::infrastructure::state::app_state::{AppStateHandle, RecordingSummary};
@@ -145,10 +146,21 @@ pub async fn monitor_recording(
 
     // 刷新文件缓存，让前端立刻看到新文件
     // （任务已从 AppState 移除，刷新时该文件不会再被标记为「录制中」）
-    let cache_manager = FileCacheManager::new(window, file_cache);
+    let cache_manager = FileCacheManager::new(window.clone(), file_cache.clone());
     if let Err(e) = cache_manager.refresh(&config_manager, &app_state).await {
         tracing::error!("文件缓存刷新失败: {}", e);
     }
+
+    // 录制结束自动清理（§11.1 auto_cleanup_enabled）：正常结束/取消/错误全部
+    // 汇聚于此统一出口，每次录制结束触发一次清理检查——读**最新**配置（而非
+    // 录制启动时的快照），启用时按 retention_days / max_total_gb 清理旧文件
+    //（cleanup_on_recording_end 内部复用 run_cleanup：刷新文件缓存并 emit
+    // `recording_files_changed`）。替代原 cleanup_time 每日定时调度
+    //（cleanup_scheduler 已删除）。
+    // 顺序：recorder.stop + 任务移除 + 文件缓存刷新之后、post_record_action
+    // 之前——新录制文件先入缓存，且「打开文件夹」等录制后动作看到的是清理
+    // 完成后的目录。
+    cleanup_on_recording_end(window, file_cache, config_manager.clone(), app_state.clone()).await;
 
     // 录制后动作（§11.1 post_record_action / post_record_command）——正常结束/
     // 取消/错误全部汇聚于此统一出口；命令失败仅 warn，不阻断录制结束流程

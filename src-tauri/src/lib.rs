@@ -21,7 +21,6 @@ use crate::domain::config::autostart::AutostartStore;
 use crate::domain::config::autostart::WinregAutostart;
 #[cfg(not(windows))]
 use crate::domain::config::autostart::NoopAutostart;
-use crate::domain::services::cleanup_scheduler::CleanupScheduler;
 use crate::domain::services::file_cache::{FileCache, FileCacheHandle, FileCacheManager};
 use domain::config::manager::ConfigManager;
 use domain::config::model::{AnchorConfig, Config};
@@ -203,7 +202,6 @@ pub fn run() {
         .manage(detection_wake.clone()) // 检测循环唤醒信号（finish_wizard 触发一次立即检测）
         .manage(log_buffer.clone()) // 调试日志环形缓冲（get_logs / clear_logs）
         .manage(network_store.clone()) // 网络请求插桩缓冲（get_network_logs / clear_network_logs）
-        .manage(CleanupScheduler::new()) // 自动清理每日定时调度（save_config 重建）
         // ── 关闭行为（Task 17：规格 1.1 / 设计 §11.5）──
         // 决策见 infrastructure::tray::decide_close_action（配置矩阵 × 托盘实际可用性）：
         //   tray × show_tray=true 且托盘存在且可见 → prevent_close + hide（驻留托盘）
@@ -327,10 +325,6 @@ pub fn run() {
             // --minimized（Task 14 自启参数）：仅当托盘创建成功时生效，
             // 否则回退为显示主窗口——托盘失败 + 窗口不可见 = 应用「人间蒸发」
             let startup_config = app.state::<Arc<ConfigManager>>().load().unwrap_or_default();
-            // 自动清理定时调度（文件分类接线）：启动时按配置重建每日任务；
-            // 配置变更经 save_config 的 reschedule 重建（auto_cleanup_enabled /
-            // cleanup_time 变化即时生效）。
-            app.state::<CleanupScheduler>().reschedule(handle.clone());
             // Task 20（Important-2）：启动时恢复输出目录的 asset protocol 放行。
             // allow_directory 是运行时态，重启后 scope 回 tauri.conf.json 默认
             // `$HOME/**`——输出目录在 $HOME 外且本次启动未保存设置时，内置播放器

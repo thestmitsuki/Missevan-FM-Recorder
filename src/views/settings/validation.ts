@@ -109,10 +109,7 @@ export const validators: Record<CategoryId, (form: SettingsForm, t: I18nT) => Se
         if (!inRange(form.disk_space_limit_gb, 1, 100000)) {
             e.disk_space_limit_gb = t("settings.errors.diskSpaceRange");
         }
-        const m = /^(\d{2}):(\d{2})$/.exec(form.cleanup_time.trim());
-        if (!m || Number(m[1]) > 23 || Number(m[2]) > 59) {
-            e.cleanup_time = t("settings.errors.cleanupTimeInvalid");
-        }
+        // cleanup_time 每日定时已废弃（自动清理改为录制结束时触发），不再校验
         return e;
     },
 

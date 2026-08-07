@@ -86,7 +86,7 @@ export const CATEGORIES: SettingsCategory[] = [
             "auto_cleanup_enabled",
             "retention_days",
             "max_total_gb",
-            "cleanup_time",
+            // cleanup_time 每日定时已废弃（自动清理改为录制结束时触发），不再展示
             "disk_space_limit_gb",
         ],
     },

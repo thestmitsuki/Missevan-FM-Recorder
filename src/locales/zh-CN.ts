@@ -271,13 +271,10 @@ export default {
     // ── 文件管理 ──
     files: {
       cleanupEnable: "启用自动清理",
-      cleanupEnableHint: "根据条件定期删除旧文件",
+      cleanupEnableHint: "每次录制结束时自动清理旧文件",
       retentionDays: "保留天数",
       maxTotalGb: "保留文件总量上限（GB）",
       maxTotalGbHint: "总大小超过时删除最旧的文件；0 表示不限制",
-      cleanupTime: "清理时间",
-      cleanupTimeDaily: "每天执行",
-      cleanupTimeCustom: "自定义…",
       diskTitle: "磁盘空间保护",
       diskHint: "最低剩余空间低于此值时暂停新录制，并发出警告通知",
       diskSpaceLimitGb: "最低剩余空间（GB）",
@@ -426,7 +423,6 @@ export default {
       retentionRange: "保留天数须为 1 ~ 3650 的整数",
       maxTotalRange: "总量上限须为 0 ~ 100000 的整数（0 = 不限）",
       diskSpaceRange: "最低剩余空间须为 1 ~ 100000 的整数",
-      cleanupTimeInvalid: "清理时间格式须为 HH:MM",
       timeoutRange: "超时须为 1 ~ 600 的整数",
       streamTimeoutRange: "超时须为 1 ~ 3600 的整数",
       retriesRange: "重试次数须为 0 ~ 20 的整数",

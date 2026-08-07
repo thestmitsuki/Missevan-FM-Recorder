@@ -1,9 +1,10 @@
 <script setup lang="ts">
 /**
  * 文件管理分类（规格 7.3）：
- * 自动清理（开关 + 保留天数 + 保留总量上限 GB + 清理时间）、磁盘空间保护（阈值 GB）。
- * 字段：auto_cleanup_enabled, retention_days, max_total_gb, cleanup_time,
- * disk_space_limit_gb。
+ * 自动清理（开关 + 保留天数 + 保留总量上限 GB）、磁盘空间保护（阈值 GB）。
+ * 字段：auto_cleanup_enabled, retention_days, max_total_gb, disk_space_limit_gb。
+ *（cleanup_time「每日定时清理时间」已废弃：自动清理改为每次录制结束时触发，
+ *  见后端 monitor.rs cleanup_on_recording_end；字段保留仅为旧配置兼容，不再展示）
  *
  * 语义化默认值（Task 3 对齐提示 ③）：max_total_gb=0 表示不限总大小（合法，非错误）；
  * disk_space_limit_gb 为磁盘保护阈值，后端 is_valid 要求 > 0。
@@ -14,13 +15,6 @@ import type { SectionErrors, SettingsForm } from "../validation";
 import { useNumberField } from "../useNumberField";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import {
-    Select,
-    SelectContent,
-    SelectItem,
-    SelectTrigger,
-    SelectValue,
-} from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 
 const props = defineProps<{
@@ -39,24 +33,6 @@ const { text: maxTotalText, invalid: maxTotalInvalid } = useNumberField(
 const { text: diskLimitText, invalid: diskLimitInvalid } = useNumberField(
     toRef(props.config, "disk_space_limit_gb"),
 );
-
-/** 清理时间预设（"HH:MM"） */
-const CLEANUP_PRESETS = [
-    "00:00",
-    "03:00",
-    "06:00",
-    "09:00",
-    "12:00",
-    "18:00",
-    "21:00",
-];
-const hasPreset = (v: string) => CLEANUP_PRESETS.includes(v.trim());
-
-function onCleanupPreset(value: unknown) {
-    if (typeof value === "string" && value !== "custom") {
-        props.config.cleanup_time = value;
-    }
-}
 </script>
 
 <template>
@@ -106,43 +82,6 @@ function onCleanupPreset(value: unknown) {
                     <p class="text-xs text-muted-foreground">{{ t("settings.files.maxTotalGbHint") }}</p>
                     <p v-if="errors.max_total_gb" class="text-xs text-destructive">
                         {{ errors.max_total_gb }}
-                    </p>
-                </div>
-
-                <div class="space-y-1.5">
-                    <Label for="cfg-cleanup-time">{{ t("settings.files.cleanupTime") }}</Label>
-                    <div class="flex flex-wrap items-center gap-3">
-                        <Select
-                            :model-value="hasPreset(config.cleanup_time) ? config.cleanup_time : 'custom'"
-                            @update:model-value="(v: unknown) => onCleanupPreset(v)"
-                        >
-                            <SelectTrigger class="w-44">
-                                <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                                <SelectItem
-                                    v-for="p in CLEANUP_PRESETS"
-                                    :key="p"
-                                    :value="p"
-                                    >{{ p }} {{ t("settings.files.cleanupTimeDaily") }}</SelectItem
-                                >
-                                <SelectItem value="custom">{{
-                                    t("settings.files.cleanupTimeCustom")
-                                }}</SelectItem>
-                            </SelectContent>
-                        </Select>
-                        <Input
-                            v-if="!hasPreset(config.cleanup_time)"
-                            id="cfg-cleanup-time"
-                            v-model="config.cleanup_time"
-                            type="time"
-                            class="w-40"
-                            :class="errors.cleanup_time ? 'border-destructive focus-visible:ring-destructive/40' : ''"
-                            :aria-invalid="!!errors.cleanup_time"
-                        />
-                    </div>
-                    <p v-if="errors.cleanup_time" class="text-xs text-destructive">
-                        {{ errors.cleanup_time }}
                     </p>
                 </div>
             </div>
