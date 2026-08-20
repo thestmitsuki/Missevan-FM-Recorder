@@ -571,11 +571,9 @@ mod tests {
         // 变量替换的纯函数部分：`{file}` / `{output_dir}` / `{anchor_name}` / `{room_id}`
         let output_path = r"D:\rec\主播A\2026-08-07_12-30-45_主播A.m4a";
         let cmd = "echo {file} {output_dir} {anchor_name} {room_id}".to_string();
-        let output_dir = std::path::Path::new(output_path)
-            .parent()
-            .unwrap()
-            .to_string_lossy()
-            .into_owned();
+        // 显式给出与期望一致的目录串（勿用 Path::parent() 从 Windows 风格路径推导：
+        // Linux 上 `\` 不是分隔符，parent() 会得到空串，导致该测试在 Linux CI 失败）
+        let output_dir = r"D:\rec\主播A".to_string();
         let substituted =
             substitute_command_variables(&cmd, output_path, &output_dir, "主播A", "123456");
         // 无空格路径也被双引号包裹（统一包裹策略——含空格/&/| 时防拆词与解释）

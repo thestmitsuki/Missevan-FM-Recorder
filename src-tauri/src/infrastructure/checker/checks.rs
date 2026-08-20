@@ -215,21 +215,27 @@ mod tests {
     #[test]
     fn prepared_candidates_order_matches_tools_and_cleans_paths() {
         // 发布前修复回归：候选顺序与 domain::tools 完全一致
-        //（配置指定路径（清洗后）→ {exe_dir}/ffmpeg/ffmpeg.exe → PATH 裸名）
+        //（配置指定路径（清洗后）→ {exe_dir}/ffmpeg/ffmpeg[.exe] → PATH 裸名）
+        // 平台后缀与 domain::tools::tool_exe_name 保持一致：Windows 带 .exe，其他平台无后缀
+        let exe_suffix = if cfg!(windows) { ".exe" } else { "" };
         let cands = prepared_candidates(Some("C:\\tools\\ff\u{7}mpeg.exe"));
         assert_eq!(cands.len(), 3);
         assert_eq!(cands[0], std::path::PathBuf::from("C:\\tools\\ffmpeg.exe"));
         assert_eq!(
             cands[1],
-            crate::domain::tools::exe_dir().join("ffmpeg").join("ffmpeg.exe")
+            crate::domain::tools::exe_dir()
+                .join("ffmpeg")
+                .join(format!("ffmpeg{}", exe_suffix))
         );
         assert_eq!(cands[2], std::path::PathBuf::from("ffmpeg"));
-        // 空配置 → 从 {exe_dir}/ffmpeg/ffmpeg.exe 开始
+        // 空配置 → 从 {exe_dir}/ffmpeg/ffmpeg[.exe] 开始
         let cands = prepared_candidates(None);
         assert_eq!(cands.len(), 2);
         assert_eq!(
             cands[0],
-            crate::domain::tools::exe_dir().join("ffmpeg").join("ffmpeg.exe")
+            crate::domain::tools::exe_dir()
+                .join("ffmpeg")
+                .join(format!("ffmpeg{}", exe_suffix))
         );
         assert_eq!(cands[1], std::path::PathBuf::from("ffmpeg"));
     }
