@@ -1,0 +1,16 @@
+# 权限定义：更新/关于命令（api/update_cmds.rs）
+
+[[permission]]
+identifier = "allow-check-update"
+description = "启用 check_update 命令（查询 GitHub Releases 最新版本）"
+commands = { allow = ["check_update"], deny = [] }
+
+[[permission]]
+identifier = "allow-get-app-info"
+description = "启用 get_app_info 命令（读取应用名称/版本/构建信息）"
+commands = { allow = ["get_app_info"], deny = [] }
+
+[[permission]]
+identifier = "allow-open-browser"
+description = "启用 open_browser 命令（用系统默认浏览器打开 http/https 链接）"
+commands = { allow = ["open_browser"], deny = [] }

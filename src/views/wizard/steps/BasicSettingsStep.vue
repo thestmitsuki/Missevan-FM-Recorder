@@ -12,6 +12,7 @@ import { storeToRefs } from "pinia";
 import { FolderOpen } from "@lucide/vue";
 
 import { api } from "@/services/api";
+import { isLinuxPlatform } from "@/services/platform";
 import { setLocale, type AppLocale } from "@/locales";
 import { useWizardStore } from "@/stores/wizardStore";
 import { useThemeStore, type ThemeMode } from "@/stores/themeStore";
@@ -39,6 +40,9 @@ const errors = ref<{ outputDir?: string; segment?: string; threshold?: string }>
 const segmentStr = ref(String(staged.value.segmentSeconds));
 const thresholdStr = ref(String(staged.value.diskThresholdGb));
 const browsing = ref(false);
+
+// Linux 未集成系统托盘（后端决策 #2）：托盘最小化选项禁用并显示提示
+const trayDisabled = isLinuxPlatform();
 
 const languageOptions = [
   { value: "zh-CN" as AppLocale, labelKey: "wizard.languageZh" },
@@ -86,10 +90,25 @@ function validate(): boolean {
   if (!staged.value.outputDir.trim()) {
     next.outputDir = t("wizard.errOutputDirRequired");
   }
-  if (!/^\d+$/.test(segmentStr.value.trim())) {
+  // L2 审查跟进：数字输入补上限校验（此前仅正则 `^\d+$`，输入 20 位大数时
+  // JS Number 转浮点 → Tauri 序列化 u64 失败 → save_config 报后端技术错误）。
+  // 上限与设置页 validation.ts inRange 对齐：分段间隔 0..86400、磁盘阈值
+  // 1..100000；`Number.isSafeInteger` 拦截超出 JS 安全整数范围的输入
+  //（正则只保证"纯数字"，不保证可安全解析）。
+  const segment = Number(segmentStr.value.trim());
+  if (
+    !/^\d+$/.test(segmentStr.value.trim()) ||
+    !Number.isSafeInteger(segment) ||
+    segment > 86400
+  ) {
     next.segment = t("wizard.errSegmentInvalid");
   }
-  if (!/^[1-9]\d*$/.test(thresholdStr.value.trim())) {
+  const threshold = Number(thresholdStr.value.trim());
+  if (
+    !/^[1-9]\d*$/.test(thresholdStr.value.trim()) ||
+    !Number.isSafeInteger(threshold) ||
+    threshold > 100000
+  ) {
     next.threshold = t("wizard.errThresholdInvalid");
   }
 
@@ -235,13 +254,26 @@ function handleNext() {
       <!-- 6. 开机启动 -->
       <div class="flex items-center justify-between rounded-lg border px-4 py-3">
         <Label for="wizard-autostart">{{ t("wizard.autostart") }}</Label>
-        <Switch id="wizard-autostart" v-model="staged.autostart" />
+        <Switch id="wizard-autostart" v-model:checked="staged.autostart" />
       </div>
 
-      <!-- 7. 关闭窗口时最小化到系统托盘 -->
-      <div class="flex items-center justify-between rounded-lg border px-4 py-3">
-        <Label for="wizard-tray">{{ t("wizard.trayMinimize") }}</Label>
-        <Switch id="wizard-tray" v-model="staged.trayMinimize" />
+      <!-- 7. 关闭窗口时最小化到系统托盘（Linux 未集成托盘：禁用 + 提示） -->
+      <div class="rounded-lg border px-4 py-3">
+        <div class="flex items-center justify-between">
+          <Label for="wizard-tray">{{ t("wizard.trayMinimize") }}</Label>
+          <Switch
+            id="wizard-tray"
+            v-model:checked="staged.trayMinimize"
+            :disabled="trayDisabled"
+          />
+        </div>
+        <p
+          v-if="trayDisabled"
+          id="wizard-tray-hint"
+          class="mt-1.5 text-xs text-muted-foreground"
+        >
+          {{ t("wizard.trayUnavailable") }}
+        </p>
       </div>
 
       <!-- 8. 主题颜色 -->

@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { isWindowsPlatform } from "@/services/platform";
 import type {
   AnchorConfig,
   AnchorProfile,
@@ -17,11 +18,12 @@ import type {
   AppInfo,
   ImportSummary,
   RecordingFilesPayload,
+  CleanupSummary,
 } from "@/types";
 import type {
-  CheckResult,
   DiagnosticFullReport,
   DiagnosticReport,
+  DownloadFfmpegResult,
 } from "@/types/health";
 
 // ── Anchor ──
@@ -65,6 +67,9 @@ export const api = {
   getRecordingStatus: () => invoke<RecordingStatus[]>("get_recording_status"),
   stopRecording: (anchorId: string) =>
     invoke<void>("stop_recording", { anchorId }),
+  /** 停止指定主播的录制（含 pre_record_delay 延迟窗口内的启动；主播操作入口用此命令） */
+  stopAnchorsRecording: (anchorId: string) =>
+    invoke<void>("stop_anchors_recording", { anchorId }),
 
   // ── Debug（Task 15 全部命令；返回 DTO 见 types/debug.ts）──
   getDebugInfo: () => invoke<DebugInfo>("get_debug_info"),
@@ -92,8 +97,8 @@ export const api = {
       outputDir,
       diskThresholdGb,
     }),
-  /** 下载 FFmpeg 便携版到 {exe_dir}/ffmpeg/，完成后返回 FFmpeg 重检结果 */
-  downloadFfmpeg: () => invoke<CheckResult>("download_ffmpeg"),
+  /** 下载 FFmpeg 便携版到 {exe_dir}/ffmpeg/，返回重检结果 + 下载路径（不写配置） */
+  downloadFfmpeg: () => invoke<DownloadFfmpegResult>("download_ffmpeg"),
   /** 退出应用（向导「不同意」/ 关闭确认「是」） */
   exitApp: () => invoke<void>("exit_app"),
   /** 向导完成：关向导窗、显主窗、刷新文件缓存、触发立即检测 */
@@ -106,6 +111,10 @@ export const api = {
     invoke<RecordingFilesPayload>("get_recording_files", { search }),
   /** 立即扫描输出目录重建文件缓存（调试页「强制刷新文件缓存」/「立即扫描」） */
   refreshRecordingFiles: () => invoke<void>("refresh_recording_files"),
+  /** 打开输出目录（opener 插件：资源管理器/xdg-open 打开目录本身；目录不存在时自动创建） */
+  openOutputDir: () => invoke<void>("open_output_dir"),
+  /** 立即执行一次录制文件清理（按保留天数/总量上限删旧文件；内部刷新文件缓存并 emit recording_files_changed） */
+  runCleanupNow: () => invoke<CleanupSummary>("run_cleanup_now"),
   /** 重命名录制文件（oldPath → 新文件名） */
   renameRecordingFile: (oldPath: string, newName: string) =>
     invoke<void>("rename_recording_file", { oldPath, newName }),
@@ -120,7 +129,11 @@ export const api = {
     openDialog({
       multiple: false,
       directory: false,
-      filters: [{ name: "Executable", extensions: ["exe", "bat", "cmd", "ps1"] }],
+      // Windows 上可执行文件限定 exe/bat/cmd/ps1；Linux/macOS 上 FFmpeg 是无扩展名的
+      // ELF/Mach-O 可执行文件（如 /usr/bin/ffmpeg），不传 filters 即允许选择所有文件
+      ...(isWindowsPlatform()
+        ? { filters: [{ name: "Executable", extensions: ["exe", "bat", "cmd", "ps1"] }] }
+        : {}),
     }).then((r) => (typeof r === "string" ? r : null)),
 
   // ── Mock（Task 16 补全命令：CRUD + 批量 + 重置）──

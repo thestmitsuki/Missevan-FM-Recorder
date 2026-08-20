@@ -1,12 +1,12 @@
 use std::sync::Arc;
 use tauri::{Manager, State};
 
-use crate::domain::config::autostart::{apply_autostart, AutostartStore};
 use crate::domain::config::manager::{ConfigManager, ImportSummary};
 use crate::domain::config::model::GlobalConfig;
 use crate::domain::services::cleanup::{run_cleanup, CleanupSummary};
 use crate::domain::services::file_cache::FileCacheHandle;
 use crate::infrastructure::error::types::AppError;
+use crate::infrastructure::logging::setup::LogLevelReload;
 use crate::infrastructure::notification::dispatcher::NotificationDispatcher;
 use crate::infrastructure::state::app_state::RecorderState;
 
@@ -53,9 +53,14 @@ pub async fn save_config(
     config: GlobalConfig,
     config_manager: tauri::State<'_, Arc<ConfigManager>>,
     dispatcher: State<'_, Arc<NotificationDispatcher>>,
+    log_reload: State<'_, LogLevelReload>,
 ) -> Result<(), AppError> {
     // 若 state 未被使用，可移除锁或使用 _state
     let _guard = state.state.lock().await;
+
+    // U5 变更判断：保存前读取旧级别（load 带缓存，无额外磁盘 IO）——
+    // 仅级别实际变化才热更新，避免每次保存都重建 callsite 缓存
+    let prev_log_level = config_manager.load().ok().map(|c| c.global.log_level);
 
     tracing::info!("保存配置");
     tracing::info!("📥 后端接收到的全局配置: {:?}", config);
@@ -82,8 +87,11 @@ pub async fn save_config(
         .info("config_save_ok", "配置保存成功", "配置已保存至文件")
         .await;
 
-    // 托盘图标开关即时生效（Task 17：show_tray 变化无需重启）
-    crate::infrastructure::tray::reconcile_tray(&app, config.show_tray);
+    // 托盘图标可见性即时生效（简化后由 close_behavior 派生：tray→显示 / exit→隐藏）
+    crate::infrastructure::tray::reconcile_tray(
+        &app,
+        crate::infrastructure::tray::should_hide_to_tray(&config.close_behavior),
+    );
 
     // Task 20（Task 12 Important-1 跟进）：输出目录动态放行 asset protocol——
     // 内置播放器经 convertFileSrc 加载本地音频，tauri.conf.json 的 asset scope 默认
@@ -92,6 +100,13 @@ pub async fn save_config(
     // lib.rs setup 调用同一函数恢复放行（Task 20 Important-2）。
     if let Err(e) = allow_output_dir(&app, config_manager.inner()) {
         tracing::warn!("保存配置后放行输出目录失败: {}", e);
+    }
+
+    // U5：日志级别热更新——配置已成功落盘，运行中即时切换级别（白名单校验
+    // 在 LogLevelReload::reload 内，非法值回退 info；失败静默降级不阻断保存）。
+    // 仅在级别实际变化时触发（避免无谓的 callsite 缓存重建）。
+    if prev_log_level.as_deref() != Some(config.log_level.as_str()) {
+        log_reload.reload(&config.log_level);
     }
 
     // 自动清理不再有定时调度（cleanup_scheduler 已删除）：录制结束时按最新
@@ -136,20 +151,40 @@ pub(crate) async fn export_config(
 /// `mode`：`replace`（global 全替换 + 文件含 anchors 时主播全替换）/ `merge`
 /// （global 按字段合并 + 主播按 id 合并，重复 id 跳过保留本地）。
 /// 接受包裹式（export_config 输出）与扁平式（GlobalConfig 单对象）两种 JSON。
-/// 校验失败（非法 JSON / 字段类型错误 / 空主播 id）报错且不写入。
+/// 校验失败（非法 JSON / 字段类型错误 / 字段值非法 / 空主播 id）报错且不写入
+/// （S4b：写入前执行与正常加载相同的 Config::is_valid 全量校验）。
 #[tauri::command]
 pub(crate) async fn import_config(
+    app: tauri::AppHandle,
     json: String,
     mode: String,
     config_manager: State<'_, Arc<ConfigManager>>,
     dispatcher: State<'_, Arc<NotificationDispatcher>>,
+    log_reload: State<'_, LogLevelReload>,
 ) -> Result<ImportSummary, AppError> {
+    // U5 变更判断：导入前读取旧级别（load 带缓存，无额外磁盘 IO）——
+    // 仅级别实际变化才热更新，避免每次导入都重建 callsite 缓存
+    let prev_log_level = config_manager.load().ok().map(|c| c.global.log_level);
     let summary = config_manager.import_json(&json, &mode)?;
+    // S4b（M2 跟进）：导入成功后与 save_config 一致触发托盘 reconcile + 输出目录
+    // asset scope 放行——导入的 close_behavior（派生托盘可见性）/ output_dir 立即生效
+    let effective = config_manager.load()?;
+    crate::infrastructure::tray::reconcile_tray(
+        &app,
+        crate::infrastructure::tray::should_hide_to_tray(&effective.global.close_behavior),
+    );
+    if let Err(e) = allow_output_dir(&app, config_manager.inner()) {
+        tracing::warn!("导入配置后放行输出目录失败: {}", e);
+    }
+    // U5：导入的 log_level 同样热更新即时生效（无需重启）；仅级别实际变化时触发
+    if prev_log_level.as_deref() != Some(effective.global.log_level.as_str()) {
+        log_reload.reload(&effective.global.log_level);
+    }
     dispatcher
         .info(
             "config_import_ok",
             "配置导入成功",
-            "配置已导入，部分更改将在重启后生效",
+            "配置已导入，日志级别已即时生效",
         )
         .await;
     tracing::info!(
@@ -178,18 +213,31 @@ pub(crate) async fn reset_config(
 
 /// 设置开机自启（§11.2）。
 ///
-/// 写 Windows 注册表 `HKCU\...\CurrentVersion\Run` 键 `MissevanRecorder`
-/// （值 = `"{exe_path}" --minimized`），并同步更新 GlobalConfig.autostart。
-/// 前端在 autostart 开关变化时应调用本命令（save_config 只落盘字段、不写注册表）。
+/// 经 tauri-plugin-autostart（auto_launch crate）实现：Windows 写注册表
+/// `HKCU\...\CurrentVersion\Run` 键、Linux 写 XDG autostart desktop 文件；
+/// 值名/参数在 lib.rs 插件注册时配置（app_name="MissevanRecorder"、
+/// arg="--minimized"，与旧手写实现一致），并同步更新 GlobalConfig.autostart。
+/// 前端在 autostart 开关变化时应调用本命令（save_config 只落盘字段、不写系统）。
 #[tauri::command]
 pub(crate) async fn set_autostart(
     enabled: bool,
-    autostart_store: State<'_, Arc<dyn AutostartStore>>,
+    app: tauri::AppHandle,
     config_manager: State<'_, Arc<ConfigManager>>,
 ) -> Result<(), AppError> {
-    let exe = std::env::current_exe()
-        .map_err(|e| AppError::internal(format!("获取可执行文件路径失败: {}", e)))?;
-    apply_autostart(autostart_store.inner().as_ref(), enabled, &exe.to_string_lossy())?;
+    use tauri_plugin_autostart::ManagerExt;
+    // tauri_plugin_autostart::ManagerExt::autolaunch(&self) -> State<'_, AutoLaunchManager>
+    //（impl for T: Manager<R>，AppHandle 适用）；AutoLaunchManager::enable/disable
+    // -> Result<(), tauri_plugin_autostart::Error>
+    // auto_launch 的 enable/disable 幂等（内部先查 is_enabled），重复调用安全
+    let auto = app.autolaunch();
+    let result = if enabled { auto.enable() } else { auto.disable() };
+    result.map_err(|e| {
+        AppError::system(
+            crate::infrastructure::error::types::IO_WRITE_FAIL,
+            "设置开机自启失败",
+        )
+        .with_technical(e.to_string())
+    })?;
     // 同步 GlobalConfig.autostart（前端 save_config 也写该字段，这里保证一致）
     let mut config = config_manager.load()?;
     config.global.autostart = enabled;

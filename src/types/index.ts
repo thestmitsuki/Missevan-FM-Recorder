@@ -7,9 +7,10 @@ export type {
 } from "./anchor";
 export type {
   RecordingFile,
-  FileGroup,
+  FileFolder,
   SystemTimeJson,
   RecordingFilesPayload,
+  CleanupSummary,
 } from "./file";
 export type { GlobalConfig, ImportSummary } from "./config";
 export type { Notification, NotificationLevel } from "./notification";

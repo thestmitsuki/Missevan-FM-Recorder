@@ -1,0 +1,41 @@
+# 权限定义：全局配置命令（api/config_cmds.rs）
+
+[[permission]]
+identifier = "allow-get-config"
+description = "启用 get_config 命令（读取全局配置）"
+commands = { allow = ["get_config"], deny = [] }
+
+[[permission]]
+identifier = "allow-save-config"
+description = "启用 save_config 命令（保存全局配置并同步托盘/输出目录放行）"
+commands = { allow = ["save_config"], deny = [] }
+
+[[permission]]
+identifier = "allow-export-config"
+description = "启用 export_config 命令（导出配置为 JSON 字符串，敏感字段置空）"
+commands = { allow = ["export_config"], deny = [] }
+
+[[permission]]
+identifier = "allow-import-config"
+description = "启用 import_config 命令（导入配置：替换/合并写入）"
+commands = { allow = ["import_config"], deny = [] }
+
+[[permission]]
+identifier = "allow-reset-config"
+description = "启用 reset_config 命令（删除全部配置并重启进入首次运行向导）"
+commands = { allow = ["reset_config"], deny = [] }
+
+[[permission]]
+identifier = "allow-set-autostart"
+description = "启用 set_autostart 命令（写系统自启注册表/XDG autostart 并落盘配置）"
+commands = { allow = ["set_autostart"], deny = [] }
+
+[[permission]]
+identifier = "allow-set-shortcut"
+description = "启用 set_shortcut 命令（保存快捷键映射到配置）"
+commands = { allow = ["set_shortcut"], deny = [] }
+
+[[permission]]
+identifier = "allow-run-cleanup-now"
+description = "启用 run_cleanup_now 命令（立即执行录制文件清理：按保留天数/总量上限删除旧文件）"
+commands = { allow = ["run_cleanup_now"], deny = [] }

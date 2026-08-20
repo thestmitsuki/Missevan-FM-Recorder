@@ -5,7 +5,6 @@
 //! - `{room_id}` 房间号
 //! - `{date}` 日期（YYYY-MM-DD）
 //! - `{time}` 时间（HH-MM-SS）
-//! - `{index}` 录制序号（3 位补零，001 起；每主播单调递增，见 AppState.recording_seq）
 //! - `{ext}` 录制格式扩展名（m4a / mp3）
 //!
 //! 安全与兼容：
@@ -13,31 +12,33 @@
 //!   （Windows 非法字符/控制字符 → `_`，`..` 子串 → `_`），再以 `/` 拼接——
 //!   模板无法通过 `..` 或绝对路径逃逸出输出目录；
 //! - 模板为空 / 不含任何变量时回退默认模板
-//!   `{anchor_name}/{date}_{time}_{anchor_name}_{index}.{ext}`；渲染后无有效路径
+//!   `{anchor_name}/{date}_{time}_{anchor_name}.{ext}`；渲染后无有效路径
 //!   组件（如模板仅含分隔符）同样回退默认；
 //! - 旧输出（无模板时代的 `{主播名}-{房间号}/{主播名}_{时间戳}.{ext}`）不受影响：
 //!   渲染只作用于新录制的输出路径，已存在文件/目录原样保留。
 //!
-//! 默认模板含 `{index}` 的原因（实装审查跟进，数据丢失风险）：默认模板若不含
-//! 序号，两个同名主播（不同房间号）同时录制 → 同目录同秒同名文件 → ffmpeg `-y`
-//! 互相覆盖。`{index}` 是**每主播**单调递增序号（见 AppState.recording_seq），
-//! 消除同一主播重复录制的碰撞；跨主播同秒碰撞由 engine 的「目标文件已存在则
-//! 自动追加序号」（deduplicate_output_path）兜底。
+//! 默认模板不含录制序号的原因（实装审查跟进）：早期默认模板含 `{index}`（3 位
+//! 补零，每主播单调递增），用于防「同主播同秒重复录制」文件名相同被 ffmpeg `-y`
+//! 覆盖。该变量已判定冗余并移除——非分段模式下 engine 的 `deduplicate_output_path`
+//! （目标文件已存在 → 扩展名前自动追加 `_2`/`_3`…）已兜底同秒碰撞与上次残留，
+//! 且能覆盖 `{index}` 防不住的两个同名主播同秒碰撞；分段模式由 ffmpeg `%03d`
+//! 序号管理，不依赖模板。`{index}` 从变量集移除后，用户自定义模板中残留的
+//! `{index}` 作为**未识别变量原样保留**（纯文本替换语义，见 `replace_variables`
+//! 与测试 `unknown_index_variable_is_kept_literal`），同名碰撞仍由
+//! `deduplicate_output_path` 兜底。
 
 use chrono::{DateTime, Local};
 
 use crate::domain::recorder::engine::sanitize_path_component;
 
 /// 默认模板（与 GlobalConfig 默认值一致）
-pub const DEFAULT_TEMPLATE: &str = "{anchor_name}/{date}_{time}_{anchor_name}_{index}.{ext}";
+pub const DEFAULT_TEMPLATE: &str = "{anchor_name}/{date}_{time}_{anchor_name}.{ext}";
 
 /// 模板渲染上下文
 pub struct TemplateContext<'a> {
     pub anchor_name: &'a str,
     pub room_id: &'a str,
     pub now: DateTime<Local>,
-    /// 录制序号（1 起；渲染为 3 位补零，上限 999）
-    pub index: u32,
     /// 录制格式扩展名（m4a / mp3）
     pub ext: &'a str,
 }
@@ -65,7 +66,9 @@ pub fn render_filename_template(template: &str, ctx: &TemplateContext) -> String
     components.join("/")
 }
 
-/// 变量替换（纯文本替换，不做消毒——消毒在组件拆分后统一进行）
+/// 变量替换（纯文本替换，不做消毒——消毒在组件拆分后统一进行）。
+/// 未识别的变量（如用户自定义模板中残留的 `{index}`）**原样保留**，不删除、
+/// 不报错——同名碰撞由 engine `deduplicate_output_path` 兜底。
 fn replace_variables(template: &str, ctx: &TemplateContext) -> String {
     let tpl = if template.trim().is_empty() || !template.contains('{') {
         DEFAULT_TEMPLATE
@@ -74,12 +77,10 @@ fn replace_variables(template: &str, ctx: &TemplateContext) -> String {
     };
     let date = ctx.now.format("%Y-%m-%d").to_string();
     let time = ctx.now.format("%H-%M-%S").to_string();
-    let index = format!("{:03}", ctx.index.min(999));
     tpl.replace("{anchor_name}", ctx.anchor_name)
         .replace("{room_id}", ctx.room_id)
         .replace("{date}", &date)
         .replace("{time}", &time)
-        .replace("{index}", &index)
         .replace("{ext}", ctx.ext)
 }
 
@@ -95,7 +96,6 @@ mod tests {
             now: chrono::Local
                 .with_ymd_and_hms(2026, 8, 7, 12, 30, 45)
                 .unwrap(),
-            index: 1,
             ext: "m4a",
         }
     }
@@ -103,50 +103,62 @@ mod tests {
     #[test]
     fn default_template_renders_subdir_and_variables() {
         let rendered = render_filename_template(DEFAULT_TEMPLATE, &ctx());
-        assert_eq!(rendered, "主播A/2026-08-07_12-30-45_主播A_001.m4a");
+        assert_eq!(rendered, "主播A/2026-08-07_12-30-45_主播A.m4a");
     }
 
     #[test]
-    fn default_template_contains_index_to_avoid_collisions() {
-        // 实装审查跟进（数据丢失风险）：默认模板必须含 {index}——两个同名主播
-        // 同时录制时同目录同秒文件名会互相覆盖（ffmpeg -y）。默认模板是
-        // 回退路径（空模板/无变量模板）的最终保障。
+    fn default_template_has_no_recording_index() {
+        // 实装审查跟进：`{index}` 录制序号已从默认模板移除——非分段模式的
+        // 同秒碰撞/上次残留由 engine `deduplicate_output_path` 兜底（目标文件
+        // 已存在自动追加 _2/_3…），分段模式由 ffmpeg %03d 管理。默认模板作为
+        // 空模板/无变量模板的回退路径，渲染结果不得再带 `_001` 尾部序号。
         assert!(
-            DEFAULT_TEMPLATE.contains("{index}"),
-            "默认模板必须含 {{index}}: {}",
+            !DEFAULT_TEMPLATE.contains("{index}"),
+            "默认模板不得含 {{index}}: {}",
             DEFAULT_TEMPLATE
         );
-        // 同一默认模板下序号不同 → 文件名不同（同秒重复录制不覆盖）
-        let mut c1 = ctx();
-        c1.index = 1;
-        let mut c2 = ctx();
-        c2.index = 2;
-        let a = render_filename_template("", &c1);
-        let b = render_filename_template("", &c2);
-        assert_ne!(a, b, "不同序号必须渲染出不同文件名: {} vs {}", a, b);
+        let rendered = render_filename_template("", &ctx());
+        assert!(
+            !rendered.contains("_001"),
+            "默认模板渲染结果不得带录制序号: {}",
+            rendered
+        );
+    }
+
+    #[test]
+    fn unknown_index_variable_is_kept_literal() {
+        // 用户自定义模板中残留的 `{index}`（旧默认模板/旧配置）：不是已识别
+        // 变量 → 纯文本替换后**原样保留**在渲染结果中（不删除、不报错）。
+        // 同名碰撞仍由输出路径去重（deduplicate_output_path）兜底，`{index}`
+        // 仅作为字面文件名成分存在。
+        let rendered = render_filename_template(
+            "{date}_{time}_{anchor_name}_{index}.{ext}",
+            &ctx(),
+        );
+        assert_eq!(rendered, "2026-08-07_12-30-45_主播A_{index}.m4a");
     }
 
     #[test]
     fn render_full_path_directory_and_filename_parts() {
         // 渲染结果含完整相对路径：目录部分与音频文件名部分都来自模板
         let rendered = render_filename_template(
-            "{anchor_name}-{room_id}/{index}_{anchor_name}.{ext}",
+            "{anchor_name}-{room_id}/{anchor_name}.{ext}",
             &ctx(),
         );
-        assert_eq!(rendered, "主播A-123456/001_主播A.m4a");
+        assert_eq!(rendered, "主播A-123456/主播A.m4a");
         let (dir, file) = rendered.rsplit_once('/').expect("模板含子目录");
         assert_eq!(dir, "主播A-123456", "目录部分来自模板");
-        assert_eq!(file, "001_主播A.m4a", "音频文件名部分来自模板");
+        assert_eq!(file, "主播A.m4a", "音频文件名部分来自模板");
     }
 
     #[test]
     fn render_no_subdir_template_yields_single_component() {
         // 模板无子目录：渲染结果为单组件路径（无 '/'）——录制时不建多余目录
         let rendered = render_filename_template(
-            "{date}_{time}_{anchor_name}_{index}.{ext}",
+            "{date}_{time}_{anchor_name}.{ext}",
             &ctx(),
         );
-        assert_eq!(rendered, "2026-08-07_12-30-45_主播A_001.m4a");
+        assert_eq!(rendered, "2026-08-07_12-30-45_主播A.m4a");
         assert!(
             !rendered.contains('/'),
             "无子目录模板不得产生路径分隔符: {}",
@@ -157,17 +169,17 @@ mod tests {
     #[test]
     fn render_multi_level_subdir_preserves_hierarchy() {
         let rendered =
-            render_filename_template("{anchor_name}/{date}/{time}_{index}.{ext}", &ctx());
+            render_filename_template("{anchor_name}/{date}/{time}.{ext}", &ctx());
         let (dir, file) = rendered.rsplit_once('/').expect("多级子目录");
         assert_eq!(dir, "主播A/2026-08-07");
-        assert_eq!(file, "12-30-45_001.m4a");
+        assert_eq!(file, "12-30-45.m4a");
     }
 
     #[test]
     fn old_default_template_without_index_renders() {
-        // 旧默认模板（含 {anchor_name}/ 子目录、无 {index}）兼容：旧配置里的
-        // 模板由 serde 原样保留（见 model.rs 测试），渲染不失败且目录/文件名
-        // 部分各自正确
+        // 旧默认模板（含 {anchor_name}/ 子目录、无 {index}）与当前默认模板一致：
+        // 旧配置里的模板由 serde 原样保留（见 model.rs 测试），渲染不失败且
+        // 目录/文件名部分各自正确
         let rendered = render_filename_template(
             "{anchor_name}/{date}_{time}_{anchor_name}.{ext}",
             &ctx(),
@@ -181,47 +193,26 @@ mod tests {
     #[test]
     fn all_variables_render() {
         let rendered = render_filename_template(
-            "{index}_{anchor_name}_{room_id}_{date}_{time}.{ext}",
+            "{anchor_name}_{room_id}_{date}_{time}.{ext}",
             &ctx(),
         );
-        assert_eq!(rendered, "001_主播A_123456_2026-08-07_12-30-45.m4a");
-    }
-
-    #[test]
-    fn index_zero_pads_to_three_digits() {
-        let mut c = ctx();
-        c.index = 1;
-        assert_eq!(
-            render_filename_template("{index}", &c),
-            "001",
-            "序号 1 → 001"
-        );
-        c.index = 42;
-        assert_eq!(render_filename_template("{index}", &c), "042");
-        c.index = 999;
-        assert_eq!(render_filename_template("{index}", &c), "999");
-        c.index = 1234;
-        assert_eq!(
-            render_filename_template("{index}", &c),
-            "999",
-            "超出 999 截断到 999"
-        );
+        assert_eq!(rendered, "主播A_123456_2026-08-07_12-30-45.m4a");
     }
 
     #[test]
     fn empty_template_falls_back_to_default() {
         assert_eq!(
             render_filename_template("", &ctx()),
-            "主播A/2026-08-07_12-30-45_主播A_001.m4a"
+            "主播A/2026-08-07_12-30-45_主播A.m4a"
         );
         assert_eq!(
             render_filename_template("   ", &ctx()),
-            "主播A/2026-08-07_12-30-45_主播A_001.m4a"
+            "主播A/2026-08-07_12-30-45_主播A.m4a"
         );
         // 不含任何变量（`{` 都不存在）→ 回退默认
         assert_eq!(
             render_filename_template("literal-name", &ctx()),
-            "主播A/2026-08-07_12-30-45_主播A_001.m4a"
+            "主播A/2026-08-07_12-30-45_主播A.m4a"
         );
     }
 
@@ -230,11 +221,11 @@ mod tests {
         // 仅含分隔符 → 拆分后无有效组件 → 回退默认
         assert_eq!(
             render_filename_template("/", &ctx()),
-            "主播A/2026-08-07_12-30-45_主播A_001.m4a"
+            "主播A/2026-08-07_12-30-45_主播A.m4a"
         );
         assert_eq!(
             render_filename_template("\\/", &ctx()),
-            "主播A/2026-08-07_12-30-45_主播A_001.m4a"
+            "主播A/2026-08-07_12-30-45_主播A.m4a"
         );
     }
 

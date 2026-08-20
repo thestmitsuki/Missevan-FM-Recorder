@@ -1,11 +1,13 @@
 <script lang="ts">
 /**
- * 快捷键分类（规格 7.7）——占位展示（需求：快捷键不实现实际绑定）。
+ * 快捷键分类（规格 7.7）——禁用态占位（H2：当前版本快捷键功能不实现）。
  *
- * 后端尚未注册全局快捷键（无 global-shortcut 接线），因此本分类仅作占位：
- * - 列表仍展示三条快捷键的默认键位（DEFAULT_SHORTCUTS / 表单已有值）；
- * - 顶部标注「暂未生效」徽标（与调试页性能监控占位样式一致）；
- * - 编辑交互（重新绑定 / 清除 / 恢复默认 / 清除全部 / 按键捕获）全部移除。
+ * 后端尚未注册全局快捷键（无 global-shortcut 接线），本分类仅作占位：
+ * - 顶部展示「快捷键功能当前版本暂未启用」说明（disabledNotice 徽标 + 文案）；
+ * - 列表仍展示三条快捷键的默认键位（DEFAULT_SHORTCUTS / 表单已有值），仅作参考；
+ * - 编辑交互（重新绑定 / 清除 / 恢复默认 / 清除全部 / 按键捕获）全部移除；
+ * - 设置页保存不再把快捷键写入落盘配置（normalizeConfig 剔除 shortcuts，
+ *   SettingsView 恢复默认也不再触碰 form.shortcuts），旧配置字段保留向后兼容。
  *
  * 后续版本接入 tauri-plugin-global-shortcut 时，恢复「重新绑定」交互即可。
  */
@@ -68,6 +70,16 @@ function comboParts(combo: string): string[] {
                 </Badge>
             </div>
             <p class="mb-4 text-xs text-muted-foreground">{{ t("settings.shortcuts.desc") }}</p>
+
+            <!-- 禁用态说明：当前版本快捷键功能未启用（H2 占位） -->
+            <div
+                class="mb-4 flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2.5"
+                role="note"
+            >
+                <span class="text-xs leading-relaxed text-amber-700 dark:text-amber-400">
+                    {{ t("settings.shortcuts.disabledNotice") }}
+                </span>
+            </div>
 
             <div class="rounded-md border">
                 <Table>

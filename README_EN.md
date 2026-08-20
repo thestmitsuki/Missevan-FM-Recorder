@@ -1,118 +1,160 @@
 # Missevan FM Recorder
 
-**Automatic live-stream audio recorder for Missevan FM (猫耳 FM)** — detects when your followed streamers go live, records audio hands-free, and manages the files for you. Runs unattended in the background.
+**An automated acquisition and archival system for Missevan FM (猫耳 FM) live audio streams**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/thestmitsuki/Missevan-FM-Recorder/blob/main/LICENSE)
-[![Version: 0.1.0](https://img.shields.io/badge/version-0.1.0-blue.svg)](https://github.com/thestmitsuki/Missevan-FM-Recorder/releases)
+[![Version: 0.2.0](https://img.shields.io/badge/version-0.2.0-blue.svg)](https://github.com/thestmitsuki/Missevan-FM-Recorder/releases)
 [![CI](https://img.shields.io/github/actions/workflow/status/thestmitsuki/Missevan-FM-Recorder/ci.yml?branch=main&label=CI)](https://github.com/thestmitsuki/Missevan-FM-Recorder/actions)
 [![Platform: Windows 10/11](https://img.shields.io/badge/platform-Windows%2010%2F11-lightgrey.svg)](https://github.com/thestmitsuki/Missevan-FM-Recorder)
 
 [中文](README.md) | **English**
 
-> ⚠️ **Disclaimer**: This software is provided for personal learning and research purposes only. Please comply with the Missevan FM terms of service and applicable laws. Copyright of recorded content belongs to its respective owners. The developer assumes no liability arising from the use of this tool.
+> ⚠️ **Disclaimer**: This software is provided for personal learning and research purposes only. Users are responsible for complying with the Missevan FM terms of service and applicable laws. Copyright of recorded content belongs to its respective owners. The developer assumes no liability arising from the use of this tool.
 
-## Features
+## Table of Contents
 
-- 🎙️ **Live monitoring** — polls your followed streamers for "on air" status. The polling interval and random jitter are configurable (default 120 s + 0–60 s jitter to reduce platform risk-control flags). "On air" is confirmed by double verification (API status + recording state), with automatic exponential backoff on HTTP 429 rate limits
-- 📹 **Automatic recording** — kicks off FFmpeg automatically when a stream goes live (audio track only). Supports M4A / MP3, segment-based recording, and bitrates of 64/128/192/256/320 kbps (default 128). The maximum number of concurrent recordings is configurable
-- 📁 **File management** — recordings are grouped by date (Today / Yesterday / This Week / This Month / Year-Month), with segments auto-collapsed into groups; search, date-range filtering, a built-in player with continuous playback (plays whole segment groups in sequence), plus rename and delete (files being recorded are protected from both)
-- 🏷️ **Streamer tags** — 5 fixed tags (Music / Singing / Daily / ASMR / Chat) for categorization and filtering
-- 🔔 **System notifications** — native Windows toast notifications sent under the app's own identity (AUMID registered by the app itself — no PowerShell fallback), with the system default sound; event types and sound can be configured
-- 🖥️ **System tray** — minimizes to the tray and keeps running in the background; the tray menu shows live recording status and recent files (up to 5), clickable to open
-- 🌐 **Bilingual UI** — full i18n (Simplified Chinese / English), light / dark / system theme, and adjustable accent color
-- 🧪 **Debug panel** — live logs, network request tracing, detector/recorder engine status, and a mock live-streaming environment (off by default; enable it under **Settings → About**), with one-click export of a sanitized diagnostic report
+- [1. Project Overview](#1-project-overview)
+- [2. Operating Principle](#2-operating-principle)
+- [3. Functional Specifications](#3-functional-specifications)
+- [4. System Requirements](#4-system-requirements)
+- [5. Installation & Deployment](#5-installation--deployment)
+- [6. Usage Guide](#6-usage-guide)
+- [7. Engineering & Development](#7-engineering--development)
+- [8. Contributing](#8-contributing)
+- [9. License](#9-license)
 
-**Also worth mentioning**: first-run setup wizard (environment checks for FFmpeg / ffprobe / disk space / write permission, with automatic download of a portable FFmpeg build) · per-streamer Cookie support (for streams that require authentication) · automatic cleanup (retention days / total size cap / scheduled time) · automatic update checks · optional start-on-boot · single-instance enforcement.
+## 1. Project Overview
 
-## Quick Start
+Missevan FM Recorder is a desktop application for Windows 10 / 11 (built with Tauri 2; Rust backend, Vue 3 frontend) that automates the acquisition, archival, and management of **audio streams** from streamers' live rooms on the Missevan FM platform.
 
-1. **Download** — grab the latest NSIS installer from the [Releases](https://github.com/thestmitsuki/Missevan-FM-Recorder/releases) page. Requires Windows 10 / 11 (WebView2 Runtime needed; built into Windows 11)
-2. **Install & configure** — run the installer; the first-run wizard walks you through the output directory, recording format, and other basics, and checks / downloads FFmpeg automatically (you can also drop it into the `ffmpeg/` folder next to the executable)
-3. **Add streamers** — click **+** on the Live page and paste a room URL (e.g. `https://fm.missevan.com/live/100000001`) to start monitoring
+The system is designed to run unattended: it continuously monitors the live status of followed streamers, triggers audio recording when a stream starts, and provides structured organization and retrieval of the recorded artifacts. Only the audio track is captured — no video or danmaku content is involved.
 
-## Usage
+**Technology stack**:
 
-### Getting a room URL
+| Layer | Technology |
+| --- | --- |
+| Desktop framework | Tauri 2 (dual-window: main window + setup wizard) |
+| Backend | Rust (2021 edition) · tokio async runtime |
+| Frontend | Vue 3.5 · TypeScript (strict) · Vite 8 · Pinia 4 · Tailwind CSS 4 |
+| i18n | vue-i18n 10 (Simplified Chinese / English) |
+| Recording engine | FFmpeg / ffprobe (child-process invocation) |
 
-- Open the stream in the Missevan FM mobile app or web client and copy the address bar link; the format is `https://fm.missevan.com/live/<number>`
-- Paste the URL when adding a streamer in the app — the room ID is extracted automatically and the streamer's name and avatar are fetched. If a stream requires a signed-in session, fill in a Cookie in the streamer settings
+## 2. Operating Principle
 
-### Streamers and tags
+The system follows a main pipeline of "**polling detection → recording execution → file archival → event notification**":
 
-- Toggle automatic monitoring per streamer, set an alias and tags
-- Tags power the category filter on the Files page; each streamer can have multiple tags
+```
+Periodic live-status polling → live-state determination → disk precheck
+→ stream URL acquisition → delay-window recheck → FFmpeg child process
+→ segment-based audio write → process monitoring (5 s interval)
+→ end-of-recording cleanup → file-cache refresh → event notification
+```
 
-### Key settings
+### 2.1 Live Detection
 
-- **Recording** (Settings → Recording): output directory, format (M4A / MP3), bitrate, segment length, filename template, max concurrent recordings
-- **Notifications** (Settings → Notifications): master switch, event types, sound on/off
-- **General** (Settings → General): language, theme, start on boot, close behavior (minimize to tray / exit)
-- **Debug panel** (Settings → About): enabling it adds a "Debug Panel" entry to the main navigation
-- **Logs**: stored in `%APPDATA%\missevan-recorder\logs\`, rotated daily
+- The detection loop polls at a configurable interval (default `check_interval_secs = 120`), with an additional 0–60 s random jitter per cycle to reduce periodic request signatures against the platform API.
+- Live-state determination uses **double verification**: the platform API status and the recording-side state are merged (`merge_live_state`) into a final live status, avoiding misjudgment from a single data source.
+- Request errors are handled by category: server errors (5XX / HTTP 429) trigger retry with exponential backoff, with additional cooldown on 429; network errors trigger retry; format and unknown errors do not retry.
 
-## FAQ
+### 2.2 Recording Execution
 
-- **Why isn't going-live detected?** Check that automatic monitoring is enabled for that streamer. The default polling interval is 120 s, so a newly started stream is picked up within one interval (plus random jitter) at most
-- **The recording is silent / the file is empty?** Make sure FFmpeg is installed correctly (Settings → Advanced, or the wizard's environment check). Some streams may require a Cookie (set it in the streamer settings)
-- **FFmpeg download failed?** The wizard offers a manual download link; alternatively, get FFmpeg from [ffmpeg.org](https://ffmpeg.org/download.html) and put `ffmpeg.exe` / `ffprobe.exe` in the `ffmpeg/` folder next to the executable, or point the app at them in settings
-- **No notification sound?** Check Windows "Focus Assist / Do Not Disturb" settings; notification sounds follow the system default (and can be turned off in notification settings)
-- **Shows "on air" but nothing was recorded?** Going-live is double-verified (API + recording state); brief discrepancies during API flakiness are normal and self-correct on the next polling round
-- **Why are recordings stored in a folder named after the streamer, with the streamer's name in the filename?** The default filename template is `{anchor_name}/{date}_{time}_{anchor_name}_{index}.{ext}` — the streamer's name is a stable identifier (live titles change, so they are not used in filenames). Files go into a per-streamer folder with date/time and a per-streamer sequence number in the name. You can customize the template under Settings → Recording; supported placeholders: `{anchor_name}` (streamer name), `{room_id}` (room ID), `{date}` (date), `{time}` (time), `{index}` (per-streamer recording sequence), `{ext}` (format extension)
-- **Where are the logs? How do I report a bug?** Logs live in `%APPDATA%\missevan-recorder\logs\` (rotated daily). You can also export a full sanitized diagnostic report from the Debug Panel — attach it when reporting issues
-- **Why doesn't my setting take effect?** Start-on-boot, close behavior, tray visibility, and log level take effect after restarting the app (marked "restart required" in the UI). "Custom DNS" is a UI placeholder not yet wired into the runtime (marked "not effective")
+- Once a live stream is confirmed, the system sequentially: prechecks disk space (threshold `disk_space_limit_gb`) → resolves the stream URL → enters a cancellable delay window (`pre_record_delay_secs`) → rechecks that the stream is still live and not already recording, then launches the FFmpeg child process.
+- FFmpeg captures the audio track only (`-vn`), supporting M4A / MP3 containers, segment-based recording (`-f segment`), and bitrates of 64 / 128 / 192 / 256 / 320 kbps (default 128).
+- Concurrency protection: per-streamer deduplication, an active-task cap, and a process-level single-instance file lock form three layers of defense against duplicate recordings.
+- On abnormal child-process exit, the system retries with exponential backoff (crash circuit breaker) and retains `.part` residue markers for troubleshooting.
 
-## Known Limitations
+### 2.3 File Management & Archival
 
-- "Custom DNS" (Settings → Network) is marked "not effective" — it is a UI placeholder with no runtime wiring yet
-- Global shortcuts are display-only placeholders; the backend registration is not implemented and editing is disabled (planned for a future release)
-- The performance monitor in the Debug Panel is an experimental placeholder
-- Danmaku (bullet-comment) recording is not planned — this tool records audio only
-- Some settings (start-on-boot / close behavior / tray visibility / log level) only take effect after restarting the app
+- The output directory is maintained by a file-cache scanning service. The frontend groups files by date (Today / Yesterday / This Week / This Month / Year-Month); segments auto-collapse into groups and support continuous playback.
+- Search, date filtering, rename, and delete are supported; **files being recorded are protected** from rename and deletion.
+- End-of-recording cleanup deletes expired files by retention days (`retention_days`) or a total-size cap (`max_total_gb`).
 
-## Development
+### 2.4 Notifications & Resident Operation
 
-### Tech Stack
+- A notification dispatcher routes events through a filter matrix (master switch + 7 event categories): native Windows toast (registered via app AUMID), system sound, and an in-app notification center (ring buffer of 500 entries).
+- The system tray stays resident with a dynamic menu showing recording status and recent recordings (up to 5); closing the main window hides it to the tray by default, and exit runs a unified shutdown flow.
+- A first-run wizard performs environment checks (FFmpeg / ffprobe candidates, disk space, write permissions) and can automatically download the portable FFmpeg build on Windows.
+- Update checks parse the `v{version}` tag from the GitHub Releases API and compare it against the current version.
 
-- Frontend: Vue 3 · Vite · TypeScript · Pinia · vue-i18n · Tailwind CSS v4 · shadcn-vue (local components)
-- Backend: Rust · Tauri 2 · tokio · reqwest
+## 3. Functional Specifications
 
-### Build
+| Domain | Specification |
+| --- | --- |
+| Live monitoring | Configurable interval (default 120 s + 0–60 s jitter); double-verified live determination; exponential backoff on 429 |
+| Auto recording | Audio track only; M4A / MP3; 64–320 kbps (default 128); segment recording; configurable concurrency cap |
+| File management | Date grouping; segment collapsing; continuous playback; search / filter / rename / delete; protection for active recordings; auto cleanup |
+| Streamer tags | 5 fixed categories: Music / Singing / Daily / ASMR / Chat |
+| Notifications | Native Windows toast + sound; configurable event types and sounds |
+| Background operation | System tray; optional start on boot; single-instance enforcement |
+| Bilingual UI | Simplified Chinese / English; light / dark / system themes |
+| Debug panel | Live logs / network records / engine state / Mock environment (off by default); sanitized diagnostic report export |
+| Data safety | Atomic config writes with automatic backups (5 retained); sensitive fields obfuscated on export (enc:v1:) |
+
+## 4. System Requirements
+
+| Item | Requirement |
+| --- | --- |
+| OS | Windows 10 / 11 (Linux is compilable; official installers are Windows NSIS only) |
+| Runtime | WebView2 Runtime (built into Windows 11; required on Windows 10) |
+| Recording engine | FFmpeg / ffprobe (fetched by the first-run wizard, or placed in the `ffmpeg/` folder next to the app) |
+
+## 5. Installation & Deployment
+
+1. Download the latest installer from the [Releases](https://github.com/thestmitsuki/Missevan-FM-Recorder/releases) page.
+2. Run the installer; on first launch the setup wizard walks through the basic configuration (output directory, recording format, etc.).
+3. After the wizard completes environment checks and FFmpeg readiness validation, the main interface opens and the detection loop starts.
+
+## 6. Usage Guide
+
+### 6.1 Adding Streamers
+
+On the **Live** page, click **＋** and enter a room URL (format: `https://fm.missevan.com/live/{numeric room id}`). The system automatically resolves the room ID, streamer name, and avatar.
+
+> Some rooms require an authenticated session to record; a per-streamer Cookie can be configured in the streamer settings.
+
+### 6.2 Configuration
+
+| Domain | Entry | Key parameters |
+| --- | --- | --- |
+| Recording | Settings → Recording | Output directory, container format, bitrate, segment policy, concurrency cap, auto cleanup |
+| Notifications | Settings → Notifications | Event types, sounds |
+| General | Settings → General | Language, theme, start on boot |
+| Diagnostics | Settings → About | Debug panel, diagnostic report export |
+
+### 6.3 Data Locations
+
+- Recordings: output directory, organized by **streamer name / date** (default filename template: `{streamer}/{room_id}/{date}/{time}.{ext}`).
+- Configuration and logs: `%APPDATA%\missevan-recorder\` (logs under the `logs/` subdirectory).
+
+## 7. Engineering & Development
+
+> For architecture details, command/event lists, and the test matrix, see the [`DOCS/`](DOCS/README.md) collection (in Chinese).
+
+**Code organization** (three-layer backend with unidirectional dependencies):
+
+| Layer | Responsibility |
+| --- | --- |
+| `api` | Thin Tauri command layer: parameter validation → domain calls → error wrapping (9 modules, 54 commands) |
+| `domain` | Business rules (config / detection / recording / file services / platform client / tools), pure Rust, unit-testable |
+| `infrastructure` | Platform adaptation (state / logging / notifications / tray / health checks / single-instance lock) |
+
+**Build & verification**:
 
 ```bash
-# Frontend (install deps + type-check + build)
-npm ci
-npx vue-tsc -p tsconfig.app.json --noEmit
-npm run build
-
-# Backend (Windows)
-cd src-tauri
-cargo check
-cargo test
-cd ..
-
-# Dev run / package the installer
-npm run tauri dev
-npm run tauri build
+npm ci                     # Install dependencies
+npm run build              # Frontend type-check (vue-tsc) + build
+npm run tauri dev          # Dev mode (hot reload)
+npm run tauri build        # Package the installer
+cd src-tauri && cargo test # Backend unit tests
 ```
 
-### Project Layout
+CI (`.github/workflows/ci.yml`) runs on every push / PR: frontend `vue-tsc` type-check + `vite build`; backend `cargo check` + `cargo test`.
 
-```
-src/              Frontend (views / stores / services / components / locales)
-src-tauri/src/    Backend (api Tauri commands / domain logic / infrastructure)
-src-tauri/icons/  App icons
-.github/          CI workflows (frontend type-check + build, backend cargo check + test) and issue templates
-```
+## 8. Contributing
 
-## Contributing
+Issues and pull requests are welcome. For bug reports, please use the [bug report template](.github/ISSUE_TEMPLATE/bug_report.yml) and include the app version, OS, reproduction steps, and logs (`%APPDATA%\missevan-recorder\logs\`).
 
-Issues and pull requests are welcome:
-
-1. **Report a bug** — file an issue via [GitHub Issues](https://github.com/thestmitsuki/Missevan-FM-Recorder/issues) using the [bug report template](https://github.com/thestmitsuki/Missevan-FM-Recorder/issues/new?template=bug_report.yml). Please include: app version (Settings → About), OS and architecture, reproduction steps, and the app logs (`%APPDATA%\missevan-recorder\logs\`) or a diagnostic report exported from the Debug Panel
-2. **Submit code** — fork the repository, make your changes on a separate branch, and open a pull request. CI automatically runs the frontend type-check and build plus the backend `cargo check` and tests — make sure everything passes before requesting a merge
-3. **Code style** — match the existing conventions (strict TypeScript on the frontend; rustfmt defaults and the api / domain / infrastructure layering on the backend)
-
-## License
+## 9. License
 
 [MIT](LICENSE) © thestmitsuki
 

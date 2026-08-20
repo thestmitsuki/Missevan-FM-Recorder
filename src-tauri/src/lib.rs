@@ -12,15 +12,12 @@ use domain::recorder::engine::FfmpegRecorder;
 use infrastructure::logging::network::global_store as network_log_store;
 use infrastructure::logging::setup::init_logging;
 use infrastructure::notification::dispatcher::NotificationDispatcher;
-use infrastructure::state::app_state::{AvatarCache, RecorderState};
+use infrastructure::state::app_state::{AvatarCache, AvatarNegativeCache, RecorderState};
 use infrastructure::state::mock_store::MockStore;
+// TrayManager 类型在 close handler 的 try_state 查询中全平台引用（Linux 不实例化
+// 托盘，try_state 恒为 None → 关闭即退出；tray 模块在 Linux 仍编译，见 #12）
 use infrastructure::tray::{self, TrayManager};
 
-use crate::domain::config::autostart::AutostartStore;
-#[cfg(windows)]
-use crate::domain::config::autostart::WinregAutostart;
-#[cfg(not(windows))]
-use crate::domain::config::autostart::NoopAutostart;
 use crate::domain::services::file_cache::{FileCache, FileCacheHandle, FileCacheManager};
 use domain::config::manager::ConfigManager;
 use domain::config::model::{AnchorConfig, Config};
@@ -137,12 +134,28 @@ pub fn run() {
         .ok()
         .and_then(|p| p.parent().map(|p| p.to_path_buf()))
         .unwrap_or_else(|| std::path::PathBuf::from("."));
+    // 配置目录（P1-15 配置目录迁移，决策 #5）：Linux 用 `~/.config/missevan-recorder`
+    //（Arch 上 exe_dir=/usr/bin 只读，程序目录旁无法写配置；dirs::config_dir()
+    //  遵守 XDG_CONFIG_HOME）；Windows 保持 `{exe_dir}/config` 不变（老用户数据
+    //  路径零回归）。日志目录上方 app_data_dir 已是 dirs::data_dir()（Linux →
+    //  `~/.local/share/missevan-recorder`），无需再迁移。
+    #[cfg(target_os = "linux")]
+    let config_dir = dirs::config_dir()
+        .map(|p| p.join("missevan-recorder"))
+        .unwrap_or_else(|| exe_dir.join("config"));
+    #[cfg(not(target_os = "linux"))]
     let config_dir = exe_dir.join("config");
     let log_level = ConfigManager::new(config_dir.clone())
         .load()
         .map(|c| c.global.log_level.clone())
         .unwrap_or_else(|_| String::from("info"));
-    let (_log_guard, log_buffer, log_handle_slot) = init_logging(&app_data_dir, &log_level);
+    // G4/L8：第 4 个返回值 = 日志文件写失败计数器（CountingWriter 统计）。
+    // 当前版本以「每失败阶段一次性 tracing::error!」作为用户可见提醒（调试页
+    // 实时日志可见），计数器留作可查询信号（未来可接入调试面板/通知）。
+    // U5：第 5 个返回值 = 日志级别热更新句柄（LogLevelReload），托管为 state，
+    // save_config / import_config 落盘后调用即时生效（见 config_cmds）。
+    let (_log_guard, log_buffer, log_handle_slot, _log_write_errors, log_level_reload) =
+        init_logging(&app_data_dir, &log_level);
     // 注册进程级 panic hook：panic 先写 tracing（文件 + 缓冲 + 控制台），再链式调用
     // 默认 hook（stderr）——修复「线程 panic 被 JoinHandle 静默吞掉」问题
     //（曾导致录制启动 panic 后无日志、无录音文件——panic 只进 stderr 且被异步框架
@@ -154,14 +167,14 @@ pub fn run() {
 
     // ── 单实例锁（双录防御 #4：防应用双开）──
     // 双开时两个实例各自持有独立检测循环 / 任务表 / FFmpeg 进程表，会为同一
-    // 主播同时启动两个录制进程（双录根因候选②）。Windows 命名互斥体：
-    // 第二实例启动时检测到互斥体已存在，直接退出（日志说明，不弹窗）。
-    // 实现取舍（自实现而非 tauri-plugin-single-instance）见
-    // infrastructure::single_instance.rs 模块注释。
+    // 主播同时启动两个录制进程（双录根因候选②）。全平台统一 fs2 文件锁
+    // （Windows LockFileEx / Unix flock）：第二实例启动时检测到锁被占用，直接
+    // 退出（日志说明，不弹窗）。实现取舍（自实现而非 tauri-plugin-single-instance）
+    // 见 infrastructure::single_instance.rs 模块注释。
     let Some(_single_instance_guard) = infrastructure::single_instance::acquire(
         "missevan-recorder-single-instance",
     ) else {
-        tracing::warn!("检测到应用已在运行（单实例互斥体被占用），本实例退出");
+        tracing::warn!("检测到应用已在运行（单实例锁被占用），本实例退出");
         return;
     };
 
@@ -173,15 +186,14 @@ pub fn run() {
     let config_manager = Arc::new(ConfigManager::new(config_dir).with_notifier(notifier.clone()));
     #[cfg(test)]
     let config_manager = Arc::new(ConfigManager::new(config_dir));
-    // 开机自启注册表读写（Windows：winreg；其他平台：空实现）
-    #[cfg(windows)]
-    let autostart_store: Arc<dyn AutostartStore> = Arc::new(WinregAutostart::default());
-    #[cfg(not(windows))]
-    let autostart_store: Arc<dyn AutostartStore> = Arc::new(NoopAutostart::default());
+    // 开机自启：由 tauri-plugin-autostart 托管（Windows：HKCU Run 键；Linux：
+    // XDG autostart desktop 文件），插件在 setup 期自动 manage AutoLaunchManager，
+    // 命令侧经 app.autolaunch() 读写（见 config_cmds::set_autostart）
     let mock_store = Arc::new(MockStore::new());
     let recorder_state = RecorderState::new(mock_store.clone());
     let live_cache = Arc::new(Mutex::new(HashMap::<String, bool>::new()));
     let avatar_cache: AvatarCache = Arc::new(Mutex::new(HashMap::new()));
+    let avatar_negative_cache: AvatarNegativeCache = Arc::new(Mutex::new(HashMap::new()));
     let file_cache: FileCacheHandle = Arc::new(Mutex::new(FileCache::new()));
     let detection_wake = Arc::new(tokio::sync::Notify::new());
     // 共享录制引擎（双录防御 #2/#3 的前提）：进程表全局唯一——每个录制任务
@@ -192,21 +204,40 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
+        // 开机自启（tauri-plugin-autostart）：Builder 配置 app_name="MissevanRecorder"
+        // 保留 Windows 注册表旧值名、arg("--minimized") 保留旧自启命令参数
+        //（auto_launch crate 在 Windows 写 `"{exe}" --minimized`，与旧行为一致）
+        .plugin(
+            tauri_plugin_autostart::Builder::new()
+                .app_name("MissevanRecorder")
+                .arg("--minimized")
+                .build(),
+        )
+        // 打开文件夹（tauri-plugin-opener）：open_path / reveal_item_in_dir
+        .plugin(tauri_plugin_opener::init())
         .manage(recorder_state.clone())
+        // 共享录制引擎托管（B2 退出兜底）：do_shutdown 经 try_state 取回并
+        // 强制终止剩余录制进程（FfmpegRecorder 本身由 start_recording 闭包
+        // 克隆持有，此处仅多一份 Arc）
+        .manage(recorder_shared.clone())
         .manage(config_manager.clone())
-        .manage(autostart_store.clone()) // 开机自启注册表读写（set_autostart）
         .manage(notifier.clone())
         .manage(live_cache.clone())
         .manage(avatar_cache.clone()) // 注册头像缓存
+        .manage(avatar_negative_cache.clone()) // 注册头像失败负缓存（O2）
         .manage(file_cache.clone())
         .manage(detection_wake.clone()) // 检测循环唤醒信号（finish_wizard 触发一次立即检测）
         .manage(log_buffer.clone()) // 调试日志环形缓冲（get_logs / clear_logs）
         .manage(network_store.clone()) // 网络请求插桩缓冲（get_network_logs / clear_network_logs）
+        .manage(log_level_reload.clone()) // 日志级别热更新句柄（U5：save_config/import_config 落盘后调用）
         // ── 关闭行为（Task 17：规格 1.1 / 设计 §11.5）──
-        // 决策见 infrastructure::tray::decide_close_action（配置矩阵 × 托盘实际可用性）：
-        //   tray × show_tray=true 且托盘存在且可见 → prevent_close + hide（驻留托盘）
+        // 决策见 infrastructure::tray::decide_close_action（close_behavior × 托盘实际可用性）：
+        //   close_behavior=tray 且托盘存在且可见 → prevent_close + hide（驻留托盘）
         //   其余组合 → 不拦截，窗口正常关闭后走统一优雅退出（等录制任务 ≤5s 后 app.exit）
         // （托盘创建失败 / 运行中禁用时一律退出，避免隐藏窗口后应用「人间蒸发」）
+        // Linux：不创建托盘（决策 #2）→ try_state 取不到 TrayManager → tray_enabled=None
+        // → decide_close_action 恒为 Exit → 关闭窗口即退出（符合 Linux 预期行为）
+        // 托盘可见性由 close_behavior 派生（show_tray 字段已简化不再消费，见 tray 模块）
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 // 仅主窗口参与关闭行为；向导窗口始终直接关闭
@@ -216,26 +247,23 @@ pub fn run() {
                 let app = window.app_handle();
                 let config = app.state::<Arc<ConfigManager>>().load().unwrap_or_default();
                 let close_behavior = config.global.close_behavior.clone();
-                let show_tray = config.global.show_tray;
                 // 托盘实际可用性：try_state 为 None = 创建失败；
-                // enabled() 与运行中 show_tray 切换（reconcile_tray → set_enabled）同步
+                // enabled() 与运行中 close_behavior 派生可见性（reconcile_tray → set_enabled）同步
                 let tray_enabled = app.try_state::<Arc<TrayManager>>().map(|t| t.enabled());
-                match tray::decide_close_action(&close_behavior, show_tray, tray_enabled) {
+                match tray::decide_close_action(&close_behavior, tray_enabled) {
                     tray::CloseAction::HideToTray => {
                         api.prevent_close();
                         let _ = window.hide();
                         tracing::info!(
-                            "关闭请求已拦截：最小化到系统托盘（close_behavior={}, show_tray={}）",
-                            close_behavior,
-                            show_tray
+                            "关闭请求已拦截：最小化到系统托盘（close_behavior={}）",
+                            close_behavior
                         );
                     }
                     tray::CloseAction::Exit => {
                         // 不 prevent_close：窗口正常关闭，随后统一优雅退出
                         tracing::info!(
-                            "关闭请求：执行优雅退出（close_behavior={}, show_tray={}, 托盘可用={}）",
+                            "关闭请求：执行优雅退出（close_behavior={}, 托盘可用={}）",
                             close_behavior,
-                            show_tray,
                             tray_enabled.is_some_and(|e| e)
                         );
                         tray::request_shutdown(app);
@@ -321,7 +349,9 @@ pub fn run() {
             }
 
             // ── 启动配置与参数（Task 17）──
-            // show_tray：决定托盘图标是否可见（可见性可运行中经 reconcile_tray 切换）
+            // 托盘图标可见性由 close_behavior 派生（show_tray 字段已简化不再消费，见
+            // tray 模块）：「最小化到托盘」→ 显示图标；「直接退出」→ 隐藏（可见性可
+            // 运行中经 reconcile_tray 切换）。
             // --minimized（Task 14 自启参数）：仅当托盘创建成功时生效，
             // 否则回退为显示主窗口——托盘失败 + 窗口不可见 = 应用「人间蒸发」
             let startup_config = app.state::<Arc<ConfigManager>>().load().unwrap_or_default();
@@ -358,7 +388,17 @@ pub fn run() {
                     }
                 }
             }
-            let show_tray = startup_config.global.show_tray;
+            // 托盘图标可见性（可见性可运行中经 reconcile_tray 切换）；
+            // Linux 无托盘（决策 #2），该配置无实际作用，置 false 避免未使用警告
+            #[cfg(not(target_os = "linux"))]
+            let show_tray = tray::should_hide_to_tray(&startup_config.global.close_behavior);
+            #[cfg(target_os = "linux")]
+            let show_tray = false;
+            // Linux 无托盘（决策 #2）：--minimized 无意义，恒显示主窗口；
+            // Windows/macOS 仅在托盘可见时生效（托盘失败时回退显示主窗，避免人间蒸发）
+            #[cfg(target_os = "linux")]
+            let start_minimized = false;
+            #[cfg(not(target_os = "linux"))]
             let start_minimized = std::env::args().any(|a| a == "--minimized") && show_tray;
 
             // ── 双窗口首次运行逻辑 ──
@@ -421,7 +461,10 @@ pub fn run() {
 
             // ── 系统托盘（Task 17：规格 1.1 / 设计 §11.5）──
             // 图标 + 右键菜单（显示主窗口 / 录制中：N / 最近录制 5 条 / 退出应用）；
-            // show_tray=false 时创建但隐藏（运行中可经设置页 reconcile_tray 切换可见性）
+            // close_behavior=exit 时创建但隐藏（运行中可经设置页 reconcile_tray 切换可见性）。
+            // Linux 不做托盘（决策 #2）：不实例化 TrayManager（tray 模块仍编译，
+            // 关闭行为经 try_state=None 恒走退出，见上方 on_window_event 注释）
+            #[cfg(not(target_os = "linux"))]
             let tray_ok = match TrayManager::new(&handle, show_tray) {
                 Ok(manager) => {
                     manager.spawn_refresher(app_state_arc.clone());
@@ -433,6 +476,8 @@ pub fn run() {
                     false
                 }
             };
+            #[cfg(target_os = "linux")]
+            let tray_ok = false;
 
             // ── 主窗口可见性（Task 17 修复：必须在托盘创建**成功之后**决定）──
             // --minimized 仅当托盘创建成功时生效（驻留托盘，主窗保持隐藏）；
@@ -473,6 +518,7 @@ pub fn run() {
                 detection_wake.clone(),                     // 手动唤醒信号（finish_wizard 触发一次立即检测）
                 recorder_state.shutdown_notify.clone(),     // 退出信号（Task 17：优雅退出时停止循环）
                 detector_stats, // 检测统计（get_detector_stats / trigger_detection_now / reset_detector_stats）
+                notifier_arc.clone(), // S3：磁盘阈值每轮检查的 DISK_LOW 预警
             ));
             // 托管检测循环：调试命令（get_detector_stats / trigger_detection_now / reset_detector_stats）
             app.manage(detection_loop.clone());
@@ -650,6 +696,34 @@ pub fn run() {
                     });
                 },
             );
+
+            // ── H3：启动清理上次异常退出的孤儿 ffmpeg 产物 ──
+            // 应用被强杀（kill -9 / 断电 / 系统更新自动重启）时，kill_on_drop 不
+            // 触发——旧 ffmpeg 进程可能仍在写输出文件，重启后若不清理会与新录制
+            // 双写同一文件（数据损坏/双录），或留下半成品文件。单实例锁（lib.rs
+            // 上方）已保证无并发实例；此处扫描**当前输出目录**，按活动录制标记
+            // （{output}.recording）精确清理上次异常退出的产物；无规则可循的
+            // 半成品仅告警不删除。同步执行（扫描+删除均为小操作）：必须在检测
+            // 循环启动**之前**完成——清理只认残留标记，若与新录制并发，可能误删
+            // 刚创建的活动标记对应文件（竞态）。失败静默（函数内部容错），不阻断启动。
+            {
+                let orphan_output_dir = startup_config.global.output_dir.clone();
+                let (removed, markers, warned) = crate::domain::recorder::engine::
+                    cleanup_orphan_recordings(&orphan_output_dir, std::path::Path::new(&orphan_output_dir));
+                tracing::info!(
+                    "[孤儿清理] 启动清理完成: 删除 {} 个残留文件 / 清理 {} 个异常标记 / 仅告警 {} 个（输出目录: {}）",
+                    removed,
+                    markers,
+                    warned,
+                    orphan_output_dir
+                );
+                // R4：孤儿 ffmpeg **进程**终止（当前占位：不做事）。位于产物清理
+                // 之后、检测循环启动之前——单实例锁已持有、无并发录制，实装后
+                // 命令行匹配不会误杀本实例进程。方案评估与限制见
+                // engine.rs `terminate_orphan_ffmpeg` 注释（Windows Job Object /
+                // 命令行匹配；Linux /proc cmdline；PDEATHSIG 不适用）。
+                crate::domain::recorder::engine::terminate_orphan_ffmpeg();
+            }
 
             // 启动统一的检测循环
             tauri::async_runtime::spawn(async move {

@@ -14,7 +14,12 @@ import SheetOverlay from "./SheetOverlay.vue"
 
 interface SheetContentProps extends DialogContentProps {
   class?: HTMLAttributes["class"]
-  side?: "top" | "right" | "bottom" | "left"
+  /**
+   * 弹层方位：top/right/bottom/left 为边缘滑入式 Sheet（自带 slide 动效与定位）；
+   * none 为无预设动效/定位的裸弹层（居中弹窗场景由调用方 class 提供定位与动画，
+   * 避免残留 side 的 slide-in/out 动画类）。
+   */
+  side?: "top" | "right" | "bottom" | "left" | "none"
 }
 
 defineOptions({
@@ -46,6 +51,7 @@ const forwarded = useForwardPropsEmits(delegatedProps, emits)
           && 'data-[state=closed]:slide-out-to-top data-[state=open]:slide-in-from-top inset-x-0 top-0 h-auto border-b',
         side === 'bottom'
           && 'data-[state=closed]:slide-out-to-bottom data-[state=open]:slide-in-from-bottom inset-x-0 bottom-0 h-auto border-t',
+        side === 'none' && '',
         props.class)"
       v-bind="{ ...$attrs, ...forwarded }"
     >

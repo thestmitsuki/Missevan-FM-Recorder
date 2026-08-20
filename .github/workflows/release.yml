@@ -1,14 +1,12 @@
 name: Build Release
 
 on:
-  workflow_dispatch:               # 手动触发
-  push:
-    tags:
-      - 'v*'                       # 推送 v 开头的标签时自动触发
+  workflow_dispatch: # 仅手动触发构建
 
 jobs:
-  build-release:
-    name: Build Tauri App (Windows)
+  # ================= Windows: NSIS 安装包 + 单文件绿色版 EXE =================
+  build-windows:
+    name: Windows (NSIS + Portable EXE)
     runs-on: windows-latest
     steps:
       - name: Checkout
@@ -30,32 +28,162 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             src-tauri/target
-          key: release-cargo-${{ runner.os }}-${{ hashFiles('src-tauri/Cargo.lock') }}
+          key: release-win-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
           restore-keys: |
-            release-cargo-${{ runner.os }}-
+            release-win-cargo-
 
       - name: Install dependencies
         run: npm ci
 
-      - name: Install Tauri CLI
-        run: npm install -g @tauri-apps/cli
+      - name: Build NSIS installer
+        run: npx tauri build --bundles nsis
 
-      - name: Build Tauri release
-        run: tauri build
+      - name: Prepare portable (green) single EXE
+        shell: pwsh
+        run: |
+          $version = (Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
+          # Tauri 会把前端资源内嵌进主程序,release 目录下的 exe 无需安装、
+          # 仅依赖系统自带的 WebView2 运行时,即单文件绿色版
+          Copy-Item src-tauri/target/release/missevan-recorder.exe "missevan-recorder_${version}_x64_portable.exe"
 
-      - name: Upload artifacts (workflow summary)
+      - name: Upload Windows artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: tauri-release-${{ github.ref_name }}
-          path: src-tauri/target/release/bundle/**/*
+          name: windows-${{ github.ref_name }}
+          path: |
+            src-tauri/target/release/bundle/nsis/*-setup.exe
+            missevan-recorder_*_portable.exe
+          if-no-files-found: error
 
-      - name: Create GitHub Release (for tags)
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
+  # ================= Linux: AppImage =================
+  build-appimage:
+    name: Linux (AppImage)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
         with:
-          files: src-tauri/target/release/bundle/**/*
-          draft: false
-          prerelease: false
-          generate_release_notes: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          node-version: 20
+          cache: npm
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo & target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: release-linux-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: |
+            release-linux-cargo-
+
+      - name: Install Linux system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential \
+            curl wget file libxdo-dev libssl-dev \
+            libayatana-appindicator3-dev librsvg2-dev
+          # Ubuntu 24.04 起 libfuse2 更名为 libfuse2t64;CI 下 Tauri 会以
+          # extract-and-run 方式运行 appimagetool,这里做兼容安装以防万一
+          sudo apt-get install -y libfuse2t64 || sudo apt-get install -y libfuse2 || true
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build AppImage
+        run: npx tauri build --bundles appimage
+
+      - name: Upload AppImage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-appimage-${{ github.ref_name }}
+          path: src-tauri/target/release/bundle/appimage/*.AppImage
+          if-no-files-found: error
+
+  # ================= Arch Linux: PKG 安装包 =================
+  build-arch-pkg:
+    name: Arch Linux (PKG)
+    runs-on: ubuntu-latest
+    container: archlinux/archlinux:base-devel
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Update system and install dependencies
+        # 官方 archlinux 容器为滚动更新基础镜像,先 -Syu 同步再装包;
+        # webkit2gtk-4.1/gtk3/libsoup3/librsvg 是 Tauri 2 在 Linux 构建与运行所需
+        run: |
+          pacman -Syu --noconfirm
+          pacman -S --noconfirm --needed base-devel rust nodejs npm openssl \
+            webkit2gtk-4.1 gtk3 libsoup3 librsvg ffmpeg
+
+      # 注:容器内 actions/cache 与 runner 用户权限不兼容,故此处不做缓存以保持稳定
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Build release binary (skip bundling)
+        # 只产出 release 二进制;AppImage 由 ubuntu 任务构建,PKG 在此手工组装
+        run: npx tauri build --no-bundle
+
+      - name: Assemble PKGBUILD and build PKG
+        run: |
+          set -euo pipefail
+          version=$(node -p "require('./src-tauri/tauri.conf.json').version")
+
+          # 1) 组装包内容(usr 树)
+          install -Dm755 src-tauri/target/release/missevan-recorder \
+            pkgbuild/src/usr/bin/missevan-recorder
+          install -Dm644 src-tauri/icons/icon.png \
+            pkgbuild/src/usr/share/icons/hicolor/512x512/apps/missevan-recorder.png
+          install -Dm644 src-tauri/icons/128x128.png \
+            pkgbuild/src/usr/share/icons/hicolor/128x128/apps/missevan-recorder.png
+          # install -D 不会为桌面文件创建 applications 目录,先补齐
+          mkdir -p pkgbuild/src/usr/share/applications
+          cat > pkgbuild/src/usr/share/applications/missevan-recorder.desktop <<'DESKTOP'
+          [Desktop Entry]
+          Type=Application
+          Name=Missevan Recorder
+          GenericName=猫耳FM录制器
+          Comment=猫耳 FM 直播自动录制工具
+          Exec=missevan-recorder
+          Icon=missevan-recorder
+          Terminal=false
+          Categories=AudioVideo;Audio;Utility;
+          StartupNotify=true
+          DESKTOP
+
+          # 2) 生成 PKGBUILD,package() 直接复制 usr 树
+          cat > pkgbuild/PKGBUILD <<EOF
+          pkgname=missevan-recorder
+          pkgver=${version}
+          pkgrel=1
+          pkgdesc="猫耳 FM 直播自动录制工具"
+          arch=('x86_64')
+          url="https://github.com/thestmitsuki/Missevan-FM-Recorder"
+          license=('MIT')
+          depends=('webkit2gtk-4.1' 'gtk3' 'libsoup3' 'librsvg' 'libappindicator-gtk3')
+          source=()
+          package() {
+            cp -r "\$srcdir/usr/." "\$pkgdir/"
+          }
+          EOF
+
+          # 3) makepkg 拒绝 root 运行,切换到 builder 用户执行
+          useradd -m builder
+          chown -R builder:builder pkgbuild
+          cd pkgbuild
+          su builder -c "makepkg -f --nodeps --skipinteg"
+
+      - name: Upload Arch PKG artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-arch-pkg-${{ github.ref_name }}
+          path: pkgbuild/*.pkg.tar.zst
+          if-no-files-found: error

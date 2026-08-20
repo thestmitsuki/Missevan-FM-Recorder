@@ -5,7 +5,13 @@
  * 进入页面时自动并发检查 4 项（FFmpeg / ffprobe / 磁盘空间 / 写入权限），
  * 每项以卡片展示；FFmpeg/ffprobe 异常提供「下载并安装」+ 进度条 + 手动下载链接；
  * 磁盘/写入异常提供「更改输出目录」（跳回第二页）；关键工具未过时「下一步」禁用
- * 并提示「请先解决错误项」；全部通过后自动将暂存配置写入全局配置文件。
+ * 并提示「请先解决错误项」。
+ *
+ * 写入时机（修复子代理 B）：本页**只做环境检查与 FFmpeg 下载，绝不落盘**——
+ * 配置文件的唯一写入点在向导最后一步「完成」按钮（CompleteStep 先 saveConfig
+ * 全量落盘、再 finishWizard）。FFmpeg 下载成功后路径暂存到 wizardStore.staged
+ * （download_ffmpeg 后端已不再写配置），完成时随 stagedToConfigPatch 一并写入。
+ * 中途任意步骤退出 → 无配置文件 → 下次启动仍进向导。
  */
 import { computed, onMounted, onUnmounted, reactive, ref } from "vue";
 import { useI18n } from "vue-i18n";
@@ -21,7 +27,6 @@ import {
 
 import { api } from "@/services/api";
 import { onDownloadProgress } from "@/services/events";
-import { useConfigStore } from "@/stores/configStore";
 import { useWizardStore } from "@/stores/wizardStore";
 import type { CheckResult, CheckStatus } from "@/types/health";
 
@@ -30,7 +35,6 @@ import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
 
 const { t } = useI18n();
-const configStore = useConfigStore();
 const wizardStore = useWizardStore();
 const { staged } = storeToRefs(wizardStore);
 
@@ -61,11 +65,6 @@ const checking = ref(false);
 const checkError = ref<string | null>(null);
 const cards = ref<CheckCard[]>([]);
 
-// ── 配置写盘状态（全部通过后自动写入全局配置） ──
-const saving = ref(false);
-const saveError = ref<string | null>(null);
-const savedOnce = ref(false);
-
 // ── FFmpeg 下载状态 ──
 const download = reactive<{
   active: boolean;
@@ -92,11 +91,8 @@ const toolsOk = computed(
     ffprobeCard.value?.status === "Passed",
 );
 
-const allPassed = computed(
-  () =>
-    cards.value.length === 4 &&
-    cards.value.every((c) => c.status === "Passed"),
-);
+// L6 审查跟进：磁盘低于阈值时后端返回 Failed、前端降级为 Warning（黄色，
+// 不阻塞下一步，提供「更改输出目录」入口）；下一步可用判定 = toolsOk。
 
 // ── 检查执行 ──
 function buildCards(results: CheckResult[]): CheckCard[] {
@@ -139,48 +135,12 @@ async function runChecks() {
       staged.value.diskThresholdGb,
     );
     cards.value = buildCards(report.results);
-    // 全部通过 → 自动写入全局配置（规格：第三页通过后才持久化）
-    if (allPassed.value && !savedOnce.value) {
-      await saveConfigNow();
-    }
+    // 写入时机（修复子代理 B）：本页只做环境检查，不再自动落盘——
+    // 配置文件的唯一写入点在向导最后一步「完成」按钮（CompleteStep.saveConfig）
   } catch (e) {
     checkError.value = String(e);
   } finally {
     checking.value = false;
-  }
-}
-
-// ── 配置写盘 ──
-async function saveConfigNow(): Promise<boolean> {
-  if (saving.value) return savedOnce.value;
-  saving.value = true;
-  saveError.value = null;
-  try {
-    // 先拉取后端最新配置再合并：下载 FFmpeg 后后端已把 ffmpeg_path/ffprobe_path 写入
-    // config.toml，若用陈旧的 configStore.config（ffmpeg_path=null）整体覆盖写盘，
-    // 下载的路径会丢。fetchConfig 后合并可确保这些字段不被 null 覆盖
-    await configStore.fetchConfig();
-    const merged = {
-      ...configStore.config,
-      // 首次引导写盘：标记未完成（第 4 步 finish_wizard 才置 true）——
-      // 若用户在写盘后、进入应用前退出，再次启动仍进引导窗（规格要求）
-      wizard_completed: false,
-      output_dir: staged.value.outputDir.trim(),
-      record_format: staged.value.recordFormat,
-      segment_seconds: staged.value.segmentSeconds,
-      disk_space_limit_gb: staged.value.diskThresholdGb,
-      autostart: staged.value.autostart,
-      close_behavior: staged.value.trayMinimize ? "tray" : "exit",
-    };
-    configStore.updateConfig(merged);
-    await configStore.saveConfig();
-    savedOnce.value = true;
-    return true;
-  } catch (e) {
-    saveError.value = String(e);
-    return false;
-  } finally {
-    saving.value = false;
   }
 }
 
@@ -192,7 +152,12 @@ async function startDownload() {
   download.percent = 0;
   download.stage = "";
   try {
-    await api.downloadFfmpeg();
+    const result = await api.downloadFfmpeg();
+    // 下载路径暂存到 wizardStore（后端不再写配置）：完成时随 stagedToConfigPatch 写入
+    wizardStore.setStaged({
+      ffmpegPath: result.ffmpeg_path,
+      ffprobePath: result.ffprobe_path,
+    });
     download.stage = "done";
     // 下载完成后自动再次检测（规格）
     await runChecks();
@@ -203,13 +168,9 @@ async function startDownload() {
   }
 }
 
-// ── 下一步（写盘失败则阻止进入完成页） ──
-async function handleNext() {
-  if (!toolsOk.value || saving.value) return;
-  if (!savedOnce.value) {
-    const ok = await saveConfigNow();
-    if (!ok) return;
-  }
+// ── 下一步（仅要求关键工具通过；配置在最后一步统一落盘） ──
+function handleNext() {
+  if (!toolsOk.value) return;
   emit("next");
 }
 
@@ -397,23 +358,6 @@ function stageLabel(stage: string): string {
           {{ t("wizard.retryDownload") }}
         </Button>
       </div>
-
-      <!-- 配置保存状态 -->
-      <div v-if="saving" class="flex items-center gap-2 text-xs text-muted-foreground">
-        <LoaderCircle class="size-3.5 animate-spin" />
-        {{ t("wizard.savingConfig") }}
-      </div>
-      <div
-        v-if="saveError"
-        class="flex items-center justify-between rounded-lg border border-destructive/40 bg-destructive/10 px-4 py-3"
-        role="alert"
-      >
-        <span class="text-xs text-destructive">{{ t("wizard.saveFailed", { error: saveError }) }}</span>
-        <Button variant="outline" size="sm" @click="saveConfigNow">
-          <RotateCw class="size-3.5" />
-          {{ t("wizard.saveRetry") }}
-        </Button>
-      </div>
     </div>
 
     <!-- 底部按钮 -->
@@ -429,7 +373,7 @@ function stageLabel(stage: string): string {
         >
           {{ t("wizard.fixErrorsFirst") }}
         </span>
-        <Button class="min-w-28" :disabled="!toolsOk || saving || !!saveError" @click="handleNext">
+        <Button class="min-w-28" :disabled="!toolsOk" @click="handleNext">
           {{ t("wizard.next") }}
         </Button>
       </div>

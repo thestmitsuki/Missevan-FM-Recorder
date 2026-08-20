@@ -103,6 +103,11 @@ export default {
     thisWeek: "本周",
     thisMonth: "本月",
     fileCount: "{count} 个文件",
+    uncategorized: "未分类",
+    sortBy: "排序方式",
+    sortLatest: "最新优先",
+    sortNameAsc: "名称 A→Z",
+    sortNameDesc: "名称 Z→A",
     fileDetails: "文件详情",
     fileName: "文件名",
     anchor: "主播",
@@ -114,13 +119,14 @@ export default {
     // ── 左操作栏 ──
     searchFiles: "搜索文件",
     refreshFiles: "刷新",
+    openOutputDir: "打开输出目录",
+    cleanupNow: "立即清理",
     filterFiles: "筛选",
     backToTop: "回到顶部",
     clearSearch: "清除搜索",
-    // ── 分段组 ──
-    segments: "{count} 个分段",
-    playGroup: "连续播放整组",
-    deleteGroup: "删除整组",
+    playAll: "播放全部",
+    deleteAll: "删除全部",
+    moreActions: "更多操作",
     // ── 条目菜单 ──
     play: "播放",
     rename: "重命名",
@@ -130,7 +136,7 @@ export default {
     // ── 播放器 ──
     nowPlaying: "正在播放",
     pause: "暂停",
-    segmentProgress: "第 {current}/{total} 段",
+    playerProgress: "第 {current}/{total} 个文件",
     playerVolume: "音量",
     playerSeek: "播放进度",
     playerError: "音频加载失败（文件可能不存在或超出内置播放器访问范围）",
@@ -143,12 +149,15 @@ export default {
     // ── 删除确认 ──
     deleteConfirmTitle: "删除文件",
     deleteConfirmMessage: "确定要删除此文件吗？此操作不可恢复。",
-    deleteGroupConfirmMessage:
-      "确定要删除此分段组（{count} 个分段）吗？此操作不可恢复。",
+    deleteFolderConfirmTitle: "删除全部文件",
+    deleteFolderConfirmMessage:
+      "确定要删除该主播本月全部 {count} 个文件吗？此操作不可恢复。",
     // ── 筛选面板 ──
     filterByAnchor: "按主播名筛选",
     filterByType: "按文件类型",
     allTypes: "全部类型",
+    formatM4A: "M4A",
+    formatMP3: "MP3",
     filterByDate: "按日期范围",
     startDate: "开始日期",
     endDate: "结束日期",
@@ -160,6 +169,15 @@ export default {
     renameFailed: "重命名失败：{error}",
     refreshFailed: "刷新失败：{error}",
     playFailed: "播放失败：{error}",
+    // ── 打开输出目录 / 立即清理（M4 接线 open_output_dir / run_cleanup_now）──
+    outputDirOpened: "已打开输出目录",
+    outputDirOpenFailed: "打开输出目录失败：{error}",
+    cleanupConfirmTitle: "立即清理录制文件",
+    cleanupConfirmMessage:
+      "将按保留天数与总量上限删除旧录制文件，此操作不可恢复。确定继续吗？",
+    cleanupSuccess: "已清理 {count} 个文件，释放 {size}",
+    cleanupNothing: "没有需要清理的文件",
+    cleanupFailed: "清理失败：{error}",
   },
 
   // ── Settings View（左导航 8 分类） ──
@@ -175,7 +193,6 @@ export default {
     unsavedTitle: "未保存的更改",
     unsavedMessage: "是否保存更改？",
     discard: "不保存",
-    restartHint: "部分更改将在下次启动后生效",
     restoreCategory: "恢复默认值",
     restoreAll: "全部恢复默认",
     restoreAllTitle: "恢复全部默认设置",
@@ -213,8 +230,7 @@ export default {
       closeBehavior: "关闭主窗口时",
       closeTray: "最小化到系统托盘",
       closeExit: "直接退出应用",
-      showTray: "在系统托盘中显示图标",
-      showTrayHint: "最小化后可通过托盘图标恢复窗口",
+      trayUnavailable: "当前系统（Linux）未集成系统托盘，此选项不可用；关闭窗口将直接退出程序，后台录制任务不受影响。",
       checkUpdates: "检查更新",
       checkUpdatesHint: "启动时自动检查新版本",
     },
@@ -235,13 +251,12 @@ export default {
       segmentSeconds: "分段间隔（秒）",
       templateTitle: "文件名模板",
       templateDesc: "支持变量，实时预览生成的示例文件名",
-      templatePlaceholder: "{anchor_name}/{date}_{time}_{anchor_name}_{index}.{ext}",
+      templatePlaceholder: "{anchor_name}/{date}_{time}_{anchor_name}.{ext}",
       tplVars: "变量",
       tplVarAnchorName: "主播名",
       tplVarRoomId: "房间号",
       tplVarDate: "日期（年月日）",
       tplVarTime: "时间（时分秒）",
-      tplVarIndex: "录制序号",
       tplVarExt: "文件扩展名",
       tplSampleAnchorName: "示例主播",
       tplPreviewLabel: "示例",
@@ -352,6 +367,7 @@ export default {
     shortcuts: {
       title: "全局快捷键",
       placeholder: "暂未生效",
+      disabledNotice: "快捷键功能当前版本暂未启用，相关设置将在后续版本开放",
       desc: "全局快捷键尚未接入后端注册，本分类仅作占位展示；以下为默认键位（编辑功能已禁用）",
       function: "功能",
       combo: "组合键",
@@ -363,7 +379,7 @@ export default {
     // ── 高级 ──
     advanced: {
       logLevelTitle: "日志级别",
-      logLevelHint: "调试时可改为 Debug 以获取更多信息；更改将在下次启动时生效",
+      logLevelHint: "调试时可改为 Debug 以获取更多信息；保存后立即生效",
       logLevel: {
         error: "Error",
         warn: "Warn",
@@ -397,8 +413,8 @@ export default {
       importModeDesc: "选择导入方式：",
       importModeMerge: "合并：仅覆盖文件中的字段，主播按 ID 合并（重复跳过）",
       importModeReplace: "替换：以文件内容覆盖全部配置（含主播列表）",
-      /** 后端 import_config 成功提示（部分字段重启后完全生效） */
-      importSuccess: "配置导入成功，重启后完全生效",
+      /** 后端 import_config 成功提示（日志级别已热更新即时生效，与后端通知一致） */
+      importSuccess: "配置导入成功，日志级别已即时生效",
       /** 重置确认对话框（后端 reset_config：删配置 + 重启） */
       resetConfirmMessage:
         "将删除全部配置并重启应用，重启后回到首次运行向导。确定继续吗？",
@@ -486,6 +502,7 @@ export default {
     diskThresholdHint: "当剩余空间低于此值时暂停新录制",
     autostart: "开机启动",
     trayMinimize: "关闭窗口时最小化到系统托盘",
+    trayUnavailable: "当前系统（Linux）未集成系统托盘，此选项不可用；关闭窗口将直接退出程序，后台录制任务不受影响。",
     theme: "主题颜色",
     themeLight: "亮色",
     themeDark: "暗色",
@@ -493,8 +510,8 @@ export default {
     previous: "上一步",
     next: "下一步",
     errOutputDirRequired: "输出路径不能为空",
-    errSegmentInvalid: "分段间隔必须为非负整数",
-    errThresholdInvalid: "磁盘空间阈值必须为正整数",
+    errSegmentInvalid: "分段间隔必须为 0–86400 的整数（0 表示不分割）",
+    errThresholdInvalid: "磁盘空间阈值必须为 1–100000 的整数（GB）",
     // 第三页：环境检查
     envTitle: "环境检查",
     envDesc: "正在检查运行环境，请稍候…",
@@ -522,6 +539,7 @@ export default {
     changeOutputDir: "更改输出目录",
     fixErrorsFirst: "请先解决错误项",
     saveFailed: "配置保存失败：{error}",
+    autostartFailed: "配置已保存，但开机自启设置失败：{error}",
     saveRetry: "重试保存",
     retryCheck: "重新检查",
     retryDownload: "重新下载",

@@ -21,6 +21,20 @@
 //! [`decide_close_action`]）、
 //! 菜单 id 解析（[`recent_index_from_menu_id`]）等纯逻辑拆为纯函数并配单测
 //! （本模块 `#[cfg(test)]`）。
+//!
+//! **show_tray 简化（修复子代理 B）**：早期「是否显示系统托盘图标」是独立于
+//! `close_behavior` 的开关，导致 `decide_close_action` 决策矩阵强耦合冗余
+//! （show_tray=false 时 close_behavior=tray 也强制 Exit）。现托盘图标可见性改由
+//! `close_behavior` 单一派生：「最小化到托盘」→ 自动显示图标（隐藏窗口后必须有
+//! 图标可恢复）；「直接退出」→ 隐藏图标。`GlobalConfig.show_tray` 字段**保留**
+//! 仅为兼容旧配置读取（serde 反序列化不报错），运行逻辑（`should_hide_to_tray` /
+//! `decide_close_action` / `reconcile_tray` 调用方）不再消费该字段。
+//!
+//! **退出时配置保存时机（修复子代理 B）**：配置文件唯一写入点在向导最后一步
+//! 「完成」按钮（前端 save_config 全量落盘）。[`do_shutdown`] 只保存**已存在**
+//! 的配置（[`should_persist_on_shutdown`]）——首次运行向导中途退出绝不产生
+//! config.toml（旧实现无条件 save_global 会把默认配置（wizard_completed=true）
+//! 落盘，下次启动绕过向导直接进主页面）。
 
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -30,8 +44,10 @@ use std::time::Duration;
 use tauri::menu::{IsMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::{TrayIcon, TrayIconBuilder};
 use tauri::{AppHandle, Emitter, Manager, Wry};
+use tauri_plugin_opener::OpenerExt;
 
 use crate::domain::config::manager::ConfigManager;
+use crate::domain::recorder::engine::FfmpegRecorder;
 use crate::infrastructure::state::app_state::{AppStateHandle, RecorderState, RecordingSummary, Task};
 
 /// 最近录制菜单上限（规格 1.1：最多 5 条）
@@ -103,9 +119,17 @@ pub fn truncated_label(s: &str, max_chars: usize) -> String {
     out
 }
 
-/// 转义菜单文本中的 `&`（Windows 助记符）
+/// 转义菜单文本中的 `&`（仅 Windows：muda 将 `&` 视为助记符前缀，`&&` 才显示
+/// 字面 `&`）。Linux/GTK 菜单 `&` 无特殊含义，转义反而显示 `&&`，故原样返回。
 fn sanitize_menu_text(s: &str) -> String {
-    s.replace('&', "&&")
+    #[cfg(windows)]
+    {
+        s.replace('&', "&&")
+    }
+    #[cfg(not(windows))]
+    {
+        s.to_string()
+    }
 }
 
 /// 从菜单项 id 解析最近录制索引（`tray-recent-0` → `Some(0)`）
@@ -113,17 +137,20 @@ fn recent_index_from_menu_id(id: &str) -> Option<usize> {
     id.strip_prefix(MENU_RECENT_PREFIX)?.parse().ok()
 }
 
-/// 关闭主窗时是否「最小化到托盘」（`close_behavior` × `show_tray` 决策矩阵）
+/// 关闭主窗时是否「最小化到托盘」（由 `close_behavior` 单一决定）。
 ///
-/// | close_behavior | show_tray | 关闭主窗行为 |
-/// |---|---|---|
-/// | `"tray"` | `true` | `prevent_close` + `hide`，驻留托盘继续运行 |
-/// | `"tray"` | `false` | 直接退出（无托盘则隐藏窗口后无法恢复，视为 exit） |
-/// | `"exit"` | `true` | 直接退出（托盘图标仍可显示状态/退出，但关闭即退出） |
-/// | `"exit"` | `false` | 直接退出 |
-/// | 其他值 | 任意 | 直接退出（未知值按 exit 保守处理） |
-pub fn should_hide_to_tray(close_behavior: &str, show_tray: bool) -> bool {
-    close_behavior == "tray" && show_tray
+/// 简化后（修复子代理 B）：show_tray 独立开关已移除——选择「最小化到托盘」
+/// 即自动显示托盘图标（隐藏窗口后必须有图标可恢复），选择「直接退出」则
+/// 隐藏图标。本函数同时充当**托盘图标可见性派生**（reconcile_tray / 启动
+/// 创建托盘的调用方传 `should_hide_to_tray(&close_behavior)`）。
+///
+/// | close_behavior | 关闭主窗行为 |
+/// |---|---|
+/// | `"tray"` | `prevent_close` + `hide`，驻留托盘继续运行（托盘实际可用时） |
+/// | `"exit"` | 直接退出 |
+/// | 其他值 | 直接退出（未知值按 exit 保守处理） |
+pub fn should_hide_to_tray(close_behavior: &str) -> bool {
+    close_behavior == "tray"
 }
 
 /// 关闭主窗的动作
@@ -135,25 +162,36 @@ pub enum CloseAction {
     Exit,
 }
 
-/// 关闭主窗动作决策：配置矩阵 × 托盘**实际可用性**。
+/// 关闭主窗动作决策：close_behavior × 托盘**实际可用性**。
 ///
-/// 与 [`should_hide_to_tray`] 的关系：后者只查 `close_behavior` × `show_tray`
-/// 配置矩阵；此处额外要求托盘实际存在且图标可见（`tray_enabled`），否则
-/// 关闭主窗时隐藏窗口将无法恢复（托盘创建失败 / 运行中 show_tray 已关闭时
-/// 隐藏窗口 = 应用「人间蒸发」，只能任务管理器杀进程）。
+/// 与 [`should_hide_to_tray`] 的关系：后者只查 `close_behavior`；此处额外
+/// 要求托盘实际存在且图标可见（`tray_enabled`），否则关闭主窗时隐藏窗口
+/// 将无法恢复（托盘创建失败 / 运行中图标已隐藏时隐藏窗口 = 应用「人间蒸发」，
+/// 只能任务管理器杀进程）。
 ///
 /// `tray_enabled`：`None` = 托盘未创建（创建失败，`try_state` 取不到），
 /// `Some(b)` = 托盘存在且图标可见性为 `b`（`TrayManager::enabled`）。
 pub fn decide_close_action(
     close_behavior: &str,
-    show_tray: bool,
     tray_enabled: Option<bool>,
 ) -> CloseAction {
-    if should_hide_to_tray(close_behavior, show_tray) && tray_enabled == Some(true) {
+    if should_hide_to_tray(close_behavior) && tray_enabled == Some(true) {
         CloseAction::HideToTray
     } else {
         CloseAction::Exit
     }
+}
+
+/// 退出时是否保存配置：仅当配置文件**已存在**时保存。
+///
+/// 根因修复（修复子代理 B）：`do_shutdown` 旧实现无条件 `save_global`——用户在
+/// 向导第 1 步就关闭窗口也会把默认配置落盘（默认 `wizard_completed=true`），
+/// 下次启动 `is_first_run` 判定为已完成 → 绕过向导直接进主页面。修复后配置
+/// 文件唯一写入点在向导最后一步「完成」按钮（前端 save_config 全量落盘）；
+/// 退出只保存已存在的配置（主窗口/设置页正常退出语义不变），首次运行向导
+/// 中途退出不产生任何配置文件。
+pub fn should_persist_on_shutdown(config_manager: &ConfigManager) -> bool {
+    config_manager.global_config_path().exists()
 }
 
 /// 系统托盘管理器：持有 TrayIcon，负责菜单构建、动态更新、菜单事件分发。
@@ -172,16 +210,14 @@ pub struct TrayManager {
 impl TrayManager {
     /// 创建托盘图标 + 初始菜单。
     ///
-    /// 图标复用 `default_window_icon`（tauri-codegen 从 bundle.icon 内嵌的
-    /// icons/icon.ico / icon.png——主体放大版，托盘/任务栏/窗口同源清晰）。
+    /// 图标使用**托盘专用图标** `icons/tray-icon.png`（透明底 + 黑底圆角方形 + 白色
+    /// FM，16px 通知区缩放清晰；与窗口图标（同风格大尺寸）解耦，避免小尺寸糊化）。
     ///
     /// `visible`：show_tray 配置；false 时图标创建但隐藏（运行中可经
     /// [`TrayManager::set_enabled`] 随时显示，无需重建托盘）。
     pub fn new(app: &AppHandle, visible: bool) -> Result<Arc<Self>, String> {
-        let icon = app
-            .default_window_icon()
-            .cloned()
-            .ok_or_else(|| "未找到默认窗口图标（tauri.conf.json bundle.icon）".to_string())?;
+        let icon = tauri::image::Image::from_bytes(include_bytes!("../../../icons/tray-icon.png"))
+            .map_err(|e| format!("加载托盘图标失败: {}", e))?;
         let data = Arc::new(std::sync::Mutex::new(TrayMenuData::default()));
         // 锁中毒统一优雅降级（与 apply / open_recent_file 一致），setup 期不 panic
         let menu = build_menu(app, &data.lock().unwrap_or_else(|e| e.into_inner()))?;
@@ -292,10 +328,13 @@ impl TrayManager {
     }
 }
 
-/// 按 `show_tray` 配置同步托盘图标可见性（save_config 后调用；幂等）
-pub fn reconcile_tray(app: &AppHandle, show_tray: bool) {
+/// 同步托盘图标可见性（save_config / import_config 后调用；幂等）。
+///
+/// 简化后（修复子代理 B）：可见性由 `close_behavior` 派生——调用方传
+/// `should_hide_to_tray(&config.close_behavior)`（"tray" → 显示 / "exit" → 隐藏）。
+pub fn reconcile_tray(app: &AppHandle, visible: bool) {
     if let Some(manager) = app.try_state::<Arc<TrayManager>>() {
-        manager.set_enabled(show_tray);
+        manager.set_enabled(visible);
     }
 }
 
@@ -369,14 +408,21 @@ pub fn request_shutdown(app: &AppHandle) {
 async fn do_shutdown(app: &AppHandle) {
     tracing::info!("开始优雅退出");
     // 1. 保存配置（幂等；失败仅记日志，不阻塞退出）
+    //    根因修复（修复子代理 B）：仅当配置文件**已存在**时才保存——首次运行
+    //    向导中途退出（配置尚未产生）绝不落盘，避免「第 1 步退出也产生
+    //    config.toml（默认 wizard_completed=true）→ 下次启动绕过向导」。
     if let Some(config_manager) = app.try_state::<Arc<ConfigManager>>() {
-        match config_manager.load() {
-            Ok(config) => {
-                if let Err(e) = config_manager.save_global(&config.global) {
-                    tracing::error!("退出前保存配置失败: {}", e);
+        if !should_persist_on_shutdown(&**config_manager) {
+            tracing::debug!("配置不存在（首次运行向导未完成），退出不保存配置");
+        } else {
+            match config_manager.load() {
+                Ok(config) => {
+                    if let Err(e) = config_manager.save_global(&config.global) {
+                        tracing::error!("退出前保存配置失败: {}", e);
+                    }
                 }
+                Err(e) => tracing::warn!("退出前读取配置失败: {}", e),
             }
-            Err(e) => tracing::warn!("退出前读取配置失败: {}", e),
         }
     }
 
@@ -399,6 +445,19 @@ async fn do_shutdown(app: &AppHandle) {
         let deadline = tokio::time::Instant::now() + SHUTDOWN_WAIT;
         for task in tasks_to_wait {
             let _ = tokio::time::timeout_at(deadline, task.handle).await;
+        }
+    }
+
+    // 3.5 剩余录制进程强制终止兜底（B2）：上一步等待超时后，进程表可能仍有
+    // 存活条目（ffmpeg 网络 IO 卡死等）。显式逐个走带超时的强制终止，确保
+    // 退出后无孤儿 ffmpeg 进程（Linux 上孤儿进程持续占用录音文件句柄；Windows
+    // 上遗留未收割句柄）。kill_on_drop 在此不可依赖：tauri 的全局异步运行时
+    // 随进程退出直接终止，任务 future 不保证 drop——必须显式终止。
+    if let Some(recorder) = app.try_state::<Arc<FfmpegRecorder>>() {
+        let alive = recorder.active_anchor_ids();
+        if !alive.is_empty() {
+            tracing::info!("退出前强制终止 {} 个剩余录制进程", alive.len());
+            recorder.force_terminate_all().await;
         }
     }
 
@@ -490,7 +549,7 @@ fn handle_menu_event(app: &AppHandle, data: &std::sync::Mutex<TrayMenuData>, eve
         MENU_EXIT => request_shutdown(app),
         _ => {
             if let Some(index) = recent_index_from_menu_id(id) {
-                open_recent_file(data, index);
+                open_recent_file(app, data, index);
             }
         }
     }
@@ -505,8 +564,9 @@ fn show_main_window(app: &AppHandle) {
     }
 }
 
-/// 打开最近录制文件所在文件夹（Windows：`explorer /select,{path}` 并选中该文件）
-fn open_recent_file(data: &std::sync::Mutex<TrayMenuData>, index: usize) {
+/// 打开最近录制文件所在文件夹（opener 插件 `reveal_item_in_dir`：
+/// Windows 资源管理器中定位选中该文件，Linux 打开其所在目录）
+fn open_recent_file(app: &AppHandle, data: &std::sync::Mutex<TrayMenuData>, index: usize) {
     let path = data
         .lock()
         .unwrap_or_else(|e| e.into_inner())
@@ -514,8 +574,9 @@ fn open_recent_file(data: &std::sync::Mutex<TrayMenuData>, index: usize) {
         .get(index)
         .map(|f| f.path.clone());
     if let Some(path) = path {
-        if let Err(e) = crate::domain::tools::open_in_explorer(Path::new(&path)) {
-            tracing::warn!("打开最近录制所在文件夹失败（{}）: {}", path, e.message);
+        // tauri_plugin_opener::Opener::reveal_item_in_dir(p: impl AsRef<Path>)
+        if let Err(e) = app.opener().reveal_item_in_dir(Path::new(&path)) {
+            tracing::warn!("打开最近录制所在文件夹失败（{}）: {}", path, e);
         }
     }
 }
@@ -566,12 +627,22 @@ mod tests {
         assert_eq!(recent[0].label, "C:\\");
     }
 
+    #[cfg(windows)]
     #[test]
     fn recent_file_label_escapes_ampersand() {
         // muda 将 & 视为 Windows 助记符前缀，须转义为 &&
         let recent =
             recent_files_from_history(std::iter::once(&summary("D:/rec/a&b_001.m4a")), 5);
         assert_eq!(recent[0].label, "a&&b_001.m4a");
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn recent_file_label_keeps_ampersand_literal() {
+        // Linux/GTK 菜单 `&` 无助记符语义，转义反而显示 `&&` → 原样保留
+        let recent =
+            recent_files_from_history(std::iter::once(&summary("D:/rec/a&b_001.m4a")), 5);
+        assert_eq!(recent[0].label, "a&b_001.m4a");
     }
 
     #[test]
@@ -600,33 +671,51 @@ mod tests {
 
     #[test]
     fn close_behavior_matrix() {
-        // tray × show_tray=true → 最小化到托盘
-        assert!(should_hide_to_tray("tray", true));
-        // tray × show_tray=false → 直接退出（无托盘则隐藏窗口后无法恢复）
-        assert!(!should_hide_to_tray("tray", false));
-        // exit × 任意 show_tray → 直接退出
-        assert!(!should_hide_to_tray("exit", true));
-        assert!(!should_hide_to_tray("exit", false));
+        // tray → 最小化到托盘（close_behavior 单一决定；show_tray 已并入派生逻辑）
+        assert!(should_hide_to_tray("tray"));
+        // exit → 直接退出
+        assert!(!should_hide_to_tray("exit"));
         // 未知值按退出保守处理
-        assert!(!should_hide_to_tray("anything", true));
+        assert!(!should_hide_to_tray("anything"));
     }
 
     #[test]
     fn close_action_requires_live_enabled_tray() {
         use CloseAction::{Exit, HideToTray};
         // 托盘缺失（创建失败）：任何配置都退出，绝不隐藏窗口
-        assert_eq!(decide_close_action("tray", true, None), Exit);
-        assert_eq!(decide_close_action("tray", false, None), Exit);
-        assert_eq!(decide_close_action("exit", true, None), Exit);
-        assert_eq!(decide_close_action("exit", false, None), Exit);
-        // 托盘存在但禁用（show_tray=false / 运行中已关闭）：退出
-        assert_eq!(decide_close_action("tray", true, Some(false)), Exit);
-        assert_eq!(decide_close_action("tray", false, Some(false)), Exit);
-        // 托盘存在且启用：仅 close_behavior=tray × show_tray=true 隐藏
-        assert_eq!(decide_close_action("tray", true, Some(true)), HideToTray);
-        assert_eq!(decide_close_action("tray", false, Some(true)), Exit);
-        assert_eq!(decide_close_action("exit", true, Some(true)), Exit);
-        assert_eq!(decide_close_action("exit", false, Some(true)), Exit);
+        assert_eq!(decide_close_action("tray", None), Exit);
+        assert_eq!(decide_close_action("exit", None), Exit);
+        // 托盘存在但禁用（图标已隐藏）：退出
+        assert_eq!(decide_close_action("tray", Some(false)), Exit);
+        assert_eq!(decide_close_action("exit", Some(false)), Exit);
+        // 托盘存在且启用：仅 close_behavior=tray 隐藏
+        assert_eq!(decide_close_action("tray", Some(true)), HideToTray);
+        assert_eq!(decide_close_action("exit", Some(true)), Exit);
+    }
+
+    #[test]
+    fn should_persist_on_shutdown_only_when_config_exists() {
+        use crate::domain::config::model::GlobalConfig;
+        // 首次运行（无配置文件）：退出不落盘（中途退出不产生 config.toml）
+        let dir = std::env::temp_dir().join(format!(
+            "missevan-tray-shutdown-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let manager = ConfigManager::new(dir.clone());
+        assert!(!should_persist_on_shutdown(&manager));
+        // 配置写入后：退出保存（主窗口/设置页正常退出语义不变）
+        manager.save_global(&GlobalConfig::default()).unwrap();
+        assert!(should_persist_on_shutdown(&manager));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn tray_visibility_derived_from_close_behavior() {
+        // 托盘可见性派生 = should_hide_to_tray（reconcile_tray / 启动创建托盘共用）：
+        // close_behavior=tray → 图标可见（隐藏窗口后可恢复）；exit → 隐藏
+        assert!(should_hide_to_tray("tray"));
+        assert!(!should_hide_to_tray("exit"));
     }
 
     #[test]

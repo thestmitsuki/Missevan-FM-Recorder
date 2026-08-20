@@ -11,7 +11,7 @@
  * 键盘导航：卡片/列表项 Tab 聚焦，Enter 打开设置，Delete 触发删除确认。
  * 回顶按钮显示由本页内容区滚动监听接管（替代旧 anchorsCount 近似判断）。
  */
-import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { Filter, LayoutGrid, List, Plus } from "@lucide/vue";
 import type { AnchorConfig } from "@/types";
@@ -25,6 +25,7 @@ import AnchorCard from "./AnchorCard.vue";
 import AddAnchorDialog from "./AddAnchorDialog.vue";
 import AnchorSettingsSheet from "./AnchorSettingsSheet.vue";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
@@ -37,6 +38,51 @@ const { t } = useI18n();
 const filterOpen = ref(false);
 const showScrollTop = ref(false);
 const contentRef = ref<HTMLElement | null>(null);
+
+// ── 卡片网格：自适应列数（等宽列 + 显式宽度过渡）──
+// 原 auto-fill/minmax(300px,1fr) 在列数 +1 的瞬间（≈692/1012px）卡片宽会从
+// 接近满宽骤降到 300px，且移动端内容区 <300px 时退化为 0 轨道、卡片固定内容宽。
+// 修复：
+// - 容器改为 flex flex-wrap，列数 N 按容器实际宽度 JS 计算（ResizeObserver）；
+// - 卡片显式 width: calc((100% - gap*(N-1)) / N)，移动端 <300px 时随容器缩放不溢出；
+// - 卡片 width 为可过渡属性，列数切换时由 transition-[width] 平滑插值，
+//   消除「突然缩放」的瞬态（稳态列切换台阶不可避免，动画使其连续）。
+// 注：grid 轨道宽度是布局计算值，transition 对其不生效，故不用 grid。
+const CARD_MIN_WIDTH = 300;
+const GRID_GAP = 12;
+const gridRef = ref<HTMLElement | null>(null);
+const gridCols = ref(1);
+let gridObserver: ResizeObserver | null = null;
+
+function updateGridCols() {
+    const el = gridRef.value;
+    if (!el) return;
+    const width = el.clientWidth;
+    if (width <= 0) return;
+    const n = Math.max(
+        1,
+        Math.floor((width + GRID_GAP) / (CARD_MIN_WIDTH + GRID_GAP)),
+    );
+    if (n !== gridCols.value) gridCols.value = n;
+}
+
+/** 卡片显式宽度（可过渡）：N 列等宽均分，切换时由 transition 平滑插值 */
+const cardWidth = computed(() => {
+    const n = gridCols.value;
+    return `calc((100% - ${GRID_GAP * (n - 1)}px) / ${n})`;
+});
+
+function watchGridResize() {
+    gridObserver?.disconnect();
+    const el = gridRef.value;
+    if (!el) return;
+    gridObserver = new ResizeObserver(updateGridCols);
+    gridObserver.observe(el);
+    updateGridCols();
+}
+
+// 网格元素随加载/视图切换换绑（Skeleton → 卡片 → 列表），换绑后重新观察新元素
+watch(gridRef, () => watchGridResize());
 
 // ── 删除确认 ──
 const removeTarget = ref<AnchorConfig | null>(null);
@@ -58,6 +104,13 @@ const liveOptions = [
     { value: "live", label: "live.liveNow" },
     { value: "not-live", label: "live.notLive" },
 ] as const;
+
+/** 标签多选切换：勾选/取消固定 5 标签（空数组 = 全部，不过滤） */
+function toggleTagFilter(value: string, checked: boolean) {
+    anchorStore.tagFilter = checked
+        ? [...anchorStore.tagFilter, value]
+        : anchorStore.tagFilter.filter((v) => v !== value);
+}
 
 // ── 状态查找（模板用）──
 function statusOf(anchorId: string) {
@@ -160,7 +213,7 @@ function handleAddAnchor() {
     showAddDialog.value = true;
 }
 
-/** 打开主播设置侧栏（卡片/列表项菜单或 Enter） */
+/** 打开主播设置弹窗（卡片/列表项菜单或 Enter） */
 function openSettings(anchor: AnchorConfig) {
     settingsAnchor.value = anchor;
     settingsOpen.value = true;
@@ -178,11 +231,14 @@ onMounted(() => {
     contentRef.value?.addEventListener("scroll", onContentScroll, {
         passive: true,
     });
+    watchGridResize();
     void loadData();
 });
 
 onBeforeUnmount(() => {
     contentRef.value?.removeEventListener("scroll", onContentScroll);
+    gridObserver?.disconnect();
+    gridObserver = null;
 });
 </script>
 
@@ -235,33 +291,35 @@ onBeforeUnmount(() => {
                 />
             </div>
 
-            <!-- 按标签单选（「全部」= 不过滤；固定 5 标签，tagFilter 为 null 时「全部」选中） -->
+            <!-- 按标签多选（Checkbox 组；不勾选 = 全部，可同时勾选多个，任一匹配 OR） -->
             <div class="flex flex-col gap-2">
                 <Label class="text-xs text-muted-foreground">
                     {{ t("live.filterByTag") }}
                 </Label>
-                <RadioGroup
-                    v-model="anchorStore.tagFilter"
-                    class="flex flex-col gap-1.5"
-                >
-                    <label
-                        class="flex cursor-pointer items-center gap-2 text-sm"
-                    >
-                        <RadioGroupItem :value="null" class="size-4" />
-                        <span>{{ t("live.all") }}</span>
-                    </label>
+                <div class="flex flex-col gap-1.5">
                     <label
                         v-for="(key, i) in ANCHOR_TAGS"
                         :key="key"
                         class="flex cursor-pointer items-center gap-2 text-sm"
                     >
-                        <RadioGroupItem
-                            :value="ANCHOR_TAG_VALUES[i]"
-                            class="size-4"
+                        <Checkbox
+                            :checked="
+                                anchorStore.tagFilter.includes(
+                                    ANCHOR_TAG_VALUES[i],
+                                )
+                            "
+                            @update:checked="(v) =>
+                                toggleTagFilter(
+                                    ANCHOR_TAG_VALUES[i],
+                                    v === true,
+                                )"
                         />
                         <span>{{ t(key) }}</span>
                     </label>
-                </RadioGroup>
+                </div>
+                <p class="text-xs text-muted-foreground">
+                    {{ t("live.tagSelectHint") }}
+                </p>
             </div>
 
             <!-- 按录制状态单选 -->
@@ -311,15 +369,17 @@ onBeforeUnmount(() => {
             class="page-scroll mx-auto min-w-0 max-w-[1200px] flex-1 overflow-y-auto px-4 py-4"
             :aria-busy="anchorStore.loading"
         >
-            <!-- 加载态：Skeleton 网格 -->
+            <!-- 加载态：Skeleton 网格（flex 等宽列 + 显式宽度过渡） -->
             <div
                 v-if="anchorStore.loading"
-                class="grid grid-cols-[repeat(auto-fill,minmax(300px,1fr))] gap-3"
+                ref="gridRef"
+                class="flex flex-wrap gap-3"
             >
                 <Skeleton
                     v-for="i in 6"
                     :key="i"
-                    class="aspect-[4/3] rounded-xl"
+                    class="aspect-[4/3] rounded-xl transition-[width] duration-300 ease-out"
+                    :style="{ width: cardWidth }"
                 />
             </div>
 
@@ -348,10 +408,11 @@ onBeforeUnmount(() => {
                 :title="t('live.noMatchingAnchors')"
             />
 
-            <!-- 卡片视图：min 300px 自适应列 -->
+            <!-- 卡片视图：flex 等宽列（JS 算列数 gridCols，显式宽度可过渡） -->
             <div
                 v-else-if="anchorStore.viewMode === 'card'"
-                class="grid grid-cols-[repeat(auto-fill,minmax(300px,1fr))] gap-3"
+                ref="gridRef"
+                class="flex flex-wrap gap-3"
             >
                 <AnchorCard
                     v-for="anchor in anchorStore.filteredAnchors"
@@ -360,6 +421,7 @@ onBeforeUnmount(() => {
                     :is-live="statusOf(anchor.id).isLive"
                     :is-recording="statusOf(anchor.id).isRecording"
                     view="card"
+                    :style="{ width: cardWidth }"
                     @settings="openSettings"
                     @remove="requestRemove"
                     @refresh="handleRefresh"
@@ -398,7 +460,7 @@ onBeforeUnmount(() => {
         <!-- 添加主播对话框 -->
         <AddAnchorDialog v-model:open="showAddDialog" />
 
-        <!-- 主播设置侧栏（保持挂载以保留关闭动画；open 由 settingsOpen 控制） -->
+        <!-- 主播设置弹窗（保持挂载以保留关闭动画；open 由 settingsOpen 控制） -->
         <AnchorSettingsSheet
             v-if="settingsAnchor"
             v-model:open="settingsOpen"

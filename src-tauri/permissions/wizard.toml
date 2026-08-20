@@ -1,0 +1,23 @@
+# 权限定义：设置向导专属命令（api/wizard_cmds.rs）
+#
+# 仅授予向导窗口（capabilities/wizard.json）；主窗口不授予。
+
+[[permission]]
+identifier = "allow-download-ffmpeg"
+description = "启用 download_ffmpeg 命令（下载并解压 FFmpeg 便携版，写入配置）"
+commands = { allow = ["download_ffmpeg"], deny = [] }
+
+[[permission]]
+identifier = "allow-exit-app"
+description = "启用 exit_app 命令（退出应用，走统一优雅退出路径）"
+commands = { allow = ["exit_app"], deny = [] }
+
+[[permission]]
+identifier = "allow-finish-wizard"
+description = "启用 finish_wizard 命令（标记引导完成、关闭向导窗、显示主窗并唤醒检测）"
+commands = { allow = ["finish_wizard"], deny = [] }
+
+[[permission]]
+identifier = "allow-run-wizard-health-check"
+description = "启用 run_wizard_health_check 命令（向导环境检查：FFmpeg/磁盘/写入权限）"
+commands = { allow = ["run_wizard_health_check"], deny = [] }

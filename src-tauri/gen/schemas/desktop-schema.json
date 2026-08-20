@@ -135,6 +135,174 @@
           "type": "object",
           "allOf": [
             {
+              "if": {
+                "properties": {
+                  "identifier": {
+                    "anyOf": [
+                      {
+                        "description": "This permission set allows opening `mailto:`, `tel:`, `https://` and `http://` urls using their default application\nas well as reveal file in directories using default file explorer\n#### This default permission set includes:\n\n- `allow-open-url`\n- `allow-reveal-item-in-dir`\n- `allow-default-urls`",
+                        "type": "string",
+                        "const": "opener:default",
+                        "markdownDescription": "This permission set allows opening `mailto:`, `tel:`, `https://` and `http://` urls using their default application\nas well as reveal file in directories using default file explorer\n#### This default permission set includes:\n\n- `allow-open-url`\n- `allow-reveal-item-in-dir`\n- `allow-default-urls`"
+                      },
+                      {
+                        "description": "This enables opening `mailto:`, `tel:`, `https://` and `http://` urls using their default application.",
+                        "type": "string",
+                        "const": "opener:allow-default-urls",
+                        "markdownDescription": "This enables opening `mailto:`, `tel:`, `https://` and `http://` urls using their default application."
+                      },
+                      {
+                        "description": "Enables the open_path command without any pre-configured scope.",
+                        "type": "string",
+                        "const": "opener:allow-open-path",
+                        "markdownDescription": "Enables the open_path command without any pre-configured scope."
+                      },
+                      {
+                        "description": "Enables the open_url command without any pre-configured scope.",
+                        "type": "string",
+                        "const": "opener:allow-open-url",
+                        "markdownDescription": "Enables the open_url command without any pre-configured scope."
+                      },
+                      {
+                        "description": "Enables the reveal_item_in_dir command without any pre-configured scope.",
+                        "type": "string",
+                        "const": "opener:allow-reveal-item-in-dir",
+                        "markdownDescription": "Enables the reveal_item_in_dir command without any pre-configured scope."
+                      },
+                      {
+                        "description": "Denies the open_path command without any pre-configured scope.",
+                        "type": "string",
+                        "const": "opener:deny-open-path",
+                        "markdownDescription": "Denies the open_path command without any pre-configured scope."
+                      },
+                      {
+                        "description": "Denies the open_url command without any pre-configured scope.",
+                        "type": "string",
+                        "const": "opener:deny-open-url",
+                        "markdownDescription": "Denies the open_url command without any pre-configured scope."
+                      },
+                      {
+                        "description": "Denies the reveal_item_in_dir command without any pre-configured scope.",
+                        "type": "string",
+                        "const": "opener:deny-reveal-item-in-dir",
+                        "markdownDescription": "Denies the reveal_item_in_dir command without any pre-configured scope."
+                      }
+                    ]
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "allow": {
+                    "items": {
+                      "title": "OpenerScopeEntry",
+                      "description": "Opener scope entry.",
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "required": [
+                            "url"
+                          ],
+                          "properties": {
+                            "app": {
+                              "description": "An application to open this url with, for example: firefox.",
+                              "allOf": [
+                                {
+                                  "$ref": "#/definitions/Application"
+                                }
+                              ]
+                            },
+                            "url": {
+                              "description": "A URL that can be opened by the webview when using the Opener APIs.\n\nWildcards can be used following the UNIX glob pattern.\n\nExamples:\n\n- \"https://*\" : allows all HTTPS origin\n\n- \"https://*.github.com/tauri-apps/tauri\": allows any subdomain of \"github.com\" with the \"tauri-apps/api\" path\n\n- \"https://myapi.service.com/users/*\": allows access to any URLs that begins with \"https://myapi.service.com/users/\"",
+                              "type": "string"
+                            }
+                          }
+                        },
+                        {
+                          "type": "object",
+                          "required": [
+                            "path"
+                          ],
+                          "properties": {
+                            "app": {
+                              "description": "An application to open this path with, for example: xdg-open.",
+                              "allOf": [
+                                {
+                                  "$ref": "#/definitions/Application"
+                                }
+                              ]
+                            },
+                            "path": {
+                              "description": "A path that can be opened by the webview when using the Opener APIs.\n\nThe pattern can start with a variable that resolves to a system base directory. The variables are: `$AUDIO`, `$CACHE`, `$CONFIG`, `$DATA`, `$LOCALDATA`, `$DESKTOP`, `$DOCUMENT`, `$DOWNLOAD`, `$EXE`, `$FONT`, `$HOME`, `$PICTURE`, `$PUBLIC`, `$RUNTIME`, `$TEMPLATE`, `$VIDEO`, `$RESOURCE`, `$APP`, `$LOG`, `$TEMP`, `$APPCONFIG`, `$APPDATA`, `$APPLOCALDATA`, `$APPCACHE`, `$APPLOG`.",
+                              "type": "string"
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  },
+                  "deny": {
+                    "items": {
+                      "title": "OpenerScopeEntry",
+                      "description": "Opener scope entry.",
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "required": [
+                            "url"
+                          ],
+                          "properties": {
+                            "app": {
+                              "description": "An application to open this url with, for example: firefox.",
+                              "allOf": [
+                                {
+                                  "$ref": "#/definitions/Application"
+                                }
+                              ]
+                            },
+                            "url": {
+                              "description": "A URL that can be opened by the webview when using the Opener APIs.\n\nWildcards can be used following the UNIX glob pattern.\n\nExamples:\n\n- \"https://*\" : allows all HTTPS origin\n\n- \"https://*.github.com/tauri-apps/tauri\": allows any subdomain of \"github.com\" with the \"tauri-apps/api\" path\n\n- \"https://myapi.service.com/users/*\": allows access to any URLs that begins with \"https://myapi.service.com/users/\"",
+                              "type": "string"
+                            }
+                          }
+                        },
+                        {
+                          "type": "object",
+                          "required": [
+                            "path"
+                          ],
+                          "properties": {
+                            "app": {
+                              "description": "An application to open this path with, for example: xdg-open.",
+                              "allOf": [
+                                {
+                                  "$ref": "#/definitions/Application"
+                                }
+                              ]
+                            },
+                            "path": {
+                              "description": "A path that can be opened by the webview when using the Opener APIs.\n\nThe pattern can start with a variable that resolves to a system base directory. The variables are: `$AUDIO`, `$CACHE`, `$CONFIG`, `$DATA`, `$LOCALDATA`, `$DESKTOP`, `$DOCUMENT`, `$DOWNLOAD`, `$EXE`, `$FONT`, `$HOME`, `$PICTURE`, `$PUBLIC`, `$RUNTIME`, `$TEMPLATE`, `$VIDEO`, `$RESOURCE`, `$APP`, `$LOG`, `$TEMP`, `$APPCONFIG`, `$APPDATA`, `$APPLOCALDATA`, `$APPCACHE`, `$APPLOG`.",
+                              "type": "string"
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  }
+                }
+              },
+              "properties": {
+                "identifier": {
+                  "description": "Identifier of the permission or permission set.",
+                  "allOf": [
+                    {
+                      "$ref": "#/definitions/Identifier"
+                    }
+                  ]
+                }
+              }
+            },
+            {
               "properties": {
                 "identifier": {
                   "description": "Identifier of the permission or permission set.",
@@ -176,6 +344,372 @@
     "Identifier": {
       "description": "Permission identifier",
       "oneOf": [
+        {
+          "description": "启用 add_anchor 命令（新增主播并写入配置）",
+          "type": "string",
+          "const": "allow-add-anchor",
+          "markdownDescription": "启用 add_anchor 命令（新增主播并写入配置）"
+        },
+        {
+          "description": "启用 add_mock_anchor 命令（新增/覆盖模拟主播）",
+          "type": "string",
+          "const": "allow-add-mock-anchor",
+          "markdownDescription": "启用 add_mock_anchor 命令（新增/覆盖模拟主播）"
+        },
+        {
+          "description": "启用 check_update 命令（查询 GitHub Releases 最新版本）",
+          "type": "string",
+          "const": "allow-check-update",
+          "markdownDescription": "启用 check_update 命令（查询 GitHub Releases 最新版本）"
+        },
+        {
+          "description": "启用 clear_file_cache 命令（清空内存文件缓存索引）",
+          "type": "string",
+          "const": "allow-clear-file-cache",
+          "markdownDescription": "启用 clear_file_cache 命令（清空内存文件缓存索引）"
+        },
+        {
+          "description": "启用 clear_logs 命令（清空实时日志缓冲）",
+          "type": "string",
+          "const": "allow-clear-logs",
+          "markdownDescription": "启用 clear_logs 命令（清空实时日志缓冲）"
+        },
+        {
+          "description": "启用 clear_network_logs 命令（清空网络请求插桩记录）",
+          "type": "string",
+          "const": "allow-clear-network-logs",
+          "markdownDescription": "启用 clear_network_logs 命令（清空网络请求插桩记录）"
+        },
+        {
+          "description": "启用 delete_recording_file 命令（删除输出目录内的录制文件）",
+          "type": "string",
+          "const": "allow-delete-recording-file",
+          "markdownDescription": "启用 delete_recording_file 命令（删除输出目录内的录制文件）"
+        },
+        {
+          "description": "启用 download_ffmpeg 命令（下载并解压 FFmpeg 便携版，写入配置）",
+          "type": "string",
+          "const": "allow-download-ffmpeg",
+          "markdownDescription": "启用 download_ffmpeg 命令（下载并解压 FFmpeg 便携版，写入配置）"
+        },
+        {
+          "description": "启用 exit_app 命令（退出应用，走统一优雅退出路径）",
+          "type": "string",
+          "const": "allow-exit-app",
+          "markdownDescription": "启用 exit_app 命令（退出应用，走统一优雅退出路径）"
+        },
+        {
+          "description": "启用 export_config 命令（导出配置为 JSON 字符串，敏感字段置空）",
+          "type": "string",
+          "const": "allow-export-config",
+          "markdownDescription": "启用 export_config 命令（导出配置为 JSON 字符串，敏感字段置空）"
+        },
+        {
+          "description": "启用 export_diagnostic_report 命令（导出诊断报告 JSON）",
+          "type": "string",
+          "const": "allow-export-diagnostic-report",
+          "markdownDescription": "启用 export_diagnostic_report 命令（导出诊断报告 JSON）"
+        },
+        {
+          "description": "启用 finish_wizard 命令（标记引导完成、关闭向导窗、显示主窗并唤醒检测）",
+          "type": "string",
+          "const": "allow-finish-wizard",
+          "markdownDescription": "启用 finish_wizard 命令（标记引导完成、关闭向导窗、显示主窗并唤醒检测）"
+        },
+        {
+          "description": "启用 get_anchor_profile 命令（读取主播公开资料）",
+          "type": "string",
+          "const": "allow-get-anchor-profile",
+          "markdownDescription": "启用 get_anchor_profile 命令（读取主播公开资料）"
+        },
+        {
+          "description": "启用 get_anchors 命令（读取主播列表，含头像网络拉取）",
+          "type": "string",
+          "const": "allow-get-anchors",
+          "markdownDescription": "启用 get_anchors 命令（读取主播列表，含头像网络拉取）"
+        },
+        {
+          "description": "启用 get_app_info 命令（读取应用名称/版本/构建信息）",
+          "type": "string",
+          "const": "allow-get-app-info",
+          "markdownDescription": "启用 get_app_info 命令（读取应用名称/版本/构建信息）"
+        },
+        {
+          "description": "启用 get_config 命令（读取全局配置）",
+          "type": "string",
+          "const": "allow-get-config",
+          "markdownDescription": "启用 get_config 命令（读取全局配置）"
+        },
+        {
+          "description": "启用 get_debug_info 命令（读取调试信息概览）",
+          "type": "string",
+          "const": "allow-get-debug-info",
+          "markdownDescription": "启用 get_debug_info 命令（读取调试信息概览）"
+        },
+        {
+          "description": "启用 get_detector_stats 命令（读取检测循环统计）",
+          "type": "string",
+          "const": "allow-get-detector-stats",
+          "markdownDescription": "启用 get_detector_stats 命令（读取检测循环统计）"
+        },
+        {
+          "description": "启用 get_file_cache_state 命令（读取文件缓存状态）",
+          "type": "string",
+          "const": "allow-get-file-cache-state",
+          "markdownDescription": "启用 get_file_cache_state 命令（读取文件缓存状态）"
+        },
+        {
+          "description": "启用 get_logs 命令（读取实时日志缓冲）",
+          "type": "string",
+          "const": "allow-get-logs",
+          "markdownDescription": "启用 get_logs 命令（读取实时日志缓冲）"
+        },
+        {
+          "description": "启用 get_mock_state 命令（读取 Mock 面板状态）",
+          "type": "string",
+          "const": "allow-get-mock-state",
+          "markdownDescription": "启用 get_mock_state 命令（读取 Mock 面板状态）"
+        },
+        {
+          "description": "启用 get_network_logs 命令（读取网络请求插桩记录）",
+          "type": "string",
+          "const": "allow-get-network-logs",
+          "markdownDescription": "启用 get_network_logs 命令（读取网络请求插桩记录）"
+        },
+        {
+          "description": "启用 get_recorder_state 命令（读取录制引擎活跃任务与历史）",
+          "type": "string",
+          "const": "allow-get-recorder-state",
+          "markdownDescription": "启用 get_recorder_state 命令（读取录制引擎活跃任务与历史）"
+        },
+        {
+          "description": "启用 get_recording_files 命令（读取录制文件列表，支持搜索）",
+          "type": "string",
+          "const": "allow-get-recording-files",
+          "markdownDescription": "启用 get_recording_files 命令（读取录制文件列表，支持搜索）"
+        },
+        {
+          "description": "启用 get_recording_status 命令（读取主播录制/直播状态）",
+          "type": "string",
+          "const": "allow-get-recording-status",
+          "markdownDescription": "启用 get_recording_status 命令（读取主播录制/直播状态）"
+        },
+        {
+          "description": "启用 import_config 命令（导入配置：替换/合并写入）",
+          "type": "string",
+          "const": "allow-import-config",
+          "markdownDescription": "启用 import_config 命令（导入配置：替换/合并写入）"
+        },
+        {
+          "description": "启用 list_mock_anchors 命令（列出全部模拟主播）",
+          "type": "string",
+          "const": "allow-list-mock-anchors",
+          "markdownDescription": "启用 list_mock_anchors 命令（列出全部模拟主播）"
+        },
+        {
+          "description": "启用 open_browser 命令（用系统默认浏览器打开 http/https 链接）",
+          "type": "string",
+          "const": "allow-open-browser",
+          "markdownDescription": "启用 open_browser 命令（用系统默认浏览器打开 http/https 链接）"
+        },
+        {
+          "description": "启用 open_output_dir 命令（创建并打开输出目录）",
+          "type": "string",
+          "const": "allow-open-output-dir",
+          "markdownDescription": "启用 open_output_dir 命令（创建并打开输出目录）"
+        },
+        {
+          "description": "启用 pick_output_dir 命令（弹出系统目录选择对话框）",
+          "type": "string",
+          "const": "allow-pick-output-dir",
+          "markdownDescription": "启用 pick_output_dir 命令（弹出系统目录选择对话框）"
+        },
+        {
+          "description": "启用 play_recording_file 命令（将录制文件路径转换为播放 URL）",
+          "type": "string",
+          "const": "allow-play-recording-file",
+          "markdownDescription": "启用 play_recording_file 命令（将录制文件路径转换为播放 URL）"
+        },
+        {
+          "description": "启用 refresh_anchor 命令（刷新主播信息并写回配置）",
+          "type": "string",
+          "const": "allow-refresh-anchor",
+          "markdownDescription": "启用 refresh_anchor 命令（刷新主播信息并写回配置）"
+        },
+        {
+          "description": "启用 refresh_recording_files 命令（重新扫描录制文件并刷新缓存）",
+          "type": "string",
+          "const": "allow-refresh-recording-files",
+          "markdownDescription": "启用 refresh_recording_files 命令（重新扫描录制文件并刷新缓存）"
+        },
+        {
+          "description": "启用 remove_anchor 命令（删除主播：停止录制 + 清理状态 + 删除配置）",
+          "type": "string",
+          "const": "allow-remove-anchor",
+          "markdownDescription": "启用 remove_anchor 命令（删除主播：停止录制 + 清理状态 + 删除配置）"
+        },
+        {
+          "description": "启用 remove_mock_anchor 命令（删除模拟主播）",
+          "type": "string",
+          "const": "allow-remove-mock-anchor",
+          "markdownDescription": "启用 remove_mock_anchor 命令（删除模拟主播）"
+        },
+        {
+          "description": "启用 rename_recording_file 命令（重命名输出目录内的录制文件）",
+          "type": "string",
+          "const": "allow-rename-recording-file",
+          "markdownDescription": "启用 rename_recording_file 命令（重命名输出目录内的录制文件）"
+        },
+        {
+          "description": "启用 reset_config 命令（删除全部配置并重启进入首次运行向导）",
+          "type": "string",
+          "const": "allow-reset-config",
+          "markdownDescription": "启用 reset_config 命令（删除全部配置并重启进入首次运行向导）"
+        },
+        {
+          "description": "启用 reset_detector_stats 命令（重置检测统计计数）",
+          "type": "string",
+          "const": "allow-reset-detector-stats",
+          "markdownDescription": "启用 reset_detector_stats 命令（重置检测统计计数）"
+        },
+        {
+          "description": "启用 reset_mock 命令（重置全部模拟数据）",
+          "type": "string",
+          "const": "allow-reset-mock",
+          "markdownDescription": "启用 reset_mock 命令（重置全部模拟数据）"
+        },
+        {
+          "description": "启用 run_cleanup_now 命令（立即执行录制文件清理：按保留天数/总量上限删除旧文件）",
+          "type": "string",
+          "const": "allow-run-cleanup-now",
+          "markdownDescription": "启用 run_cleanup_now 命令（立即执行录制文件清理：按保留天数/总量上限删除旧文件）"
+        },
+        {
+          "description": "启用 run_health_check 命令（运行诊断检查并发送通知）",
+          "type": "string",
+          "const": "allow-run-health-check",
+          "markdownDescription": "启用 run_health_check 命令（运行诊断检查并发送通知）"
+        },
+        {
+          "description": "启用 run_wizard_health_check 命令（向导环境检查：FFmpeg/磁盘/写入权限）",
+          "type": "string",
+          "const": "allow-run-wizard-health-check",
+          "markdownDescription": "启用 run_wizard_health_check 命令（向导环境检查：FFmpeg/磁盘/写入权限）"
+        },
+        {
+          "description": "启用 save_config 命令（保存全局配置并同步托盘/输出目录放行）",
+          "type": "string",
+          "const": "allow-save-config",
+          "markdownDescription": "启用 save_config 命令（保存全局配置并同步托盘/输出目录放行）"
+        },
+        {
+          "description": "启用 set_all_mock_live 命令（一键设置全部模拟主播开播/下播）",
+          "type": "string",
+          "const": "allow-set-all-mock-live",
+          "markdownDescription": "启用 set_all_mock_live 命令（一键设置全部模拟主播开播/下播）"
+        },
+        {
+          "description": "启用 set_autostart 命令（写系统自启注册表/XDG autostart 并落盘配置）",
+          "type": "string",
+          "const": "allow-set-autostart",
+          "markdownDescription": "启用 set_autostart 命令（写系统自启注册表/XDG autostart 并落盘配置）"
+        },
+        {
+          "description": "启用 set_mock_live_data 命令（写入模拟直播数据并自动启用 Mock 模式）",
+          "type": "string",
+          "const": "allow-set-mock-live-data",
+          "markdownDescription": "启用 set_mock_live_data 命令（写入模拟直播数据并自动启用 Mock 模式）"
+        },
+        {
+          "description": "启用 set_mock_mode 命令（切换 Mock 模式开关）",
+          "type": "string",
+          "const": "allow-set-mock-mode",
+          "markdownDescription": "启用 set_mock_mode 命令（切换 Mock 模式开关）"
+        },
+        {
+          "description": "启用 set_shortcut 命令（保存快捷键映射到配置）",
+          "type": "string",
+          "const": "allow-set-shortcut",
+          "markdownDescription": "启用 set_shortcut 命令（保存快捷键映射到配置）"
+        },
+        {
+          "description": "启用 start_recording 命令（占位命令，当前版本恒返回错误，保留注册）",
+          "type": "string",
+          "const": "allow-start-recording",
+          "markdownDescription": "启用 start_recording 命令（占位命令，当前版本恒返回错误，保留注册）"
+        },
+        {
+          "description": "启用 stop_anchors_recording 命令（停止指定主播的录制任务）",
+          "type": "string",
+          "const": "allow-stop-anchors-recording",
+          "markdownDescription": "启用 stop_anchors_recording 命令（停止指定主播的录制任务）"
+        },
+        {
+          "description": "启用 stop_recording 命令（停止指定主播的录制任务）",
+          "type": "string",
+          "const": "allow-stop-recording",
+          "markdownDescription": "启用 stop_recording 命令（停止指定主播的录制任务）"
+        },
+        {
+          "description": "启用 trigger_detection_now 命令（立即唤醒触发一轮直播检测）",
+          "type": "string",
+          "const": "allow-trigger-detection-now",
+          "markdownDescription": "启用 trigger_detection_now 命令（立即唤醒触发一轮直播检测）"
+        },
+        {
+          "description": "启用 update_anchor 命令（更新主播配置，含保存即停语义）",
+          "type": "string",
+          "const": "allow-update-anchor",
+          "markdownDescription": "启用 update_anchor 命令（更新主播配置，含保存即停语义）"
+        },
+        {
+          "description": "启用 update_mock_anchor 命令（更新模拟主播）",
+          "type": "string",
+          "const": "allow-update-mock-anchor",
+          "markdownDescription": "启用 update_mock_anchor 命令（更新模拟主播）"
+        },
+        {
+          "description": "This permission set configures if your\napplication can enable or disable auto\nstarting the application on boot.\n\n#### Granted Permissions\n\nIt allows all to check, enable and\ndisable the automatic start on boot.\n\n\n#### This default permission set includes:\n\n- `allow-enable`\n- `allow-disable`\n- `allow-is-enabled`",
+          "type": "string",
+          "const": "autostart:default",
+          "markdownDescription": "This permission set configures if your\napplication can enable or disable auto\nstarting the application on boot.\n\n#### Granted Permissions\n\nIt allows all to check, enable and\ndisable the automatic start on boot.\n\n\n#### This default permission set includes:\n\n- `allow-enable`\n- `allow-disable`\n- `allow-is-enabled`"
+        },
+        {
+          "description": "Enables the disable command without any pre-configured scope.",
+          "type": "string",
+          "const": "autostart:allow-disable",
+          "markdownDescription": "Enables the disable command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the enable command without any pre-configured scope.",
+          "type": "string",
+          "const": "autostart:allow-enable",
+          "markdownDescription": "Enables the enable command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the is_enabled command without any pre-configured scope.",
+          "type": "string",
+          "const": "autostart:allow-is-enabled",
+          "markdownDescription": "Enables the is_enabled command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the disable command without any pre-configured scope.",
+          "type": "string",
+          "const": "autostart:deny-disable",
+          "markdownDescription": "Denies the disable command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the enable command without any pre-configured scope.",
+          "type": "string",
+          "const": "autostart:deny-enable",
+          "markdownDescription": "Denies the enable command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the is_enabled command without any pre-configured scope.",
+          "type": "string",
+          "const": "autostart:deny-is-enabled",
+          "markdownDescription": "Denies the is_enabled command without any pre-configured scope."
+        },
         {
           "description": "Default core plugins set.\n#### This default permission set includes:\n\n- `core:path:default`\n- `core:event:default`\n- `core:window:default`\n- `core:webview:default`\n- `core:app:default`\n- `core:image:default`\n- `core:resources:default`\n- `core:menu:default`\n- `core:tray:default`",
           "type": "string",
@@ -2455,6 +2989,54 @@
           "type": "string",
           "const": "notification:deny-show",
           "markdownDescription": "Denies the show command without any pre-configured scope."
+        },
+        {
+          "description": "This permission set allows opening `mailto:`, `tel:`, `https://` and `http://` urls using their default application\nas well as reveal file in directories using default file explorer\n#### This default permission set includes:\n\n- `allow-open-url`\n- `allow-reveal-item-in-dir`\n- `allow-default-urls`",
+          "type": "string",
+          "const": "opener:default",
+          "markdownDescription": "This permission set allows opening `mailto:`, `tel:`, `https://` and `http://` urls using their default application\nas well as reveal file in directories using default file explorer\n#### This default permission set includes:\n\n- `allow-open-url`\n- `allow-reveal-item-in-dir`\n- `allow-default-urls`"
+        },
+        {
+          "description": "This enables opening `mailto:`, `tel:`, `https://` and `http://` urls using their default application.",
+          "type": "string",
+          "const": "opener:allow-default-urls",
+          "markdownDescription": "This enables opening `mailto:`, `tel:`, `https://` and `http://` urls using their default application."
+        },
+        {
+          "description": "Enables the open_path command without any pre-configured scope.",
+          "type": "string",
+          "const": "opener:allow-open-path",
+          "markdownDescription": "Enables the open_path command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the open_url command without any pre-configured scope.",
+          "type": "string",
+          "const": "opener:allow-open-url",
+          "markdownDescription": "Enables the open_url command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the reveal_item_in_dir command without any pre-configured scope.",
+          "type": "string",
+          "const": "opener:allow-reveal-item-in-dir",
+          "markdownDescription": "Enables the reveal_item_in_dir command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the open_path command without any pre-configured scope.",
+          "type": "string",
+          "const": "opener:deny-open-path",
+          "markdownDescription": "Denies the open_path command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the open_url command without any pre-configured scope.",
+          "type": "string",
+          "const": "opener:deny-open-url",
+          "markdownDescription": "Denies the open_url command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the reveal_item_in_dir command without any pre-configured scope.",
+          "type": "string",
+          "const": "opener:deny-reveal-item-in-dir",
+          "markdownDescription": "Denies the reveal_item_in_dir command without any pre-configured scope."
         }
       ]
     },
@@ -2549,6 +3131,23 @@
           "enum": [
             "iOS"
           ]
+        }
+      ]
+    },
+    "Application": {
+      "description": "Opener scope application.",
+      "anyOf": [
+        {
+          "description": "Open in default application.",
+          "type": "null"
+        },
+        {
+          "description": "If true, allow open with any application.",
+          "type": "boolean"
+        },
+        {
+          "description": "Allow specific application to open with.",
+          "type": "string"
         }
       ]
     }

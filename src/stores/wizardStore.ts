@@ -1,12 +1,10 @@
 import { defineStore } from "pinia";
 import { ref } from "vue";
+import { isLinuxPlatform } from "@/services/platform";
 import type { ThemeMode } from "@/stores/themeStore";
 import type { GlobalConfig } from "@/types";
 
-/** 向导完成标记的 localStorage 键（与后端 is_first_run 双重判定） */
-const WIZARD_COMPLETED_KEY = "wizard_completed";
-
-/** 第二页「基本设置」暂存的配置（校验通过后暂存内存，第三页通过后才写盘） */
+/** 第二页「基本设置」暂存的配置（校验通过后暂存内存，最后一步「完成」才写盘） */
 export interface WizardStaged {
   language: "zh-CN" | "en";
   outputDir: string;
@@ -16,22 +14,18 @@ export interface WizardStaged {
   autostart: boolean;
   trayMinimize: boolean;
   theme: ThemeMode;
-}
-
-function readCompleted(): boolean {
-  try {
-    return localStorage.getItem(WIZARD_COMPLETED_KEY) === "1";
-  } catch {
-    return false;
-  }
+  /** FFmpeg 可执行文件路径（下载后暂存；完成时随 stagedToConfigPatch 写入，null = 自动探测） */
+  ffmpegPath: string | null;
+  /** FFprobe 可执行文件路径（下载后暂存；空串 = 自动探测） */
+  ffprobePath: string;
 }
 
 export const useWizardStore = defineStore("wizard", () => {
-  // 向导完成标记（localStorage）：当前无消费方——保留给未来「导入旧配置/重新引导」
-  // 流程使用（首次运行判定以后端 is_first_run 为准，本标记仅作前端冗余记录）
-  const wizardCompleted = ref(readCompleted());
-
   // ── 第二页暂存配置（内存，不写盘） ──
+  // 注（M7 审查跟进）：向导「完成标记」的 localStorage 逻辑已整体移除——该键
+  // 只写不读、且写入点在 finish_wizard 销毁窗口之后（await 永不返回）不可达，
+  // 属死代码。首次运行判定完全以后端 `GlobalConfig.wizard_completed` /
+  // `is_first_run()` 为准（config.toml 落盘即持久化），前端无需冗余标记。
   const staged = ref<WizardStaged>({
     language: "zh-CN",
     outputDir: "",
@@ -39,8 +33,12 @@ export const useWizardStore = defineStore("wizard", () => {
     segmentSeconds: 0,
     diskThresholdGb: 10,
     autostart: false,
-    trayMinimize: true,
+    // Linux 未集成系统托盘（决策 #2）：初始值为 false（Windows 上由 initStaged 按配置覆盖）
+    trayMinimize: false,
     theme: "system",
+    // FFmpeg/ffprobe 路径：下载后暂存（不写盘），完成时随 save_config 落盘
+    ffmpegPath: null,
+    ffprobePath: "",
   });
 
   /** 用现有配置/偏好填充暂存默认值（只填空值，保留用户已编辑内容） */
@@ -61,7 +59,15 @@ export const useWizardStore = defineStore("wizard", () => {
       staged.value.diskThresholdGb = config.disk_space_limit_gb;
     }
     staged.value.autostart = config.autostart;
-    staged.value.trayMinimize = config.close_behavior !== "exit";
+    // Linux 未集成系统托盘：恒 false（托盘选项已禁用，避免旧配置 close_behavior=tray 带入）
+    staged.value.trayMinimize = isLinuxPlatform() ? false : config.close_behavior !== "exit";
+    // FFmpeg/ffprobe 路径：只填空值（下载后已暂存则不覆盖）
+    if (!staged.value.ffmpegPath && config.ffmpeg_path) {
+      staged.value.ffmpegPath = config.ffmpeg_path;
+    }
+    if (!staged.value.ffprobePath && config.ffprobe_path) {
+      staged.value.ffprobePath = config.ffprobe_path;
+    }
     staged.value.theme = theme;
   }
 
@@ -69,14 +75,5 @@ export const useWizardStore = defineStore("wizard", () => {
     staged.value = { ...staged.value, ...patch };
   }
 
-  function complete() {
-    wizardCompleted.value = true;
-    try {
-      localStorage.setItem(WIZARD_COMPLETED_KEY, "1");
-    } catch {
-      // localStorage 不可用（非 Tauri 调试环境）时仅内存标记
-    }
-  }
-
-  return { wizardCompleted, staged, initStaged, setStaged, complete };
+  return { staged, initStaged, setStaged };
 });

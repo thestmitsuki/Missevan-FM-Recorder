@@ -1,6 +1,6 @@
 import { defineStore } from "pinia";
 import { computed, ref } from "vue";
-import type { RecordingFile, FileGroup } from "@/types";
+import type { FileFolder, RecordingFile } from "@/types";
 import { systemTimeToDate } from "@/types/file";
 import { onRecordingFilesChanged } from "@/services/events";
 import { api } from "@/services/api";
@@ -29,9 +29,8 @@ function dateIsoOf(file: RecordingFile): string {
 }
 
 export const useFileStore = defineStore("file", () => {
-  // ── 数据 ──
-  const files = ref<RecordingFile[]>([]);
-  const groups = ref<FileGroup[]>([]);
+  // ── 数据（文件夹树：录制目录 → 主播文件夹 → 全部音频文件）──
+  const folders = ref<FileFolder[]>([]);
   const loading = ref(false);
   const error = ref<string | null>(null);
   let unlisten: (() => void) | null = null;
@@ -70,30 +69,27 @@ export const useFileStore = defineStore("file", () => {
     return true;
   }
 
-  /** 过滤后的单文件（日期分组展示用） */
-  const filteredFiles = computed(() => files.value.filter(matchesFilter));
-
-  /** 过滤后的分段组：组内文件过滤，空组剔除 */
-  const filteredGroups = computed(() => {
-    const result: FileGroup[] = [];
-    for (const g of groups.value) {
-      const inner = g.files.filter(matchesFilter);
-      if (inner.length > 0) {
-        result.push({ ...g, files: inner });
-      }
+  /** 过滤后的文件夹树：文件夹内文件过滤，空文件夹剔除（显示用） */
+  const filteredFolders = computed(() => {
+    const result: FileFolder[] = [];
+    for (const folder of folders.value) {
+      const innerFiles = folder.files.filter(matchesFilter);
+      if (innerFiles.length === 0) continue;
+      result.push({ ...folder, files: innerFiles });
     }
     return result;
   });
 
-  /** 是否处于"无任何文件"（未过滤）状态 */
-  const hasAnyFiles = computed(
-    () => files.value.length > 0 || groups.value.length > 0,
+  /** 全部文件（重命名查重/播放用） */
+  const allFiles = computed(() =>
+    folders.value.flatMap((f) => f.files),
   );
 
+  /** 是否处于"无任何文件"（未过滤）状态 */
+  const hasAnyFiles = computed(() => folders.value.length > 0);
+
   /** 是否处于"过滤后无结果"状态 */
-  const hasFilteredFiles = computed(
-    () => filteredFiles.value.length > 0 || filteredGroups.value.length > 0,
-  );
+  const hasFilteredFiles = computed(() => filteredFolders.value.length > 0);
 
   /** 是否有生效的筛选条件（用于"清除筛选"按钮显隐） */
   const hasActiveFilters = computed(
@@ -118,8 +114,7 @@ export const useFileStore = defineStore("file", () => {
     error.value = null;
     try {
       const result = await api.getRecordingFiles(search);
-      files.value = result.files;
-      groups.value = result.groups;
+      folders.value = result.folders;
     } catch (err) {
       error.value = String(err);
     } finally {
@@ -149,8 +144,7 @@ export const useFileStore = defineStore("file", () => {
   function startListener() {
     if (unlisten) return;
     unlisten = onRecordingFilesChanged((payload) => {
-      files.value = payload.files;
-      groups.value = payload.groups;
+      folders.value = payload.folders;
     });
   }
 
@@ -160,16 +154,15 @@ export const useFileStore = defineStore("file", () => {
   }
 
   return {
-    files,
-    groups,
+    folders,
+    filteredFolders,
+    allFiles,
     loading,
     error,
     searchQuery,
     anchorQuery,
     typeFilter,
     dateRange,
-    filteredFiles,
-    filteredGroups,
     hasAnyFiles,
     hasFilteredFiles,
     hasActiveFilters,

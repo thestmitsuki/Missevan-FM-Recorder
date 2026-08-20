@@ -106,6 +106,11 @@ export default {
     thisWeek: "This Week",
     thisMonth: "This Month",
     fileCount: "{count} files",
+    uncategorized: "Uncategorized",
+    sortBy: "Sort by",
+    sortLatest: "Latest first",
+    sortNameAsc: "Name A→Z",
+    sortNameDesc: "Name Z→A",
     fileDetails: "File Details",
     fileName: "File Name",
     anchor: "Anchor",
@@ -117,13 +122,14 @@ export default {
     // ── Left action rail ──
     searchFiles: "Search files",
     refreshFiles: "Refresh",
+    openOutputDir: "Open Output Folder",
+    cleanupNow: "Clean Up Now",
     filterFiles: "Filter",
     backToTop: "Back to top",
     clearSearch: "Clear search",
-    // ── Segment groups ──
-    segments: "{count} segments",
-    playGroup: "Play all segments",
-    deleteGroup: "Delete group",
+    playAll: "Play all",
+    deleteAll: "Delete all",
+    moreActions: "More actions",
     // ── Item menu ──
     play: "Play",
     rename: "Rename",
@@ -133,7 +139,7 @@ export default {
     // ── Player ──
     nowPlaying: "Now Playing",
     pause: "Pause",
-    segmentProgress: "Segment {current}/{total}",
+    playerProgress: "File {current}/{total}",
     playerVolume: "Volume",
     playerSeek: "Seek",
     playerError:
@@ -148,12 +154,15 @@ export default {
     deleteConfirmTitle: "Delete File",
     deleteConfirmMessage:
       "Are you sure you want to delete this file? This action cannot be undone.",
-    deleteGroupConfirmMessage:
-      "Are you sure you want to delete this group of {count} segments? This action cannot be undone.",
+    deleteFolderConfirmTitle: "Delete All Files",
+    deleteFolderConfirmMessage:
+      "Delete all {count} files of this anchor in this month? This action cannot be undone.",
     // ── Filter panel ──
     filterByAnchor: "Filter by anchor name",
     filterByType: "File type",
     allTypes: "All types",
+    formatM4A: "M4A",
+    formatMP3: "MP3",
     filterByDate: "Date range",
     startDate: "Start date",
     endDate: "End date",
@@ -165,6 +174,15 @@ export default {
     renameFailed: "Rename failed: {error}",
     refreshFailed: "Refresh failed: {error}",
     playFailed: "Playback failed: {error}",
+    // ── Open output folder / Clean up now (M4 wires open_output_dir / run_cleanup_now) ──
+    outputDirOpened: "Output folder opened",
+    outputDirOpenFailed: "Failed to open output folder: {error}",
+    cleanupConfirmTitle: "Clean Up Recordings",
+    cleanupConfirmMessage:
+      "Old recording files will be deleted according to the retention period and total size limit. This cannot be undone. Continue?",
+    cleanupSuccess: "Cleaned up {count} files, freed {size}",
+    cleanupNothing: "No files to clean up",
+    cleanupFailed: "Cleanup failed: {error}",
   },
 
   // ── Settings View（8-category left navigation） ──
@@ -180,7 +198,6 @@ export default {
     unsavedTitle: "Unsaved Changes",
     unsavedMessage: "Save changes?",
     discard: "Discard",
-    restartHint: "Some changes will take effect after the next restart",
     restoreCategory: "Restore Defaults",
     restoreAll: "Restore All Defaults",
     restoreAllTitle: "Restore all defaults",
@@ -218,8 +235,7 @@ export default {
       closeBehavior: "On Closing Main Window",
       closeTray: "Minimize to system tray",
       closeExit: "Exit the app",
-      showTray: "Show icon in system tray",
-      showTrayHint: "Restore the window from the tray when minimized",
+      trayUnavailable: "System tray is not available on Linux; this option is disabled. Closing the window will exit the app (background recording continues).",
       checkUpdates: "Check for Updates",
       checkUpdatesHint: "Check for new versions on startup",
     },
@@ -240,13 +256,12 @@ export default {
       segmentSeconds: "Segment Interval (seconds)",
       templateTitle: "File Name Template",
       templateDesc: "Variables supported; a sample file name is previewed live",
-      templatePlaceholder: "{anchor_name}/{date}_{time}_{anchor_name}_{index}.{ext}",
+      templatePlaceholder: "{anchor_name}/{date}_{time}_{anchor_name}.{ext}",
       tplVars: "Variables",
       tplVarAnchorName: "Anchor name",
       tplVarRoomId: "Room ID",
       tplVarDate: "Date (Y-M-D)",
       tplVarTime: "Time (H-M-S)",
-      tplVarIndex: "Recording index",
       tplVarExt: "File extension",
       tplSampleAnchorName: "Sample Anchor",
       tplPreviewLabel: "Preview",
@@ -356,6 +371,7 @@ export default {
     shortcuts: {
       title: "Global Shortcuts",
       placeholder: "Not active yet",
+      disabledNotice: "Shortcut features are not enabled in this version; they will be available in a future release",
       desc: "Global shortcuts are not wired to the backend yet; this section is a placeholder. Default key bindings are shown below (editing is disabled)",
       function: "Function",
       combo: "Combination",
@@ -367,7 +383,7 @@ export default {
     // ── Advanced ──
     advanced: {
       logLevelTitle: "Log Level",
-      logLevelHint: "Switch to Debug for more information when troubleshooting. Changes take effect on the next app start.",
+      logLevelHint: "Switch to Debug for more information when troubleshooting. Changes take effect immediately after saving.",
       logLevel: {
         error: "Error",
         warn: "Warn",
@@ -401,8 +417,8 @@ export default {
       importModeDesc: "Choose import mode:",
       importModeMerge: "Merge: only override fields present in the file; anchors merged by ID (duplicates skipped)",
       importModeReplace: "Replace: overwrite all settings with the file content (including anchors)",
-      /** Backend import_config success notice (fully effective after restart) */
-      importSuccess: "Config imported — fully takes effect after restart",
+      /** Backend import_config success notice (log level hot-reloaded immediately, consistent with backend toast) */
+      importSuccess: "Config imported — the log level now takes effect immediately",
       /** Reset confirm dialog (backend reset_config: delete config + restart) */
       resetConfirmMessage:
         "This will delete all settings and restart the app back to the first-run wizard. Continue?",
@@ -492,6 +508,7 @@ export default {
     diskThresholdHint: "Pause new recordings when free space drops below this value",
     autostart: "Launch on Startup",
     trayMinimize: "Minimize to System Tray on Close",
+    trayUnavailable: "System tray is not available on Linux; this option is disabled. Closing the window will exit the app (background recording continues).",
     theme: "Theme",
     themeLight: "Light",
     themeDark: "Dark",
@@ -499,8 +516,8 @@ export default {
     previous: "Previous",
     next: "Next",
     errOutputDirRequired: "Output directory cannot be empty",
-    errSegmentInvalid: "Segment interval must be a non-negative integer",
-    errThresholdInvalid: "Disk threshold must be a positive integer",
+    errSegmentInvalid: "Segment interval must be an integer from 0 to 86400 (0 = no splitting)",
+    errThresholdInvalid: "Disk threshold must be an integer from 1 to 100000 (GB)",
     // Page 3: Environment Check
     envTitle: "Environment Check",
     envDesc: "Checking your environment, please wait…",
@@ -529,6 +546,7 @@ export default {
     changeOutputDir: "Change Output Directory",
     fixErrorsFirst: "Please resolve the failing items first",
     saveFailed: "Failed to save config: {error}",
+    autostartFailed: "Config saved, but enabling autostart failed: {error}",
     saveRetry: "Retry Save",
     retryCheck: "Retry Check",
     retryDownload: "Retry Download",

@@ -11,7 +11,9 @@ use crate::domain::config::model::AnchorStatusUpdate;
 use crate::domain::config::model::{AnchorConfig, Config};
 use crate::domain::detector::merge_live_state;
 use crate::domain::detector::stats::DetectorStats;
+use crate::domain::recorder::disk::{check_disk_space, DiskSpaceStatus};
 use crate::domain::spider::{CheckErrorKind, LiveCheckResult, MissevanClient};
+use crate::infrastructure::notification::dispatcher::NotificationDispatcher;
 use crate::infrastructure::state::app_state::AppState;
 use crate::infrastructure::state::mock_store::MockStore;
 use tauri::WebviewWindow;
@@ -117,6 +119,8 @@ pub struct DetectionLoop {
     pub stats: Arc<DetectorStats>,
     /// 429 限流冷却（anchor_id -> RateLimit；避免频繁请求被风控）
     rate_limits: Arc<Mutex<HashMap<String, RateLimit>>>,
+    /// 通知分发器（S3：磁盘阈值每轮检查的 DISK_LOW 预警）
+    notifier: Arc<NotificationDispatcher>,
 }
 
 impl DetectionLoop {
@@ -130,6 +134,7 @@ impl DetectionLoop {
         wake: Arc<Notify>,
         shutdown: Arc<Notify>,
         stats: Arc<DetectorStats>,
+        notifier: Arc<NotificationDispatcher>,
     ) -> Self {
         Self {
             client,
@@ -142,12 +147,21 @@ impl DetectionLoop {
             shutdown,
             stats,
             rate_limits: Arc::new(Mutex::new(HashMap::new())),
+            notifier,
         }
     }
 
     /// 手动触发一轮立即检测（唤醒等待中的循环；debug 页「立即检测」按钮）
     pub fn trigger_now(&self) {
         self.wake.notify_one();
+    }
+
+    /// 主播删除时清理其 429 限流冷却条目（R3/L10）：按主播维度的运行时状态
+    /// 随主播删除回收，避免长期运行累积无主条目（增长有界，但主播已删除则
+    /// 条目无保留价值）。tokio Mutex 锁内简单移除，不跨 await 持有；删除后
+    /// 该主播重新添加时冷却从零开始（合理语义——新主播条目不应继承旧冷却）。
+    pub async fn prune_anchor_state(&self, anchor_id: &str) {
+        self.rate_limits.lock().await.remove(anchor_id);
     }
 
     pub async fn start(
@@ -159,25 +173,19 @@ impl DetectionLoop {
     ) {
         self.stats.set_running(true);
         loop {
-            let config = get_config();
+            // 等待时长基于当前配置（间隔/抖动）；仅用于 select 的 sleep 时长——
+            // 等待期间配置变化不影响本轮等待，只影响下一轮。
+            let delay_cfg = get_config();
             // 检测间隔下限 5s（与 model.rs is_valid / 前端校验一致；规格默认 120s）
-            let base_interval = config.global.check_interval_secs.max(5);
+            let base_interval = delay_cfg.global.check_interval_secs.max(5);
             // 随机抖动上限来自配置（Task 14：detector_jitter_secs，0 = 不抖动）
             let jitter: u64 =
-                rand::thread_rng().gen_range(0..=config.global.detector_jitter_secs as u64);
+                rand::thread_rng().gen_range(0..=delay_cfg.global.detector_jitter_secs as u64);
             let delay = Duration::from_secs(base_interval + jitter);
-            // 并发信号量每轮从配置重建（Task 20 收尾：detector_concurrency 运行时接线，
-            // 修改后下一轮立即生效，无需重启；max(1) 兜底避免 0 死锁）
-            let semaphore =
-                Arc::new(Semaphore::new(config.global.detector_concurrency.max(1) as usize));
-            // 重试参数每轮从配置读取（§11.1 网络分类接线）：
-            // max_retries = 每轮单主播最大请求次数（含首次，沿用原 MAX_ATTEMPTS 语义；
-            // max(1) 兜底）；retry_delay_secs = 指数退避基线（1×/2×/4× 增长）
-            let max_attempts = config.global.max_retries.max(1);
-            let retry_base_secs = config.global.retry_delay_secs.max(1);
 
-            // 等待下轮检测；finish_wizard 等场景可通过 wake 信号立即唤醒；
-            // 退出信号（Task 17：shutdown_notify.notify_waiters()）到达则立即停止循环
+            // 等待下轮检测；finish_wizard / 调试页「立即检测」等场景可通过 wake
+            // 信号立即唤醒；退出信号（Task 17：shutdown_notify.notify_waiters()）
+            // 到达则立即停止循环
             tokio::select! {
                 _ = sleep(delay) => {}
                 _ = self.wake.notified() => {}
@@ -188,10 +196,62 @@ impl DetectionLoop {
                 }
             }
 
+            // 唤醒后读取**最新**配置：本轮检测用当前主播列表/参数。
+            // 修复：此前在 select 前读取快照——添加主播后点「立即检测」唤醒的
+            // 是正在等待的那一轮，用的还是添加前读取的旧快照（不含新主播），
+            // 需再等一轮（下一次点击/定时）才生效，表现为“点两次才触发录制”。
+            let config = get_config();
+            // 并发信号量每轮从配置重建（Task 20 收尾：detector_concurrency 运行时接线，
+            // 修改后下一轮立即生效，无需重启；max(1) 兜底避免 0 死锁）
+            let semaphore =
+                Arc::new(Semaphore::new(config.global.detector_concurrency.max(1) as usize));
+            // 重试参数每轮从配置读取（§11.1 网络分类接线）：
+            // max_retries = 每轮单主播最大请求次数（含首次，沿用原 MAX_ATTEMPTS 语义；
+            // max(1) 兜底）；retry_delay_secs = 指数退避基线（1×/2×/4× 增长）
+            let max_attempts = config.global.max_retries.max(1);
+            let retry_base_secs = config.global.retry_delay_secs.max(1);
+
             let anchors = config.anchors.clone();
             if anchors.is_empty() {
                 continue;
             }
+
+            // S3：磁盘阈值运行中检查（disk_space_limit_gb 预警激活）——每检测轮
+            // 一次低开销 statfs（与录制启动前检查 engine.rs S2a / 录制运行中
+            // monitor.rs 共用 check_disk_space 与 AppState 通知冷却）。低于阈值：
+            // 1) 节流发 DISK_LOW 预警（无人值守也可见，不再零预警）；
+            // 2) 本轮暂停自动录制启动（避免每轮反复尝试 → 启动前检查拒绝的
+            //    日志刷屏）。0 = 不限制；查询失败放行。
+            let disk_low_this_round = match check_disk_space(
+                &config.global.output_dir,
+                config.global.disk_space_limit_gb,
+            ) {
+                DiskSpaceStatus::Low {
+                    available_gb,
+                    threshold_gb,
+                } => {
+                    let should_notify = self.app_state.lock().await.disk_notify_allowed();
+                    if should_notify {
+                        self.notifier
+                            .warning(
+                                "DISK_LOW",
+                                "磁盘空间不足",
+                                format!(
+                                    "剩余 {} GB，低于阈值 {} GB；空间恢复前暂停新录制",
+                                    available_gb, threshold_gb
+                                ),
+                            )
+                            .await;
+                    }
+                    tracing::warn!(
+                        "[检测] 磁盘空间不足（剩余 {} GB < 阈值 {} GB），本轮暂停自动录制启动",
+                        available_gb,
+                        threshold_gb
+                    );
+                    true
+                }
+                DiskSpaceStatus::Ok { .. } | DiskSpaceStatus::QueryFailed(_) => false,
+            };
 
             // 本轮检测开始（记录上次检测时间）
             self.stats.mark_round_started();
@@ -363,6 +423,29 @@ impl DetectionLoop {
                                     state.tasks.contains_key(&anchor_clone.id)
                                 };
                                 if !already_recording {
+                                    // S2b：崩溃熔断门控——同一主播连续异常退出达
+                                    // 阈值（monitor REC_CRASH 上报）后，退避期内
+                                    // 暂停自动重启（指数退避至上限），不再反复
+                                    // spawn → 崩溃 → 通知刷屏。恢复：退避到期 /
+                                    // 状态探针成功 / 正常结束 / 手动操作。
+                                    if app_state.lock().await.is_crash_blocked(&anchor_clone.id) {
+                                        tracing::warn!(
+                                            "[检测] 录制崩溃熔断中，本轮跳过自动重启: {} (room_id={})",
+                                            anchor_clone.name,
+                                            anchor_clone.room_id
+                                        );
+                                        return;
+                                    }
+                                    // S3：磁盘不足轮，跳过自动录制启动（已发预警；
+                                    // 恢复后下轮自动恢复）
+                                    if disk_low_this_round {
+                                        tracing::debug!(
+                                            "[检测] 磁盘空间不足，跳过自动录制启动: {} (room_id={})",
+                                            anchor_clone.name,
+                                            anchor_clone.room_id
+                                        );
+                                        return;
+                                    }
                                     let cancel = CancellationToken::new();
                                     tracing::info!(
                                         "[检测] 触发自动录制: {} (room_id={})",

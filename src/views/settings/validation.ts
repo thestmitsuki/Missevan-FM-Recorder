@@ -8,7 +8,8 @@ import type { GlobalConfig } from "@/types";
 import type { AppLocale } from "@/locales";
 import type { AppearancePrefs } from "@/stores/appearanceStore";
 import type { ThemeMode } from "@/stores/themeStore";
-import type { CategoryId } from "./sections";
+import { isWindowsPlatform } from "@/services/platform";
+import type { CategoryId } from "./sections/types";
 
 /** 表单基础形态：ffmpeg_path 归一为 string（"" = 自动探测），保存时再转回 null */
 export type SettingsFormBase = Omit<GlobalConfig, "ffmpeg_path"> & { ffmpeg_path: string };
@@ -17,7 +18,8 @@ export type SettingsFormBase = Omit<GlobalConfig, "ffmpeg_path"> & { ffmpeg_path
  * 设置页表单全量形态 = GlobalConfig 字段 + 三个「保存后生效」暂存字段：
  * - locale / theme / appearance 为纯前端偏好（localStorage），暂存于表单，
  *   save() 成功时统一提交（setLocale / themeStore.setMode / appearanceStore.update）；
- * - shortcuts 随表单整包落盘（save_config 写入 GlobalConfig.shortcuts）。
+ * - shortcuts 保留在表单仅供 ShortcutSection 占位展示，H2 起不再随 save_config 写入落盘
+ *   （normalizeConfig 剔除，后端旧值保留）。
  */
 export type SettingsForm = SettingsFormBase & {
     locale: AppLocale;
@@ -36,15 +38,18 @@ export type I18nT = (key: string, params?: Record<string, unknown>) => string;
  *   trim 前兜底，保证保存链路不抛 TypeError；
  * - anchor_ids 剔除（Important-2）：该字段由 Live 页维护，设置页保存不透传表单快照，
  *   updateConfig 合并时保留 configStore 当前值（后端现值）；
+ * - shortcuts 剔除（H2）：当前版本快捷键功能未启用，设置页不再把快捷键写入落盘
+ *   （保留后端旧值，向后兼容旧配置；ShortcutSection 仅作占位展示）；
  * - locale/theme/appearance 剔除：纯前端偏好，由 save() 直接提交（I6），不进后端。
  */
 export function normalizeConfig(
     form: SettingsForm,
-): Omit<GlobalConfig, "anchor_ids"> {
-    const { ffmpeg_path, locale, theme, appearance, ...rest } = form;
+): Omit<GlobalConfig, "anchor_ids" | "shortcuts"> {
+    const { ffmpeg_path, locale, theme, appearance, shortcuts, ...rest } = form;
     void locale;
     void theme;
     void appearance;
+    void shortcuts;
     delete (rest as { anchor_ids?: string[] }).anchor_ids;
     return { ...rest, ffmpeg_path: (ffmpeg_path ?? "").trim() ? ffmpeg_path : null };
 }
@@ -166,16 +171,13 @@ export const validators: Record<CategoryId, (form: SettingsForm, t: I18nT) => Se
         }
         // null 防护（Critical-1）：恢复默认/导入链路曾可能把 ffmpeg_path 注入为 null
         const ffmpegPath = form.ffmpeg_path ?? "";
-        if (ffmpegPath.trim()) {
-            // Windows 可执行文件：允许 exe/bat/cmd/ps1
-            if (!/\.(exe|bat|cmd|ps1)$/i.test(ffmpegPath.trim())) {
-                e.ffmpeg_path = t("settings.errors.ffmpegPathInvalid");
-            }
+        // Windows 上可执行文件须为 exe/bat/cmd/ps1；Linux/macOS 上 FFmpeg 是无扩展名的
+        // ELF/Mach-O 可执行文件（如 /usr/bin/ffmpeg），非 Windows 跳过扩展名校验
+        if (ffmpegPath.trim() && isWindowsPlatform() && !/\.(exe|bat|cmd|ps1)$/i.test(ffmpegPath.trim())) {
+            e.ffmpeg_path = t("settings.errors.ffmpegPathInvalid");
         }
-        if (form.ffprobe_path.trim()) {
-            if (!/\.(exe|bat|cmd|ps1)$/i.test(form.ffprobe_path.trim())) {
-                e.ffprobe_path = t("settings.errors.ffprobePathInvalid");
-            }
+        if (form.ffprobe_path.trim() && isWindowsPlatform() && !/\.(exe|bat|cmd|ps1)$/i.test(form.ffprobe_path.trim())) {
+            e.ffprobe_path = t("settings.errors.ffprobePathInvalid");
         }
         return e;
     },

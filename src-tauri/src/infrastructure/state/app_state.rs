@@ -1,7 +1,8 @@
+use crate::domain::recorder::disk::{now_ms, CrashBackoff, DiskNotifyThrottle};
 use crate::infrastructure::state::mock_store::MockStore;
 
 use serde::Serialize;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -67,13 +68,17 @@ pub struct AppState {
     pub global_cancel: CancellationToken,
     /// 最近结束的录制摘要（最新在前，上限 50）
     pub history: VecDeque<RecordingSummary>,
-    /// 每主播录制序号（filename_template `{index}` 数据源；单调递增不回收）
-    pub recording_seq: HashMap<String, u32>,
     /// pre_record_delay 等待中的自动录制启动（anchor_id → 取消令牌）。
     /// 延迟窗口内任务尚未注册进 `tasks`，stop_recording / remove_anchor /
     /// 「关闭检测」必须先查此集合才能取消"即将启动"的录制（否则延迟结束后
     /// 仍会启动，只能等 monitor 兜底 ≤10s 才停——既有修复注释明确要杜绝的场景）。
     pub pending_starts: HashMap<String, CancellationToken>,
+    /// 录制崩溃熔断状态（S2b；monitor 崩溃上报 → loop 自动重启门控查询）。
+    /// 同一主播连续异常退出达阈值后暂停自动重启，指数退避至上限。
+    pub crash_backoffs: HashMap<String, CrashBackoff>,
+    /// DISK 通知节流（S2a 启动前拒绝 / S3 定期预警共用）：磁盘不足期间
+    /// 同类通知冷却期内不重复发送，避免通知刷屏。
+    pub disk_notify: DiskNotifyThrottle,
 }
 
 impl AppState {
@@ -82,13 +87,20 @@ impl AppState {
             tasks: HashMap::new(),
             global_cancel: CancellationToken::new(),
             history: VecDeque::new(),
-            recording_seq: HashMap::new(),
             pending_starts: HashMap::new(),
+            crash_backoffs: HashMap::new(),
+            disk_notify: DiskNotifyThrottle::default(),
         }
     }
 
     pub fn is_recording(&self, anchor_id: &str) -> bool {
         self.tasks.contains_key(anchor_id)
+    }
+
+    /// 当前录制中的主播 id 集合（快照用途：get_recording_status 在锁内仅取此
+    /// 快照即释放，遍历组装在锁外完成——避免长持锁阻塞同锁序操作）
+    pub fn recording_anchor_ids(&self) -> HashSet<String> {
+        self.tasks.keys().cloned().collect()
     }
 
     pub fn insert_task(&mut self, anchor_id: String, task: Task) {
@@ -137,13 +149,6 @@ impl AppState {
         self.pending_starts.contains_key(anchor_id)
     }
 
-    /// 分配并记录主播的下一个录制序号（1 起，单调递增；`{index}` 模板变量用）
-    pub fn next_recording_seq(&mut self, anchor_id: &str) -> u32 {
-        let next = self.recording_seq.get(anchor_id).copied().unwrap_or(0) + 1;
-        self.recording_seq.insert(anchor_id.to_string(), next);
-        next
-    }
-
     /// 记录一条结束的录制摘要（最新在前，超限丢最旧）
     pub fn record_history(&mut self, summary: RecordingSummary) {
         self.history.push_front(summary);
@@ -159,6 +164,67 @@ impl AppState {
             .values()
             .map(|t| crate::domain::services::file_cache::path_key(&t.output_path))
             .collect()
+    }
+
+    // ── S2b：录制崩溃熔断（monitor 上报 / loop 门控 / monitor 恢复）──
+
+    /// 上报一次录制崩溃：连续次数 +1，达到阈值后按指数退避设置熔断（loop 门控
+    /// 据此暂停自动重启）。返回连续崩溃次数（调用方日志展示用）
+    pub fn record_crash(&mut self, anchor_id: &str) -> u32 {
+        let entry = self.crash_backoffs.entry(anchor_id.to_string()).or_default();
+        entry.record_crash(now_ms());
+        entry.consecutive
+    }
+
+    /// 恢复（正常结束 / 稳定运行探活成功 / 手动操作）：清零计数与熔断
+    pub fn reset_crash(&mut self, anchor_id: &str) {
+        if let Some(b) = self.crash_backoffs.get_mut(anchor_id) {
+            b.record_success();
+        }
+    }
+
+    /// 该主播是否处于崩溃熔断退避期（loop 自动重启门控查询）
+    pub fn is_crash_blocked(&self, anchor_id: &str) -> bool {
+        self.crash_backoffs
+            .get(anchor_id)
+            .is_some_and(|b| b.is_blocked(now_ms()))
+    }
+
+    /// 连续崩溃次数（调试/日志展示）
+    pub fn crash_count(&self, anchor_id: &str) -> u32 {
+        self.crash_backoffs.get(anchor_id).map(|b| b.consecutive).unwrap_or(0)
+    }
+
+    // ── R3/L10：按主播清理运行时状态（remove_anchor 路径调用）──
+
+    /// 清理该主播的全部按主播维度运行时状态（主播删除时调用，避免长期运行
+    /// 累积无主条目）：
+    /// - `crash_backoffs` 崩溃熔断条目（此前仅复位计数，条目随删除回收）；
+    /// - `pending_starts` 延迟启动注册（复用 `cancel_pending_start`：若删除时
+    ///   仍在 pre_record_delay 窗口则一并取消并移除，防已删主播启动录制）。
+    /// 全局维度状态（`tasks` / `history` / `disk_notify`）不在此清理；存于
+    /// AppState 之外的按主播状态（429 限流 / 头像正负缓存）由各自模块的清理
+    /// 方法处理（DetectionLoop::prune_anchor_state / anchor_cmds::remove_anchor）。
+    /// 返回是否清理了任何条目（调用方按需记录日志）。
+    pub fn prune_anchor(&mut self, anchor_id: &str) -> bool {
+        let mut pruned = false;
+        pruned |= self.crash_backoffs.remove(anchor_id).is_some();
+        pruned |= self.cancel_pending_start(anchor_id);
+        pruned
+    }
+
+    // ── DISK 通知节流（S2a/S3 共用）──
+
+    /// 是否允许发送 DISK 通知：冷却期外放行并立即标记已发送（原子配合，避免
+    /// 并发调用方重复通知）
+    pub fn disk_notify_allowed(&mut self) -> bool {
+        let now = now_ms();
+        if self.disk_notify.should_notify(now) {
+            self.disk_notify.mark_notified(now);
+            true
+        } else {
+            false
+        }
     }
 }
 
@@ -198,6 +264,11 @@ impl RecorderState {
 
 pub type AvatarCache = Arc<Mutex<HashMap<String, String>>>;
 
+/// 头像拉取失败负缓存（O2）：主播 id → 禁止重试截止时刻（单调时钟 Instant）。
+/// 拉取失败的主播在 TTL（见 anchor_cmds.rs `AVATAR_NEGATIVE_CACHE_TTL`）内
+/// 不再发起网络请求，避免 API 抖动期每次 `get_anchors` 都重试全部失败项。
+pub type AvatarNegativeCache = Arc<Mutex<HashMap<String, std::time::Instant>>>;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -225,15 +296,29 @@ mod tests {
         assert_eq!(state.history[0].duration_secs, 20);
     }
 
-    #[test]
-    fn recording_seq_increments_per_anchor() {
+    #[tokio::test]
+    async fn recording_anchor_ids_snapshots_tasks() {
         let mut state = AppState::new();
-        assert_eq!(state.next_recording_seq("a"), 1);
-        assert_eq!(state.next_recording_seq("a"), 2);
-        assert_eq!(state.next_recording_seq("a"), 3);
-        // 不同主播独立计数
-        assert_eq!(state.next_recording_seq("b"), 1);
-        assert_eq!(state.recording_seq.get("a"), Some(&3));
+        assert!(state.recording_anchor_ids().is_empty(), "无任务时返回空集");
+        let token1 = CancellationToken::new();
+        let handle1 = tokio::spawn(async {});
+        state.insert_task(
+            "a1".to_string(),
+            Task {
+                anchor_id: "a1".to_string(),
+                cancel_token: token1,
+                handle: handle1,
+                anchor_name: "A1".to_string(),
+                room_id: "r1".to_string(),
+                output_path: "/out/a1.m4a".to_string(),
+                started_at: std::time::Instant::now(),
+                pid: None,
+            },
+        );
+        let ids = state.recording_anchor_ids();
+        assert_eq!(ids.len(), 1, "仅返回任务表内的主播 id");
+        assert!(ids.contains("a1"));
+        assert!(!ids.contains("ghost"));
     }
 
     // ── 延迟启动注册（pre_record_delay 窗口可取消）──
@@ -298,5 +383,72 @@ mod tests {
             state.history[RECORDING_HISTORY_LIMIT - 1].anchor_id,
             "id10"
         );
+    }
+
+    // ── S2b：崩溃熔断状态（AppState 集成）──
+
+    #[test]
+    fn crash_backoff_blocks_after_three_and_resets_on_success() {
+        let mut state = AppState::new();
+        assert!(!state.is_crash_blocked("a"));
+        assert_eq!(state.crash_count("a"), 0);
+        // 1、2 次崩溃：未熔断
+        state.record_crash("a");
+        state.record_crash("a");
+        assert!(!state.is_crash_blocked("a"));
+        assert_eq!(state.crash_count("a"), 2);
+        // 第 3 次 → 熔断（60s）
+        state.record_crash("a");
+        assert!(state.is_crash_blocked("a"), "连续 3 次崩溃必须熔断");
+        // 不同主播互不影响
+        assert!(!state.is_crash_blocked("b"));
+        // 恢复：正常结束清零
+        state.reset_crash("a");
+        assert!(!state.is_crash_blocked("a"));
+        assert_eq!(state.crash_count("a"), 0);
+    }
+
+    #[test]
+    fn disk_notify_throttle_allows_once_per_cooldown() {
+        let mut state = AppState::new();
+        // 首次放行并标记
+        assert!(state.disk_notify_allowed());
+        // 冷却期内拒绝（即使再次调用）
+        assert!(!state.disk_notify_allowed());
+        assert!(!state.disk_notify_allowed());
+    }
+
+    // ── R3/L10：按主播清理运行时状态（主播删除路径）──
+
+    #[test]
+    fn prune_anchor_removes_per_anchor_state_only() {
+        let mut state = AppState::new();
+        // 主播 a：崩溃熔断（连续 3 次 → 熔断中）+ 延迟启动注册
+        state.record_crash("a");
+        state.record_crash("a");
+        state.record_crash("a");
+        assert!(state.is_crash_blocked("a"));
+        let token = CancellationToken::new();
+        state.register_pending_start("a", token.clone());
+        // 主播 b：同样有状态，但不受 a 的清理影响
+        state.record_crash("b");
+
+        assert!(state.prune_anchor("a"), "应清理到 a 的状态条目");
+        assert_eq!(state.crash_count("a"), 0, "熔断条目应被移除");
+        assert!(!state.is_pending_start("a"), "延迟启动注册应被移除");
+        assert!(token.is_cancelled(), "清理时应取消延迟启动令牌（防已删主播启动录制）");
+        // b 不受影响
+        assert_eq!(state.crash_count("b"), 1);
+        // 幂等：无 a 的状态条目时返回 false，不误报
+        assert!(!state.prune_anchor("a"));
+    }
+
+    #[test]
+    fn prune_anchor_without_state_is_noop() {
+        let mut state = AppState::new();
+        assert!(!state.prune_anchor("ghost"), "无条目时不应误报已清理");
+        // 清理后状态查询全部回到默认
+        assert_eq!(state.crash_count("ghost"), 0);
+        assert!(!state.is_crash_blocked("ghost"));
     }
 }

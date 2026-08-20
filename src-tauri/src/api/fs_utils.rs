@@ -1,18 +1,19 @@
 //! 文件系统辅助命令（§11.2 托盘/系统：`open_output_dir`）
 //!
-//! Windows 上用资源管理器打开（选中）输出目录；目录不存在时先创建。
-//! 打开实现（open_in_explorer）位于 `domain::tools`——录制后动作
-//! （post_record_action=open_folder）与托盘「最近录制」菜单复用同一实现。
+//! 打开输出目录（目录不存在时先创建），实现走 tauri-plugin-opener 的
+//! `open_path`：Windows 以资源管理器打开目录本身，Linux 经 xdg-open 打开。
 
 use std::sync::Arc;
 use tauri::State;
+use tauri_plugin_opener::OpenerExt;
 
 use crate::domain::config::manager::ConfigManager;
 use crate::infrastructure::error::types::AppError;
 
-/// 打开输出目录（Windows：`explorer /select,` 并选中该目录）
+/// 打开输出目录（opener 插件 `open_path`：打开目录本身）
 #[tauri::command]
 pub(crate) async fn open_output_dir(
+    app: tauri::AppHandle,
     config_manager: State<'_, Arc<ConfigManager>>,
 ) -> Result<(), AppError> {
     let config = config_manager.load()?;
@@ -26,5 +27,14 @@ pub(crate) async fn open_output_dir(
             .with_technical(e.to_string())
         })?;
     }
-    crate::domain::tools::open_in_explorer(dir)
+    // tauri_plugin_opener::Opener::open_path(path: impl Into<String>, with: Option<impl Into<String>>)
+    app.opener()
+        .open_path(dir.to_string_lossy().into_owned(), None::<&str>)
+        .map_err(|e| {
+            AppError::system(
+                crate::infrastructure::error::types::INT_UNEXPECTED,
+                "打开输出目录失败",
+            )
+            .with_technical(e.to_string())
+        })
 }

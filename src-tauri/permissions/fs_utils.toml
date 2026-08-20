@@ -1,0 +1,6 @@
+# 权限定义：文件系统辅助命令（api/fs_utils.rs）
+
+[[permission]]
+identifier = "allow-open-output-dir"
+description = "启用 open_output_dir 命令（创建并打开输出目录）"
+commands = { allow = ["open_output_dir"], deny = [] }

@@ -26,7 +26,7 @@ body:
       label: 系统与环境信息
       description: 应用版本、操作系统、Rust/Tauri 版本、输出目录剩余空间等。可在「调试面板」导出诊断报告并附加。
       placeholder: |
-        应用版本: 0.1.0
+        应用版本: 0.2.0
         操作系统: Windows 10/11 ...
         录制格式/分段: M4A / 0
     validations:

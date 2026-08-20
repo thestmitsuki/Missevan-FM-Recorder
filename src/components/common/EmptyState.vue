@@ -1,4 +1,8 @@
 <script setup lang="ts">
+// Linux 无 emoji 字体（不引入字体依赖）：icon prop 均为 emoji 字符，
+// 按平台渲染——Windows 显示 emoji，Linux 不渲染（避免方框/空白）
+import { isWindowsPlatform } from "@/services/platform";
+
 defineProps<{
     icon?: string;
     title: string;
@@ -15,7 +19,7 @@ defineEmits<{
     <div class="empty-state-wrapper">
         <div class="empty-state-card">
             <div class="empty-state-content">
-                <span v-if="icon" class="empty-icon">{{ icon }}</span>
+                <span v-if="icon && isWindowsPlatform()" class="empty-icon">{{ icon }}</span>
                 <h2 class="empty-title">{{ title }}</h2>
                 <p v-if="description" class="empty-description">
                     {{ description }}

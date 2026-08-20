@@ -1,37 +1,14 @@
 //! 录制工具（FFmpeg / ffprobe）可执行文件路径解析。
 //!
-//! 首启向导下载的便携版 FFmpeg 位于 `{exe_dir}/ffmpeg/`（见 `api::wizard_cmds::download_ffmpeg`）。
+//! Windows 首启向导下载的便携版 FFmpeg 位于 `{exe_dir}/ffmpeg/`（见
+//! `api::wizard_cmds::download_ffmpeg`）；Linux 不内置便携版（向导提示用系统包
+//! 安装，见 `download_ffmpeg` 的 Linux 分支），该目录候选不会命中，仅保持候选
+//! 顺序与 Windows 一致。
 //! 所有消费方可执行文件路径的地方（健康检查候选、录制引擎 spawn）必须遵循同一候选顺序：
-//! **配置指定路径（若非空）→ `{exe_dir}/ffmpeg/<工具>.exe`（若存在）→ PATH**，
+//! **配置指定路径（若非空）→ `{exe_dir}/ffmpeg/<工具>[.exe]`（若存在）→ PATH**，
 //! 否则可能出现「配置里没写路径 → 找不到已下载的 FFmpeg」的漏匹配。
 
-use std::path::{Path, PathBuf};
-
-use crate::infrastructure::error::types::AppError;
-
-/// 用资源管理器打开/选中路径（文件或目录，Windows：`explorer /select,{path}`；
-/// explorer 是 GUI 程序，spawn 后立即返回）。供 `open_output_dir` 命令、
-/// 托盘「最近录制」菜单与录制后动作（post_record_action=open_folder）复用。
-#[cfg(windows)]
-pub fn open_in_explorer(path: &Path) -> Result<(), AppError> {
-    std::process::Command::new("explorer")
-        .arg(format!("/select,{}", path.display()))
-        .spawn()
-        .map_err(|e| {
-            AppError::system(
-                crate::infrastructure::error::types::INT_UNEXPECTED,
-                "打开资源管理器失败",
-            )
-            .with_technical(e.to_string())
-        })?;
-    Ok(())
-}
-
-/// 非 Windows 平台：暂不支持
-#[cfg(not(windows))]
-pub fn open_in_explorer(_path: &Path) -> Result<(), AppError> {
-    Err(AppError::internal("当前平台不支持打开资源管理器"))
-}
+use std::path::PathBuf;
 
 /// Windows：为子进程设置 `CREATE_NO_WINDOW`（0x08000000），禁止新建控制台窗口。
 ///
@@ -52,6 +29,29 @@ pub fn apply_create_no_window(cmd: &mut std::process::Command) {
     cmd.creation_flags(CREATE_NO_WINDOW);
 }
 
+/// 后台回收子进程（M4 僵尸进程修复）：spawn 后把 `Child` 交给独立线程 `wait()`，
+/// 子进程退出后线程随即结束并回收——Linux 上消除「spawn 后丢弃 Child 且不 wait」
+/// 导致的 defunct 僵尸进程累积（7×24 运行可达数百个）；Windows 无僵尸概念，
+/// 但同一路径无害且顺手回收进程句柄。调用方不阻塞：命令「启动即返回」，
+/// 录制结束流程 / 浏览器打开互不等待（与「spawn 后不等待」的既有语义一致）。
+///
+/// 返回 `Option<JoinHandle>`：线程创建失败（极罕见）时返回 None，Child 被 drop
+/// ——Linux 上该子进程退出后会短暂成为僵尸，进程退出时由 init 收养，不构成
+/// 长期累积；正常路径（可创建线程）均回收。
+///
+/// 不持有 JoinHandle（drop 即分离）：回收线程是 std 线程，main 返回时进程
+/// 整体退出（Rust 不 join 非主线程），不会因长命子进程阻塞应用退出。
+pub fn reap_in_background(
+    mut child: std::process::Child,
+) -> Option<std::thread::JoinHandle<()>> {
+    std::thread::Builder::new()
+        .name("child-reaper".to_string())
+        .spawn(move || {
+            let _ = child.wait();
+        })
+        .ok()
+}
+
 /// 可执行文件所在目录（与 lib.rs 中的 exe_dir 计算保持一致）
 pub fn exe_dir() -> PathBuf {
     std::env::current_exe()
@@ -60,7 +60,19 @@ pub fn exe_dir() -> PathBuf {
         .unwrap_or_else(|| std::path::PathBuf::from("."))
 }
 
-/// FFmpeg 候选顺序：配置指定路径（若非空）→ `{exe_dir}/ffmpeg/ffmpeg.exe` → PATH（"ffmpeg"）
+/// 平台相关工具文件名：Windows 为 `{name}.exe`，其他平台为 `{name}`（无扩展名）。
+/// 便携版 FFmpeg 目录内 Linux 不存放文件（向导不下载，见 wizard_cmds::download_ffmpeg），
+/// 该候选在 Linux 上通常不命中，但保持候选顺序与 Windows 一致
+///（配置指定 → 便携目录 → PATH）。
+fn tool_exe_name(name: &str) -> String {
+    if cfg!(windows) {
+        format!("{}.exe", name)
+    } else {
+        name.to_string()
+    }
+}
+
+/// FFmpeg 候选顺序：配置指定路径（若非空）→ `{exe_dir}/ffmpeg/ffmpeg[.exe]` → PATH（"ffmpeg"）
 pub fn ffmpeg_candidates(config_ffmpeg_path: Option<&str>) -> Vec<PathBuf> {
     let mut candidates = Vec::new();
     if let Some(p) = config_ffmpeg_path {
@@ -68,18 +80,18 @@ pub fn ffmpeg_candidates(config_ffmpeg_path: Option<&str>) -> Vec<PathBuf> {
             candidates.push(PathBuf::from(p));
         }
     }
-    candidates.push(exe_dir().join("ffmpeg").join("ffmpeg.exe"));
+    candidates.push(exe_dir().join("ffmpeg").join(tool_exe_name("ffmpeg")));
     candidates.push(PathBuf::from("ffmpeg"));
     candidates
 }
 
-/// ffprobe 候选顺序：配置指定路径（若非空）→ `{exe_dir}/ffmpeg/ffprobe.exe` → PATH（"ffprobe"）
+/// ffprobe 候选顺序：配置指定路径（若非空）→ `{exe_dir}/ffmpeg/ffprobe[.exe]` → PATH（"ffprobe"）
 pub fn ffprobe_candidates(config_ffprobe_path: &str) -> Vec<PathBuf> {
     let mut candidates = Vec::new();
     if !config_ffprobe_path.is_empty() {
         candidates.push(PathBuf::from(config_ffprobe_path));
     }
-    candidates.push(exe_dir().join("ffmpeg").join("ffprobe.exe"));
+    candidates.push(exe_dir().join("ffmpeg").join(tool_exe_name("ffprobe")));
     candidates.push(PathBuf::from("ffprobe"));
     candidates
 }
@@ -103,25 +115,34 @@ mod tests {
     fn ffmpeg_candidates_config_path_first_then_local_then_path() {
         let cands = ffmpeg_candidates(Some("C:\\tools\\ffmpeg.exe"));
         assert_eq!(cands.len(), 3);
-        // 候选顺序：配置指定 → {exe_dir}/ffmpeg/ffmpeg.exe → PATH
+        // 候选顺序：配置指定 → {exe_dir}/ffmpeg/ffmpeg[.exe] → PATH
         assert_eq!(cands[0], PathBuf::from("C:\\tools\\ffmpeg.exe"));
         assert_eq!(
             cands[1],
-            exe_dir().join("ffmpeg").join("ffmpeg.exe")
+            exe_dir().join("ffmpeg").join(tool_exe_name("ffmpeg"))
         );
         assert_eq!(cands[2], PathBuf::from("ffmpeg"));
     }
 
     #[test]
     fn ffmpeg_candidates_skip_empty_config_path() {
-        // 配置为空字符串 / None 时，候选从 {exe_dir}/ffmpeg/ffmpeg.exe 开始
+        // 配置为空字符串 / None 时，候选从 {exe_dir}/ffmpeg/ffmpeg[.exe] 开始
         let cands = ffmpeg_candidates(None);
         assert_eq!(cands.len(), 2);
-        assert_eq!(cands[0], exe_dir().join("ffmpeg").join("ffmpeg.exe"));
+        assert_eq!(
+            cands[0],
+            exe_dir().join("ffmpeg").join(tool_exe_name("ffmpeg"))
+        );
         assert_eq!(cands[1], PathBuf::from("ffmpeg"));
 
         let cands = ffmpeg_candidates(Some(""));
-        assert_eq!(cands, vec![exe_dir().join("ffmpeg").join("ffmpeg.exe"), PathBuf::from("ffmpeg")]);
+        assert_eq!(
+            cands,
+            vec![
+                exe_dir().join("ffmpeg").join(tool_exe_name("ffmpeg")),
+                PathBuf::from("ffmpeg")
+            ]
+        );
     }
 
     #[test]
@@ -129,13 +150,33 @@ mod tests {
         let cands = ffprobe_candidates("C:\\tools\\ffprobe.exe");
         assert_eq!(cands.len(), 3);
         assert_eq!(cands[0], PathBuf::from("C:\\tools\\ffprobe.exe"));
-        assert_eq!(cands[1], exe_dir().join("ffmpeg").join("ffprobe.exe"));
+        assert_eq!(
+            cands[1],
+            exe_dir().join("ffmpeg").join(tool_exe_name("ffprobe"))
+        );
         assert_eq!(cands[2], PathBuf::from("ffprobe"));
 
         let cands = ffprobe_candidates("");
         assert_eq!(cands.len(), 2);
-        assert_eq!(cands[0], exe_dir().join("ffmpeg").join("ffprobe.exe"));
+        assert_eq!(
+            cands[0],
+            exe_dir().join("ffmpeg").join(tool_exe_name("ffprobe"))
+        );
         assert_eq!(cands[1], PathBuf::from("ffprobe"));
+    }
+
+    /// 平台文件名区分：Windows 带 .exe 扩展名，其他平台无扩展名
+    #[test]
+    fn tool_exe_name_differs_by_platform() {
+        let ffmpeg = tool_exe_name("ffmpeg");
+        let ffprobe = tool_exe_name("ffprobe");
+        if cfg!(windows) {
+            assert_eq!(ffmpeg, "ffmpeg.exe");
+            assert_eq!(ffprobe, "ffprobe.exe");
+        } else {
+            assert_eq!(ffmpeg, "ffmpeg");
+            assert_eq!(ffprobe, "ffprobe");
+        }
     }
 
     /// Windows：应用 CREATE_NO_WINDOW 后进程仍可正常 spawn 并执行
@@ -152,7 +193,7 @@ mod tests {
 
     #[test]
     fn resolve_falls_back_to_path_when_nothing_installed() {
-        // 测试环境下 {exe_dir}/ffmpeg/ffmpeg.exe 不存在，配置也空 → 退回 PATH 名
+        // 测试环境下 {exe_dir}/ffmpeg/ffmpeg[.exe] 不存在，配置也空 → 退回 PATH 名
         assert_eq!(resolve_ffmpeg_executable(None), "ffmpeg");
         // 配置路径指向不存在的文件 → 同样退回
         let missing = std::env::temp_dir().join("missevan-recorder-test-missing-ffmpeg.exe");
@@ -160,5 +201,25 @@ mod tests {
             resolve_ffmpeg_executable(Some(missing.to_str().unwrap())),
             "ffmpeg"
         );
+    }
+
+    // ── M4：后台回收子进程（防 Linux 僵尸进程累积）──
+
+    #[test]
+    fn reap_in_background_reaps_short_lived_child() {
+        // 短命子进程（Windows cmd /c exit、其他平台 true）秒退：回收线程
+        // wait() 返回后线程结束——join 成功即证明「spawn → 后台 wait」路径
+        // 可走通且不 panic（子进程句柄被回收，非泄漏）。
+        // 僵尸进程消失本身需 Arch 真机验证（ps 查 defunct）；Windows 无僵尸
+        // 概念，本测试仅验证代码路径可用。
+        #[cfg(windows)]
+        let mut cmd = std::process::Command::new("cmd");
+        #[cfg(windows)]
+        cmd.args(["/C", "exit /b 0"]);
+        #[cfg(not(windows))]
+        let mut cmd = std::process::Command::new("true");
+        let child = cmd.spawn().expect("spawn 测试子进程失败");
+        let handle = reap_in_background(child).expect("回收线程创建失败");
+        handle.join().expect("回收线程不应 panic");
     }
 }

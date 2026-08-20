@@ -1,0 +1,11 @@
+# 权限定义：录制控制命令（api/recording_cmds.rs）
+
+[[permission]]
+identifier = "allow-start-recording"
+description = "启用 start_recording 命令（占位命令，当前版本恒返回错误，保留注册）"
+commands = { allow = ["start_recording"], deny = [] }
+
+[[permission]]
+identifier = "allow-stop-recording"
+description = "启用 stop_recording 命令（停止指定主播的录制任务）"
+commands = { allow = ["stop_recording"], deny = [] }

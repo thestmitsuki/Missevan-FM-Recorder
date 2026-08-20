@@ -1,9 +1,10 @@
 use crate::domain::config::manager::ConfigManager;
+use crate::domain::services::fs_walk;
 use crate::infrastructure::error::types::AppError;
 use crate::infrastructure::state::app_state::AppStateHandle;
 use serde::Serialize;
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::fs;
+use std::io;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::SystemTime;
@@ -43,6 +44,61 @@ pub struct FileGroup {
     pub files: Vec<RecordingFile>,
     pub total_size: u64,
     pub total_duration: f64,
+}
+
+/// 文件夹树节点（`get_recording_files` / `recording_files_changed` 载荷的顶层
+/// 结构）：录制输出目录 → 主播文件夹 → 音频文件。
+///
+/// - `name`：主播名（沿用 `anchor_name`，已剥离 `-房间号`；输出目录根下的
+///   文件为空字符串，前端显示「未分类」）
+/// - `path`：磁盘文件夹路径（文件夹身份键；同主播名可能对应多个磁盘文件夹）
+#[derive(Debug, Clone, Serialize)]
+pub struct FolderNode {
+    pub name: String,
+    pub path: String,
+    pub files: Vec<RecordingFile>,
+}
+
+/// 从扁平文件构建文件夹树：按文件父目录聚合。
+/// 不再按文件名前缀分组（需求变更：文件页不再展示分段，主播文件夹内
+/// 全部音频文件平铺展示，播放即播放该主播全部音频）。
+pub(crate) fn build_folder_tree(files: &[RecordingFile]) -> Vec<FolderNode> {
+    /// 文件夹身份键 = 文件父目录路径（兼容 Windows `\` 与 Unix `/`）
+    fn folder_key_of(f: &RecordingFile) -> String {
+        match f.path.rfind(['/', '\\']) {
+            Some(idx) => f.path[..idx].to_string(),
+            None => String::new(),
+        }
+    }
+
+    fn folder_index(
+        index: &mut HashMap<String, usize>,
+        folders: &mut Vec<FolderNode>,
+        key: &str,
+        name: &str,
+    ) -> usize {
+        if let Some(&i) = index.get(key) {
+            return i;
+        }
+        let i = folders.len();
+        folders.push(FolderNode {
+            name: name.to_string(),
+            path: key.to_string(),
+            files: Vec::new(),
+        });
+        index.insert(key.to_string(), i);
+        i
+    }
+
+    let mut folders: Vec<FolderNode> = Vec::new();
+    let mut index: HashMap<String, usize> = HashMap::new();
+
+    for f in files {
+        let key = folder_key_of(f);
+        let i = folder_index(&mut index, &mut folders, &key, &f.anchor_name);
+        folders[i].files.push(f.clone());
+    }
+    folders
 }
 
 /// 一次缓存扫描/清空的记录（调试页「文件缓存」模块扫描日志）
@@ -124,6 +180,16 @@ pub(crate) fn mark_active(files: &mut [RecordingFile], active_paths: &HashSet<St
     }
 }
 
+/// 单次目录遍历的扫描产物（O1 去双扫）：文件缓存条目 + 各文件修改时间。
+/// `modified` 与 `files` 下标一一对应；获取修改时间失败为 `None`
+///（仅清理侧消费，见 `scan_output_once` 注释）。
+pub(crate) struct OutputScan {
+    /// 文件缓存条目（与 `scan_output_dir` 产出完全一致）
+    pub(crate) files: Vec<RecordingFile>,
+    /// 每个文件对应的修改时间（清理服务规划删除用；文件缓存不消费）
+    pub(crate) modified: Vec<Option<SystemTime>>,
+}
+
 pub struct FileCacheManager {
     window: WebviewWindow,
     cache: FileCacheHandle,
@@ -154,7 +220,7 @@ impl FileCacheManager {
     ) -> Result<(), AppError> {
         let scan_start = std::time::Instant::now();
         let config = config_manager.load()?;
-        let output_dir = Path::new(&config.global.output_dir);
+        let output_dir = Path::new(&config.global.output_dir).to_path_buf();
 
         // 活跃录制输出路径（先取路径集再锁缓存，避免与命令侧锁顺序反转造成死锁）
         let active_paths = {
@@ -162,41 +228,57 @@ impl FileCacheManager {
             state.active_output_paths()
         };
 
-        let mut files = Self::scan_output_dir(output_dir);
-        mark_active(&mut files, &active_paths);
+        // O1：同步递归扫描移出 tokio worker（spawn_blocking）——大目录/机械盘/
+        // 网络盘上单次扫描可达百 ms~秒级，直接跑在 worker 上会阻塞同线程其他
+        // async 任务（录制结束刷新缓存时 UI/检测循环被卡）。
+        let files = match tauri::async_runtime::spawn_blocking(move || {
+            Self::scan_output_dir(&output_dir)
+        })
+        .await
+        {
+            // 根目录读取失败 / 任务异常 → 空列表（与旧 scan_output_dir 语义一致）
+            Ok(files) => files,
+            Err(_) => Vec::new(),
+        };
+
+        self.apply_scan(files, &active_paths, scan_start).await
+    }
+
+    /// 用「清理路径单次扫描的产物」刷新缓存（O1 去双扫）：
+    /// `run_cleanup` 删除后基于同一份扫描产物重建缓存（已删除文件在调用侧
+    /// 过滤），不再二次全量扫描输出目录。行为与 `refresh` 的扫描后阶段完全
+    /// 一致：标记活跃 → 排序 → 分组 → 更新缓存 → emit `recording_files_changed`。
+    pub(crate) async fn refresh_from_files(
+        &self,
+        files: Vec<RecordingFile>,
+        active_paths: HashSet<String>,
+    ) -> Result<(), AppError> {
+        self.apply_scan(files, &active_paths, std::time::Instant::now())
+            .await
+    }
+
+    /// 扫描后处理（refresh / refresh_from_files 共用）：标记活跃 → 按创建时间
+    /// 降序排序 → 更新缓存 → 推送 `recording_files_changed`。
+    /// `scan_start` 用于扫描日志耗时（含扫描等待时间）。
+    ///
+    /// 不再按文件名前缀构建分段组（需求变更：文件页不分段展示，主播文件夹
+    /// 内全部音频文件平铺；播放即播放该主播全部音频）。`cache.groups` 恒为空。
+    async fn apply_scan(
+        &self,
+        mut files: Vec<RecordingFile>,
+        active_paths: &HashSet<String>,
+        scan_start: std::time::Instant,
+    ) -> Result<(), AppError> {
+        mark_active(&mut files, active_paths);
 
         // 按创建时间降序排序
         files.sort_by(|a, b| b.created_at.cmp(&a.created_at));
 
-        // 构建分段组
-        let mut group_map: HashMap<String, Vec<RecordingFile>> = HashMap::new();
-        let mut non_grouped = Vec::new();
-        for file in files {
-            if let Some(ref prefix) = file.group_prefix {
-                group_map.entry(prefix.clone()).or_default().push(file);
-            } else {
-                non_grouped.push(file);
-            }
-        }
-
-        let mut groups = Vec::new();
-        for (prefix, mut group_files) in group_map {
-            group_files.sort_by_key(|f| f.segment_index.unwrap_or(0));
-            let total_size: u64 = group_files.iter().map(|f| f.size).sum();
-            let total_duration: f64 = group_files.iter().map(|f| f.duration).sum();
-            groups.push(FileGroup {
-                prefix,
-                files: group_files,
-                total_size,
-                total_duration,
-            });
-        }
-
         // 更新缓存
         let mut cache = self.cache.lock().await;
         let files_before = cache.files.len();
-        cache.files = non_grouped;
-        cache.groups = groups;
+        cache.files = files;
+        cache.groups = Vec::new();
         cache.scan_time = SystemTime::now();
         let files_after = cache.files.len();
         let group_count = cache.groups.len();
@@ -209,66 +291,78 @@ impl FileCacheManager {
             groups: group_count,
         });
 
-        // 推送事件到前端
+        // 推送事件到前端（文件夹树：输出目录 → 主播文件夹 → 音频文件）
         let payload = serde_json::json!({
-            "files": cache.files,
-            "groups": cache.groups,
+            "folders": build_folder_tree(&cache.files),
         });
         let _ = self.window.emit("recording_files_changed", &payload);
 
         Ok(())
     }
 
-    /// 递归扫描输出目录，收集所有录制音频文件
-    /// （扩展名 m4a/aac/mp3/flac，大小写不敏感；输出目录不存在 → 空列表）。
+    /// 递归扫描输出目录，收集所有录制音频文件（`scan_output_once` 的缓存侧
+    /// 视图：扩展名 m4a/aac/mp3/flac，大小写不敏感；输出目录不存在 → 空列表）。
+    fn scan_output_dir(root: &Path) -> Vec<RecordingFile> {
+        // 根目录读取失败（如不存在/指向普通文件）→ 空列表（与旧实现一致）
+        match Self::scan_output_once(root) {
+            Ok(scan) => scan.files,
+            Err(_) => Vec::new(),
+        }
+    }
+
+    /// 单次遍历同时产出「文件缓存条目 + 清理候选元数据」（O1 去双扫）。
+    ///
+    /// 背景：清理路径（cleanup.rs run_cleanup）原先先 `scan_recording_files`
+    /// 全量遍历一次、删除后 `FileCacheManager::refresh` 又全量遍历第二次——
+    /// 同一目录连续扫两遍。本函数只遍历一次：`safe_walk_files` 收集路径 +
+    /// 每文件一次 `metadata()`，缓存条目与清理候选（修改时间）由同一份
+    /// 元数据派生，两处各自构建自己的视图。
+    ///
     /// 主播名从文件所在父目录名推导（录制引擎输出结构 `{主播名}-{房间号}` →
     /// 剥离房间号后缀；输出目录根下的文件主播名为空）。
-    /// 与清理服务 cleanup.rs 的扫描策略保持一致：单文件元数据错误跳过不中断整次扫描。
-    fn scan_output_dir(root: &Path) -> Vec<RecordingFile> {
+    /// 错误语义：根目录读取失败 → `Err`（cleanup 透传为 AppError、refresh
+    /// 退回空列表，与两处旧行为一致）；子树/单文件失败 → 跳过，不中断整次扫描。
+    /// 返回的 `files` 与 `modified` 下标一一对应；修改时间获取失败为 `None`
+    ///（仅清理侧消费：与旧 `scan_recording_files` 的 modified 失败跳过语义
+    /// 一致；缓存侧不受影响——created 失败仍走 unwrap_or(now) 兜底）。
+    ///
+    /// S1：遍历统一走 `fs_walk::safe_walk_files`（条目经 symlink_metadata
+    /// 不跟随链接判定，符号链接 / Windows junction 一律跳过），目录内链接
+    /// 不会把缓存/清理候选带出目录外。
+    pub(crate) fn scan_output_once(root: &Path) -> io::Result<OutputScan> {
+        let files = fs_walk::safe_walk_files(root)?;
         let mut out = Vec::new();
-        if !root.exists() {
-            return out;
-        }
-        let mut stack = vec![root.to_path_buf()];
-        while let Some(dir) = stack.pop() {
-            let Ok(entries) = fs::read_dir(&dir) else {
-                continue;
-            };
-            for entry in entries.flatten() {
-                let path = entry.path();
-                // M7：用 DirEntry::file_type()（不跟随链接）判定，拒绝 junction/
-                // 符号链接项——避免缓存列出输出目录外的文件路径
-                let Ok(file_type) = entry.file_type() else {
-                    continue;
-                };
-                if file_type.is_dir() {
-                    stack.push(path);
-                } else if file_type.is_file() {
-                    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-                        if matches!(ext.to_lowercase().as_str(), "m4a" | "aac" | "mp3" | "flac") {
-                            let Ok(metadata) = path.metadata() else {
-                                continue;
-                            };
-                            let name = path.file_name().unwrap().to_string_lossy().to_string();
-                            let (group_prefix, segment_index) = Self::parse_segment_info(&name);
-                            out.push(RecordingFile {
-                                id: path.to_string_lossy().to_string(),
-                                name: name.clone(),
-                                path: path.to_string_lossy().to_string(),
-                                size: metadata.len(),
-                                duration: 0.0, // 后续可通过 ffprobe 异步填充
-                                anchor_name: Self::anchor_name_of(&path, root),
-                                created_at: metadata.created().unwrap_or(SystemTime::now()),
-                                group_prefix,
-                                segment_index,
-                                is_active: false, // 由 refresh 按活跃录制任务标记
-                            });
-                        }
-                    }
+        let mut modified = Vec::new();
+        for path in files {
+            if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+                if matches!(ext.to_lowercase().as_str(), "m4a" | "aac" | "mp3" | "flac") {
+                    // safe_walk_files 已保证 path 是普通文件（非链接），
+                    // metadata() 不会跟随链接解析到目录外
+                    let Ok(metadata) = path.metadata() else {
+                        continue;
+                    };
+                    let name = path.file_name().unwrap().to_string_lossy().to_string();
+                    let (group_prefix, segment_index) = Self::parse_segment_info(&name);
+                    out.push(RecordingFile {
+                        id: path.to_string_lossy().to_string(),
+                        name: name.clone(),
+                        path: path.to_string_lossy().to_string(),
+                        size: metadata.len(),
+                        duration: 0.0, // 后续可通过 ffprobe 异步填充
+                        anchor_name: Self::anchor_name_of(&path, root),
+                        created_at: metadata.created().unwrap_or(SystemTime::now()),
+                        group_prefix,
+                        segment_index,
+                        is_active: false, // 由 refresh 按活跃录制任务标记
+                    });
+                    modified.push(metadata.modified().ok());
                 }
             }
         }
-        out
+        Ok(OutputScan {
+            files: out,
+            modified,
+        })
     }
 
     /// 从文件路径推导主播名：取父目录名并剥离尾部 `-{房间号}` 后缀
@@ -292,15 +386,32 @@ impl FileCacheManager {
         dir_name.to_string()
     }
 
-    /// 解析文件名中的分段信息：前缀_001.ext
+    /// 解析文件名中的分段信息：前缀_001.ext。
+    ///
+    /// 段号必须是**计数器形态**（`%03d` 最小宽度 3 的补零语义）：
+    /// 1. 全数字且 ≥3 位（`_001`…`_999`、`_1000`…，1-2 位数字后缀不归组）；
+    /// 2. 4 位及以上不允许前导 0 —— 段号 ≥1000 时 `%03d` 不会补前导 0，
+    ///    而时间戳（HHMMSS）恒为 6 位且常带前导 0（如 `_003019`），必须排除，
+    ///    否则 `主播名_日期_时间.m4a` 会被误判为分段（文件页出现「主播名_日期」
+    ///    伪分段组）；
+    /// 3. 数值上限 99_999 —— 时间 HHMMSS（≤235959）与房间号等长数字串不是
+    ///    段号，实际录制段数远低于此。
+    ///
+    /// 兜底：`apply_scan` 会把「只有 1 个文件的分段组」降级为普通文件，
+    /// 消除残余误判（如无前导 0 的 6 位时间 `_123456`）。
     fn parse_segment_info(filename: &str) -> (Option<String>, Option<u32>) {
-        // 简单匹配：xxx_001.ext
         if let Some(pos) = filename.rfind("_") {
             let (base, idx_part) = filename.split_at(pos);
             let idx_str = &idx_part[1..]; // 去掉下划线
             if let Some(dot_pos) = idx_str.find('.') {
                 let num_str = &idx_str[..dot_pos];
-                if num_str.len() == 3 && num_str.chars().all(|c| c.is_ascii_digit()) {
+                let is_counter = num_str.len() >= 3
+                    && num_str.chars().all(|c| c.is_ascii_digit())
+                    && !(num_str.len() >= 4 && num_str.starts_with('0'))
+                    && num_str
+                        .parse::<u32>()
+                        .map_or(false, |n| n <= 99_999);
+                if is_counter {
                     if let Ok(num) = num_str.parse::<u32>() {
                         return (Some(base.to_string()), Some(num));
                     }
@@ -450,10 +561,236 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    // ── L3/M1：分段段号 ≥1000（`_1000` 4 位）归组回归 ──
+
+    #[test]
+    fn parse_segment_info_handles_3_digit_segments() {
+        // 旧格式回归：_001…_999 仍按 3 位段号归组（逐字节兼容）
+        assert_eq!(
+            FileCacheManager::parse_segment_info("2026-08-07_12-30-45_主播A_001_001.m4a"),
+            (Some("2026-08-07_12-30-45_主播A_001".to_string()), Some(1))
+        );
+        assert_eq!(
+            FileCacheManager::parse_segment_info("base_999.m4a"),
+            (Some("base".to_string()), Some(999))
+        );
+    }
+
+    #[test]
+    fn parse_segment_info_handles_4_plus_digit_segments() {
+        // L3/M1：段号 ≥1000（4 位及以上）必须归组——第 1000 段起不再落入
+        // 「非分段」分支
+        assert_eq!(
+            FileCacheManager::parse_segment_info("base_1000.m4a"),
+            (Some("base".to_string()), Some(1000))
+        );
+        assert_eq!(
+            FileCacheManager::parse_segment_info("base_1001.m4a"),
+            (Some("base".to_string()), Some(1001))
+        );
+        assert_eq!(
+            FileCacheManager::parse_segment_info("2026-08-07_12-30-45_主播A_001_1000.m4a"),
+            (
+                Some("2026-08-07_12-30-45_主播A_001".to_string()),
+                Some(1000)
+            )
+        );
+    }
+
+    #[test]
+    fn parse_segment_info_keeps_old_boundaries() {
+        // 3 位以下数字后缀依旧不归组（行为不变）：_1 / _01
+        assert_eq!(
+            FileCacheManager::parse_segment_info("base_1.m4a"),
+            (None, None)
+        );
+        assert_eq!(
+            FileCacheManager::parse_segment_info("base_01.m4a"),
+            (None, None)
+        );
+        // 非数字 / 无下划线 → 不归组
+        assert_eq!(
+            FileCacheManager::parse_segment_info("base_abc.m4a"),
+            (None, None)
+        );
+        assert_eq!(
+            FileCacheManager::parse_segment_info("nounderscore.m4a"),
+            (None, None)
+        );
+    }
+
+    /// 文件页「主播名成为伪分段组」回归：`主播名_日期_时间.m4a` 的时间戳
+    /// （HHMMSS）不得误判为段号。
+    #[test]
+    fn parse_segment_info_rejects_time_stamps() {
+        // 前导 0 时间（003019 = 00:30:19）：4 位以上前导 0 不是 %03d 计数器形态
+        assert_eq!(
+            FileCacheManager::parse_segment_info("一口77呀吼眠神冠_20260803_003019.m4a"),
+            (None, None)
+        );
+        assert_eq!(
+            FileCacheManager::parse_segment_info("惠子_㋇㏠三周年顺利_20260802_010533.m4a"),
+            (None, None)
+        );
+        // 无前导 0 的时间（180252 > 99_999 上限）：同样排除
+        assert_eq!(
+            FileCacheManager::parse_segment_info("奕境__20260802_180252.mp3"),
+            (None, None)
+        );
+        // 上限边界：99999 以内仍是段号，100000 起不是
+        assert_eq!(
+            FileCacheManager::parse_segment_info("base_99999.m4a"),
+            (Some("base".to_string()), Some(99999))
+        );
+        assert_eq!(
+            FileCacheManager::parse_segment_info("base_100000.m4a"),
+            (None, None)
+        );
+        // 4 位以上前导 0（_0999）不是 %03d 输出（999 → "999"），不归组
+        assert_eq!(
+            FileCacheManager::parse_segment_info("base_0999.m4a"),
+            (None, None)
+        );
+        // 真分段：时间戳后的 _001 仍是段号（默认模板 + 分段录制）
+        assert_eq!(
+            FileCacheManager::parse_segment_info("2026-08-20_16-00-06_主播A_001.m4a"),
+            (Some("2026-08-20_16-00-06_主播A".to_string()), Some(1))
+        );
+        assert_eq!(
+            FileCacheManager::parse_segment_info("主播A_20260820_160006_002.m4a"),
+            (Some("主播A_20260820_160006".to_string()), Some(2))
+        );
+    }
+
+    /// 文件夹树聚合：文件按父目录分组、显示名取主播名（剥离 -房间号）、
+    /// 未分类（根下文件）name 为空。不再有分段组（全部文件平铺）。
+    #[test]
+    fn build_folder_tree_groups_by_parent_dir() {
+        let mk = |name: &str, path: &str, anchor: &str| RecordingFile {
+            id: path.into(),
+            name: name.into(),
+            path: path.into(),
+            size: 100,
+            duration: 10.0,
+            anchor_name: anchor.into(),
+            created_at: SystemTime::now(),
+            group_prefix: None,
+            segment_index: None,
+            is_active: false,
+        };
+        let files = vec![
+            mk(
+                "一口77呀吼眠神冠_20260803_003019.m4a",
+                "D:/rec/一口77呀吼眠神冠-869021004/一口77呀吼眠神冠_20260803_003019.m4a",
+                "一口77呀吼眠神冠",
+            ),
+            mk(
+                "主播A_20260820_160006_001.m4a",
+                "D:/rec/主播A-1001/主播A_20260820_160006_001.m4a",
+                "主播A",
+            ),
+            mk(
+                "主播A_20260820_160006_002.m4a",
+                "D:/rec/主播A-1001/主播A_20260820_160006_002.m4a",
+                "主播A",
+            ),
+            mk(
+                "root.m4a",
+                "D:/rec/root.m4a",
+                "",
+            ),
+        ];
+
+        let folders = build_folder_tree(&files);
+        let by_path = |p: &str| folders.iter().find(|f| f.path == p).unwrap();
+        let f1 = by_path("D:/rec/一口77呀吼眠神冠-869021004");
+        assert_eq!(f1.name, "一口77呀吼眠神冠");
+        assert_eq!(f1.files.len(), 1);
+
+        let root = by_path("D:/rec");
+        assert_eq!(root.name, "", "输出目录根下文件 → 未分类（name 空）");
+        assert_eq!(root.files.len(), 1);
+
+        let a1 = by_path("D:/rec/主播A-1001");
+        assert_eq!(a1.name, "主播A");
+        assert_eq!(a1.files.len(), 2, "主播文件夹内全部音频文件平铺");
+    }
+
+    /// L3/M1 回归：扫描产物中 4 位段号文件必须带 segment_index（文件页归组入口）
+    #[test]
+    fn scan_output_once_parses_4_digit_segments() {
+        let root = scan_root("seg4");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("live_0999.m4a"), b"x").unwrap();
+        std::fs::write(root.join("live_1000.m4a"), b"x").unwrap();
+        std::fs::write(root.join("live_1001.m4a"), b"x").unwrap();
+        std::fs::write(root.join("single_001.m4a"), b"x").unwrap();
+
+        let scan = FileCacheManager::scan_output_once(&root).unwrap();
+        let idx = |name: &str| {
+            scan.files
+                .iter()
+                .find(|f| f.name == name)
+                .map(|f| (f.group_prefix.clone(), f.segment_index))
+        };
+        assert_eq!(
+            idx("live_0999.m4a"),
+            Some((None, None)),
+            "0999 前导 0 不是 %03d 输出（999 → \"999\"），不归组"
+        );
+        assert_eq!(
+            idx("live_1000.m4a"),
+            Some((Some("live".to_string()), Some(1000))),
+            "4 位段号必须归组（L3/M1）"
+        );
+        assert_eq!(
+            idx("live_1001.m4a"),
+            Some((Some("live".to_string()), Some(1001)))
+        );
+        assert_eq!(
+            idx("single_001.m4a"),
+            Some((Some("single".to_string()), Some(1))),
+            "独立 3 位文件正常归组"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     #[test]
     fn scan_output_dir_missing_dir_returns_empty() {
         let root = scan_root("missing");
         assert!(FileCacheManager::scan_output_dir(&root).is_empty());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// O1：单次遍历产物中 modified 与 files 下标一一对应（清理候选消费同一份
+    /// 元数据），且与 scan_output_dir 的缓存侧视图产出一致
+    #[test]
+    fn scan_output_once_aligns_files_and_modified() {
+        let root = scan_root("once");
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        std::fs::write(root.join("a.m4a"), b"x").unwrap();
+        std::fs::write(root.join("sub/b.mp3"), b"x").unwrap();
+        std::fs::write(root.join("c.txt"), b"x").unwrap();
+
+        let scan = FileCacheManager::scan_output_once(&root).unwrap();
+        assert_eq!(scan.files.len(), 2, "仅录制扩展名文件入产物");
+        assert_eq!(
+            scan.modified.len(),
+            scan.files.len(),
+            "modified 与 files 一一对应"
+        );
+        assert!(
+            scan.modified.iter().all(|m| m.is_some()),
+            "新建文件的修改时间应可读"
+        );
+
+        // 与 scan_output_dir（缓存侧视图）产出一致：同一份元数据的两种派生
+        let via_dir = FileCacheManager::scan_output_dir(&root);
+        assert_eq!(scan.files.len(), via_dir.len());
+        for (a, b) in scan.files.iter().zip(via_dir.iter()) {
+            assert_eq!(a.path, b.path, "路径集合应一致");
+            assert_eq!(a.size, b.size, "文件大小应一致");
+        }
         let _ = std::fs::remove_dir_all(&root);
     }
 

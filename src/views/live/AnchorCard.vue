@@ -11,16 +11,16 @@
  * （含删除，与卡片视图区分：列表保持菜单操作）。
  *
  * 标签展示（前端优化任务）：
- * - 卡片视图：标签单行横向排布（flex-wrap，不限制数量）；
- *   超过 4 个时显示前 3 个 + 「+N」溢出计数药丸（第 4 格），单标签过长
- *   truncate 省略——信息区 25% 高度内两行可完整容纳（药丸改 py-0/leading-none）；
+ * - 卡片视图：信息区两行——行1 名称（truncate）+ 菜单，行2 房间号 + 检测图标 +
+ *   标签药丸；标签 ≤4 全显示，>4 时显示前 3 个 + 「+N」溢出计数药丸（第 4 格），
+ *   单标签过长 truncate 省略——信息区 25% 高度内两行可完整容纳（药丸 py-0.5/leading-tight）；
  * - 列表视图：保持单行横向排布（flex-wrap，不限制数量）。
  *
  * 键盘导航：卡片/列表项可聚焦，Enter 打开设置，Delete 触发删除确认。
  * 头像加载失败时回退默认主播图标；刷新（anchor 对象被替换）或 avatar_url
  * 变化后重置失败状态——失败回退不永久生效（v-if 重建 img 后重新请求）。
  */
-import { ref, watch } from "vue";
+import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import {
     Mic,
@@ -95,6 +95,13 @@ function onAvatarError() {
     imgFailed.value = true;
 }
 
+/** 标签展示：≤4 个全显示；>4 个显示前 3 个 + 「+N」溢出计数药丸（规格注释，原实现遗漏） */
+const visibleTags = computed(() => {
+    const tags = props.anchor.tags;
+    if (tags.length <= 4) return { shown: tags, overflow: 0 };
+    return { shown: tags.slice(0, 3), overflow: tags.length - 3 };
+});
+
 function openSettings() {
     emit("settings", props.anchor);
 }
@@ -115,7 +122,7 @@ function requestRefresh() {
         tabindex="0"
         role="button"
         :aria-label="anchor.name"
-        class="group relative aspect-[4/3] cursor-pointer select-none overflow-hidden rounded-xl border border-border/60 bg-background shadow-sm outline-none transition hover:shadow-md focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-offset-2"
+        class="group relative aspect-[4/3] min-w-0 cursor-pointer select-none overflow-hidden rounded-xl border border-border/60 bg-background shadow-sm outline-none transition-[width,box-shadow,transform] duration-300 ease-out hover:shadow-md focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-offset-2"
         @click="openSettings"
         @keydown.enter.prevent="openSettings"
         @keydown.delete.prevent="requestRemove"
@@ -147,45 +154,18 @@ function requestRefresh() {
             </div>
         </div>
 
-        <!-- 信息区（下 1/4）：名称/标签 + 菜单一行 -->
+        <!-- 信息区（下 1/4）：行1 名称+菜单 / 行2 房间号+检测+标签 -->
         <div
-            class="relative flex h-[25%] w-full flex-col justify-center gap-0.5 px-3 py-1"
+            class="relative flex h-[25%] w-full flex-col justify-center px-3 py-1.5"
         >
+            <!-- 行 1：名称独占一行（truncate）+ 操作菜单 -->
             <div class="flex min-w-0 items-center justify-between gap-2">
-                <div class="min-w-0">
-                    <p class="truncate text-sm font-semibold leading-tight">
-                        {{ anchor.name }}
-                        <span
-                            v-if="showRoomId()"
-                            class="text-[11px] font-normal text-muted-foreground"
-                            >#{{ anchor.room_id }}</span
-                        >
-                    </p>
-                    <!-- 标签单行横向排布（回退：不限制数量，药丸 inline 排列） -->
-                    <div
-                        v-if="
-                            (showTags() && anchor.tags.length) ||
-                            (showStatusIcon() && anchor.enable_check)
-                        "
-                        class="mt-2 flex flex-wrap items-center gap-1.5"
-                    >
-                        <Radar
-                            v-if="showStatusIcon() && anchor.enable_check"
-                            class="size-3.5 shrink-0 text-primary"
-                            role="img"
-                            :aria-label="t('live.detectionEnabled')"
-                        />
-                        <span
-                            v-for="tag in anchor.tags"
-                            :key="tag"
-                            class="shrink-0 rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-medium leading-tight text-primary"
-                            >{{ tag }}</span
-                        >
-                    </div>
-                </div>
+                <p class="min-w-0 truncate text-sm font-semibold leading-tight">
+                    {{ anchor.name }}
+                </p>
 
-                <!-- 右上角操作菜单（设置/删除/刷新） -->
-                <div @click.stop>
+                <!-- 操作菜单（设置/删除/刷新） -->
+                <div class="shrink-0" @click.stop>
                     <DropdownMenu>
                         <DropdownMenuTrigger as-child>
                             <Button
@@ -216,6 +196,39 @@ function requestRefresh() {
                         </DropdownMenuContent>
                     </DropdownMenu>
                 </div>
+            </div>
+
+            <!-- 行 2：房间号 + 检测图标 + 标签（≤4 全显，>4 前 3 个 +「+N」计数药丸） -->
+            <div
+                v-if="
+                    showRoomId() ||
+                    (showTags() && anchor.tags.length) ||
+                    (showStatusIcon() && anchor.enable_check)
+                "
+                class="mt-1 flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5"
+            >
+                <span
+                    v-if="showRoomId()"
+                    class="shrink-0 text-[11px] leading-tight text-muted-foreground"
+                    >#{{ anchor.room_id }}</span
+                >
+                <Radar
+                    v-if="showStatusIcon() && anchor.enable_check"
+                    class="size-3.5 shrink-0 text-primary"
+                    role="img"
+                    :aria-label="t('live.detectionEnabled')"
+                />
+                <span
+                    v-for="tag in visibleTags.shown"
+                    :key="tag"
+                    class="shrink-0 rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-medium leading-tight text-primary"
+                    >{{ tag }}</span
+                >
+                <span
+                    v-if="visibleTags.overflow > 0"
+                    class="shrink-0 rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-medium leading-tight text-primary"
+                    >+{{ visibleTags.overflow }}</span
+                >
             </div>
         </div>
     </article>
@@ -257,23 +270,32 @@ function requestRefresh() {
                     class="truncate text-xs text-muted-foreground"
                     >#{{ anchor.room_id }}</span
                 >
-                <Radar
-                    v-if="showStatusIcon() && anchor.enable_check"
-                    class="size-3.5 shrink-0 text-primary"
-                    role="img"
-                    :aria-label="t('live.detectionEnabled')"
-                />
-            </div>
-            <div
-                v-if="showTags() && anchor.tags.length"
-                class="mt-0.5 flex flex-wrap items-center gap-1.5"
-            >
-                <span
-                    v-for="tag in anchor.tags"
-                    :key="tag"
-                    class="shrink-0 rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-medium leading-tight text-primary"
-                    >{{ tag }}</span
+                <div
+                    v-if="
+                        (showTags() && anchor.tags.length) ||
+                        (showStatusIcon() && anchor.enable_check)
+                    "
+                    class="flex flex-wrap items-center gap-1.5"
+                    :style="{ marginTop: `calc(2px * var(--density-mult))` }"
                 >
+                    <Radar
+                        v-if="showStatusIcon() && anchor.enable_check"
+                        class="size-3.5 shrink-0 text-primary"
+                        role="img"
+                        :aria-label="t('live.detectionEnabled')"
+                    />
+                </div>
+                <div
+                    v-if="showTags() && anchor.tags.length"
+                    class="mt-0.5 flex flex-wrap items-center gap-1.5"
+                >
+                    <span
+                        v-for="tag in anchor.tags"
+                        :key="tag"
+                        class="shrink-0 rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-medium leading-tight text-primary"
+                        >{{ tag }}</span
+                    >
+                </div>
             </div>
         </div>
 

@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import { ref, watch, onMounted, onUnmounted } from "vue";
 import { useRouter } from "vue-router";
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import ErrorBoundary from "@/components/common/ErrorBoundary.vue";
 import AppLayout from "@/layouts/AppLayout.vue";
 import { useNotificationStore } from "@/stores/notificationStore";
 import { useAnchorStore } from "@/stores/anchorStore";
 import { useConfigStore } from "@/stores/configStore";
+import { useThemeStore } from "@/stores/themeStore";
 import Toast from "@/components/common/Toast.vue";
 import { isWizardWindow } from "@/services/window";
 import { onTrayOpenLivePage } from "@/services/events";
@@ -20,6 +22,24 @@ const router = useRouter();
 // ── 双窗口：向导窗口只渲染向导路由，主窗口渲染完整布局。
 // 路由跳转已由 router 全局守卫接管（src/router/index.ts），此处仅做渲染分支 ──
 const isWizard = isWizardWindow();
+
+// ── 窗口控制栏跟随明暗主题（官方 setTheme API，tao 原生处理标题栏明暗与系统跟随）──
+// themeStore.mode 变化时：system → null（跟随系统，tao 监听系统设置变化自动刷新）；
+// light / dark → 对应值。浏览器调试环境不可用，catch 忽略。
+const themeStore = useThemeStore();
+watch(
+    () => themeStore.mode,
+    (m) => {
+        try {
+            getCurrentWebviewWindow()
+                .setTheme(m === "system" ? null : m)
+                .catch(() => {});
+        } catch {
+            // 非 Tauri 环境（纯浏览器调试）
+        }
+    },
+    { immediate: true },
+);
 
 // ── 托盘 → 直播页导航（Task 17 emit `tray:open_live_page`，Task 20 前端接线）──
 let stopTrayOpen: (() => void) | null = null;

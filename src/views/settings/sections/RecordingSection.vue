@@ -75,7 +75,6 @@ const templateVars: TemplateVar[] = [
     { token: "{room_id}", labelKey: "settings.recording.tplVarRoomId", sample: "123456" },
     { token: "{date}", labelKey: "settings.recording.tplVarDate", sample: "2026-08-01" },
     { token: "{time}", labelKey: "settings.recording.tplVarTime", sample: "12-30-00" },
-    { token: "{index}", labelKey: "settings.recording.tplVarIndex", sample: "001" },
     { token: "{ext}", labelKey: "settings.recording.tplVarExt", sample: "m4a" },
 ];
 
@@ -198,7 +197,7 @@ const postActions = [
                             {{ t("settings.recording.segmentHint") }}
                         </p>
                     </div>
-                    <Switch id="cfg-segment-enable" v-model="segmentEnabled" />
+                    <Switch id="cfg-segment-enable" v-model:checked="segmentEnabled" />
                 </div>
                 <div class="space-y-1.5">
                     <Label for="cfg-segment-secs">{{ t("settings.recording.segmentSeconds") }}</Label>

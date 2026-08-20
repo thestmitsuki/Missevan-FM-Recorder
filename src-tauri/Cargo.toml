@@ -1,6 +1,6 @@
 [package]
 name = "app"
-version = "0.1.0"
+version = "0.2.0"
 description = "missevan-recorder — Tauri 2 desktop app"
 authors = ["thestmitsuki"]
 license = "MIT"
@@ -25,9 +25,18 @@ path = "src/main.rs"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["protocol-asset", "tray-icon"] }
+tauri = { version = "2", features = ["protocol-asset", "tray-icon", "image-png"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-notification = "2"
+# 开机自启（tauri-plugin-autostart 2.5.1，tauri-apps 官方插件；rust-version
+# 1.77.2 ≤ MSRV 1.89.0，Apache-2.0/MIT）。内部为 auto_launch crate：Windows 写
+# HKCU Run 键、Linux 写 XDG autostart desktop 文件。Builder::app_name 保留旧
+# 注册表值名 "MissevanRecorder"，Builder::arg 保留旧自启命令参数 --minimized
+tauri-plugin-autostart = "2"
+# 打开文件夹（tauri-plugin-opener 2.5.4，tauri-apps 官方插件；rust-version
+# 1.77.2 ≤ MSRV 1.89.0，Apache-2.0/MIT）。open_path / reveal_item_in_dir 替换
+# 手写 explorer / xdg-open 实现（Windows/Linux 统一，见 domain::tools 删除说明）
+tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }
@@ -42,8 +51,6 @@ fs2 = "0.4"
 rand = "0.8"
 dirs = "6"
 toml = "0.8"
-# winreg 0.55（rust-version 1.60 ≤ MSRV 1.89.0；已作为 embed-resource 的传递依赖存在于锁文件）
-winreg = "0.55"
 # base64 0.22（rust-version 1.60 ≤ MSRV 1.89.0；已在锁文件——Task 18 敏感字段混淆）
 base64 = "0.22"
 url = "2"
@@ -65,23 +72,25 @@ futures-util = "0.3.33"
 # windows 0.61 与 tauri-winrt-notification 0.7.3 已存在于依赖树（版本一致，无新增编译单元）。
 [target.'cfg(windows)'.dependencies]
 tauri-winrt-notification = "0.7"
-# Win32_System_Threading / Win32_Security（Task 7 依赖纪律：windows 0.61 已在
-# 依赖树，仅新增 feature，零新增编译单元）：单实例锁自实现（命名互斥体
-# CreateMutexW + ERROR_ALREADY_EXISTS，防应用双开导致的双录——不用
-# tauri-plugin-single-instance：其 2.4.3 rust-version=1.77.2 ≤ MSRV 1.89.0，但加入
-# 会重解析依赖树（tauri-runtime 的 toml 0.9.12 → 1.1.0），锁文件整体变动，
-# 自实现方案（infrastructure::single_instance.rs）已满足需求，故弃用）
+# 开机自启改由 tauri-plugin-autostart（auto_launch crate）实现，winreg 不再是
+# 直接依赖（auto_launch / embed-resource 仍以其为传递依赖，锁文件不变）。
+# windows 0.61（Task 7 依赖纪律：已在依赖树，仅新增 feature，零新增编译单元）：
+# 仅 infrastructure::notification::windows_toast.rs 使用（WinRT toast 的 AUMID
+# 注册，见该模块注释）；单实例锁已统一为 fs2 文件锁
+#（infrastructure::single_instance.rs），不再需要 Win32_Security /
+# Win32_System_Threading，已从 feature 列表移除。
+# 标题栏明暗已改用官方 setTheme API（tao 内部处理 DWM），不再需要
+# Win32_Graphics_Dwm，已从 feature 列表移除。
 windows = { version = "0.61", features = [
     "Win32_Foundation",
-    "Win32_Security",
     "Win32_Storage_EnhancedStorage",
     "Win32_System_Com",
     "Win32_System_Com_StructuredStorage",
-    "Win32_System_Threading",
     "Win32_System_Variant",
     "Win32_UI_Shell",
     "Win32_UI_Shell_PropertiesSystem",
 ] }
 
 [features]
+default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]

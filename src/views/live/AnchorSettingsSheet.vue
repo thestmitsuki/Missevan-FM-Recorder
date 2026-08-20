@@ -1,6 +1,11 @@
 <script setup lang="ts">
 /**
- * 主播设置侧边栏 Sheet（规格「主播设置」）
+ * 主播设置弹窗（Sheet side="none" 居中模态，规格「主播设置」）
+ *
+ * 动效：默认 fade-in + zoom-in-95（打开 500ms / 关闭 300ms，tw-animate-css），
+ * 不使用 side="right" 的右侧滑入动画（side="none" 不产生 slide 类）。
+ * 比例：横向 4:3（max-w-2xl 672px × aspect-[4/3] 高 504px，小屏 max-h-[90vh] 兜底），
+ * 表单字段两列、操作按钮竖排（刷新信息在删除主播上方）；内容区独立滚动，header/footer 固定。
  *
  * - 状态区：录制中显示录制时长（隐藏直播时长）；否则直播中显示直播时长；
  *   时长取 store 中的状态起始时间戳（后端不提供起始时间，以首次获知状态为起点），
@@ -264,14 +269,15 @@ function toggleTag(value: string, checked: boolean) {
 <template>
     <Sheet :open="open" @update:open="handleOpenChange">
         <SheetContent
-            class="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-lg max-h-[90vh] overflow-y-auto sm:rounded-xl gap-0 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95"
+            side="none"
+            class="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-2xl aspect-[4/3] max-h-[90vh] overflow-hidden sm:rounded-xl gap-0 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95"
             @open-auto-focus="onOpenAutoFocus"
         >
             <SheetHeader class="border-b border-border px-5 py-4">
                 <SheetTitle>{{ t("live.anchorSettings") }}</SheetTitle>
             </SheetHeader>
 
-            <div class="flex flex-1 flex-col gap-5 overflow-y-auto px-5 py-4">
+            <div class="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-5 py-4">
                 <!-- 头像 + 名称 + 状态徽标（头像取 store 最新值，刷新后即时更新） -->
                 <div class="flex items-center gap-3">
                     <img
@@ -356,6 +362,7 @@ function toggleTag(value: string, checked: boolean) {
                     </p>
                 </div>
 
+                <div class="grid grid-cols-2 gap-x-4 gap-y-4">
                 <!-- 房间号（只读） -->
                 <div class="flex flex-col gap-1.5">
                     <Label class="text-sm font-medium" for="set-room">
@@ -368,8 +375,20 @@ function toggleTag(value: string, checked: boolean) {
                     />
                 </div>
 
-                <!-- 直播间 URL（可修改，保存后强制重取信息） -->
+                <!-- 主播别名（留空使用官方名称） -->
                 <div class="flex flex-col gap-1.5">
+                    <Label class="text-sm font-medium" for="set-name">
+                        {{ t("live.alias") }}
+                    </Label>
+                    <Input
+                        id="set-name"
+                        v-model="editName"
+                        :placeholder="t('live.aliasPlaceholder')"
+                    />
+                </div>
+
+                <!-- 直播间 URL（可修改，保存后强制重取信息） -->
+                <div class="col-span-2 flex flex-col gap-1.5">
                     <Label class="text-sm font-medium" for="set-url">
                         {{ t("live.homepageUrl") }}
                     </Label>
@@ -390,18 +409,6 @@ function toggleTag(value: string, checked: boolean) {
                     </p>
                 </div>
 
-                <!-- 主播别名（留空使用官方名称） -->
-                <div class="flex flex-col gap-1.5">
-                    <Label class="text-sm font-medium" for="set-name">
-                        {{ t("live.alias") }}
-                    </Label>
-                    <Input
-                        id="set-name"
-                        v-model="editName"
-                        :placeholder="t('live.aliasPlaceholder')"
-                    />
-                </div>
-
                 <!-- Cookie（可选） -->
                 <div class="flex flex-col gap-1.5">
                     <Label class="text-sm font-medium" for="set-cookie">
@@ -411,6 +418,7 @@ function toggleTag(value: string, checked: boolean) {
                         id="set-cookie"
                         v-model="editCookie"
                         :placeholder="t('live.cookiePlaceholder')"
+                        maxlength="4096"
                     />
                 </div>
 
@@ -425,13 +433,14 @@ function toggleTag(value: string, checked: boolean) {
                         :placeholder="t('live.proxyPlaceholder')"
                     />
                 </div>
+                </div>
 
                 <!-- 标签（固定 5 个多选，禁止自由输入；后端持久化） -->
                 <div class="flex flex-col gap-1.5">
                     <Label class="text-sm font-medium">
                         {{ t("live.tags") }}
                     </Label>
-                    <div class="flex flex-col gap-2">
+                    <div class="flex flex-wrap gap-x-4 gap-y-1.5">
                         <label
                             v-for="(key, i) in ANCHOR_TAGS"
                             :key="key"
@@ -472,7 +481,7 @@ function toggleTag(value: string, checked: boolean) {
                     {{ saveError }}
                 </p>
 
-                <!-- 操作按钮：刷新信息 / 停止录制（仅录制中） -->
+                <!-- 操作按钮：刷新信息 / 停止录制（仅录制中）/ 删除主播（竖排，刷新在删除上方） -->
                 <div class="flex flex-col gap-2">
                     <Button
                         variant="outline"

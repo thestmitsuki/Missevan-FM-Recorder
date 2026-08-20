@@ -20,23 +20,35 @@ export interface RecordingFile {
   duration: number;
   anchor_name: string;
   created_at: SystemTimeJson;
-  group_prefix?: string;
-  segment_index?: number;
   /** 是否正被录制引擎写入（后端对照活跃录制任务输出路径标记；前端禁删/禁重命名） */
   is_active?: boolean;
 }
 
-export interface FileGroup {
-  prefix: string;
+/** 文件夹树节点（后端 get_recording_files / recording_files_changed 顶层结构） */
+export interface FileFolder {
+  /** 主播名（anchor_name，已剥离 -房间号；输出目录根下文件为空字符串） */
+  name: string;
+  /** 磁盘文件夹路径（文件夹身份键） */
+  path: string;
+  /** 主播文件夹内全部音频文件（不再有分段组，全部平铺） */
   files: RecordingFile[];
-  total_size: number;
-  total_duration: number;
 }
 
-/** 后端文件缓存变更事件载荷 */
+/** 后端文件缓存变更事件载荷（文件夹树：录制目录 → 主播文件夹 → 音频文件） */
 export interface RecordingFilesPayload {
-  files: RecordingFile[];
-  groups: FileGroup[];
+  folders: FileFolder[];
+}
+
+/** 清理结果摘要（run_cleanup_now 返回；与后端 CleanupSummary 对齐） */
+export interface CleanupSummary {
+  /** 实际删除的文件数 */
+  files_deleted: number;
+  /** 释放的字节数 */
+  bytes_freed: number;
+  /** 清理后剩余文件数 */
+  files_remaining: number;
+  /** 清理后剩余字节数 */
+  bytes_remaining: number;
 }
 
 /** 将后端 SystemTime JSON 转为 JS Date（秒 + 纳秒） */

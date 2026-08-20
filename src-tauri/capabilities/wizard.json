@@ -1,9 +1,18 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "identifier": "wizard",
-  "description": "Capability for the setup wizard window (needs core:event listen for download:progress / app:notification / close-requested)",
+  "description": "Capability for the setup wizard window（向导：core:event 监听 + 仅授予向导流程所需的少量命令；敏感写命令一律不授予）",
   "windows": ["wizard"],
   "permissions": [
-    "core:default"
+    "core:default",
+    "core:window:allow-set-theme",
+    "allow-get-config",
+    "allow-save-config",
+    "allow-set-autostart",
+    "allow-pick-output-dir",
+    "allow-download-ffmpeg",
+    "allow-exit-app",
+    "allow-finish-wizard",
+    "allow-run-wizard-health-check"
   ]
 }

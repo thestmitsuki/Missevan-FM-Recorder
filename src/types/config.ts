@@ -24,6 +24,12 @@ export interface GlobalConfig {
   segment_seconds: number; // 0 = 不分割
   disk_space_limit_gb: number;
   ffmpeg_path?: string | null;
+  /**
+   * 遗留字段（L1 审查跟进）：早期「启用的主播 ID 列表」，当前版本未使用
+   *（主播实存于后端 anchors/*.toml）；保留仅为与后端 GlobalConfig 对齐
+   *（serde 兼容旧配置文件），前端不写入/不读取（设置页保存已剔除，见
+   * validation.ts normalizeConfig）。
+   */
   anchor_ids: string[];
   check_interval_secs: number;
   max_retries: number;

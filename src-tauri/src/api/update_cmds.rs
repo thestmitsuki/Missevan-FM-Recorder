@@ -16,6 +16,7 @@ use serde::Serialize;
 use tauri::State;
 
 use crate::domain::config::manager::ConfigManager;
+use crate::domain::spider::MissevanClient;
 use crate::infrastructure::error::types::AppError;
 
 /// GitHub 发布仓库（Missevan-FM-Recorder）：发布版 tag 命名 `v{version}`。
@@ -36,6 +37,46 @@ pub struct UpdateInfo {
     pub download_url: Option<String>,
 }
 
+/// 下载资产平台匹配（P1-9：按平台优先匹配安装包后缀，大小写不敏感）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AssetPlatform {
+    /// Windows：优先 `.exe/.msi/.zip`（默认行为，与旧版一致）
+    Windows,
+    /// Linux：优先 `.deb/.AppImage/.rpm/.tar.gz/.zst/.pkg.tar.zst`
+    Linux,
+}
+
+impl AssetPlatform {
+    /// 当前运行平台（编译期确定；macOS 暂按 Windows 匹配规则——资产通常同时
+    /// 发布，兜底行为一致）
+    pub fn current() -> Self {
+        if cfg!(target_os = "linux") {
+            AssetPlatform::Linux
+        } else {
+            AssetPlatform::Windows
+        }
+    }
+
+    /// 资产 URL（已小写）是否匹配本平台的安装包后缀
+    fn matches(self, lower_url: &str) -> bool {
+        match self {
+            AssetPlatform::Windows => {
+                lower_url.ends_with(".exe")
+                    || lower_url.ends_with(".msi")
+                    || lower_url.ends_with(".zip")
+            }
+            AssetPlatform::Linux => {
+                lower_url.ends_with(".deb")
+                    || lower_url.ends_with(".appimage")
+                    || lower_url.ends_with(".rpm")
+                    || lower_url.ends_with(".tar.gz")
+                    || lower_url.ends_with(".zst")
+                    || lower_url.ends_with(".pkg.tar.zst")
+            }
+        }
+    }
+}
+
 /// 从 GitHub `releases/latest` 响应体解析更新信息（纯函数，单测覆盖）。
 ///
 /// 提取规则：
@@ -43,9 +84,14 @@ pub struct UpdateInfo {
 /// - **tag 必须是语义化版本**（至少 `数字.数字.数字`，可带 `-预发布` 后缀）——
 ///   误把分支名（如 "main"）当作 tag 发布时，非版本 tag 返回 `None`
 ///   （check_update 报「检查更新失败」而非把 "main" 当版本展示）；
-/// - 下载链接优先级：`assets[]` 中 `browser_download_url` 以 .exe/.msi/.zip 结尾的
-///   首个资产 → `assets[0]` 的 `browser_download_url` → `html_url`（发布页兜底）。
-pub fn parse_release(json: &serde_json::Value, current: &str) -> Option<UpdateInfo> {
+/// - 下载链接优先级：`assets[]` 中 `browser_download_url` 匹配 `platform`
+///   后缀规则的首个资产 → `assets[0]` 的 `browser_download_url` → `html_url`
+///   （发布页兜底）。
+pub fn parse_release(
+    json: &serde_json::Value,
+    current: &str,
+    platform: AssetPlatform,
+) -> Option<UpdateInfo> {
     let tag = json.get("tag_name")?.as_str()?;
     let latest = tag.strip_prefix('v').unwrap_or(tag).to_string();
     // 语义化版本校验：X.Y.Z（X/Y/Z 均为数字；预发布后缀 "-beta.1" 等允许）
@@ -66,10 +112,7 @@ pub fn parse_release(json: &serde_json::Value, current: &str) -> Option<UpdateIn
                 .collect();
             urls.iter()
                 .copied()
-                .find(|u| {
-                    let lower = u.to_lowercase();
-                    lower.ends_with(".exe") || lower.ends_with(".msi") || lower.ends_with(".zip")
-                })
+                .find(|u| platform.matches(&u.to_lowercase()))
                 .or_else(|| urls.first().copied())
         })
         .map(|s| s.to_string())
@@ -91,12 +134,10 @@ pub async fn check_update(
     config_manager: State<'_, Arc<ConfigManager>>,
 ) -> Result<UpdateInfo, AppError> {
     let current = env!("CARGO_PKG_VERSION").to_string();
-    // 「检查更新」开关（设置 > 通用）：关闭时手动检查也拒绝（与规格「检查更新」设置一致）
-    let enabled = config_manager
-        .load()
-        .map(|c| c.global.check_updates)
-        .unwrap_or(true);
-    if !enabled {
+    // 「检查更新」开关（设置 > 通用）：关闭时手动检查也拒绝（与规格「检查更新」设置一致）；
+    // 配置加载失败按默认（开启）处理，与旧逻辑一致
+    let config = config_manager.load().unwrap_or_default();
+    if !config.global.check_updates {
         return Err(AppError::config(
             "检查更新已禁用（设置 > 通用 > 检查更新）".to_string(),
         ));
@@ -106,8 +147,12 @@ pub async fn check_update(
         "https://api.github.com/repos/{}/{}/releases/latest",
         UPDATE_REPO_OWNER, UPDATE_REPO_NAME
     );
-    let client = reqwest::Client::new();
+    // G9 审查跟进：复用共享 HTTP client（`from_config` 配置指纹缓存，连接池/
+    // TLS 会话跨调用复用，不再每次新建 reqwest Client）；GitHub 专属 UA 与
+    // 10s 超时用「每请求 header/timeout 覆盖」实现，不改共享实例配置
+    let client = MissevanClient::from_config(&config.global)?;
     let resp = client
+        .reqwest_client()
         .get(&url)
         // GitHub API 要求 User-Agent（无 UA 返回 403）
         .header(
@@ -132,7 +177,7 @@ pub async fn check_update(
         .await
         .map_err(|e| AppError::internal(format!("检查更新失败（响应解析错误）：{}", e)))?;
 
-    parse_release(&json, &current).ok_or_else(|| {
+    parse_release(&json, &current, AssetPlatform::current()).ok_or_else(|| {
         AppError::internal("检查更新失败（响应缺少版本信息）".to_string())
     })
 }
@@ -202,7 +247,8 @@ fn is_browsable_url(url: &str) -> bool {
 ///    URL（实测 ~1KB，含多行系统信息）与未来更长的正文均不受限；
 /// 3. `&` 无需引号保护（无命令分隔符语义）。
 /// URL 自加引号防空格分词（守卫已拒绝 URL 内的引号字符，无转义风险）。
-/// macOS：`open`；Linux：`xdg-open`（均 argv 直传，无 shell）。spawn 后不等待。
+/// macOS：`open`；Linux：`xdg-open`（均 argv 直传，无 shell）。spawn 后由后台
+/// 线程 wait 回收（M4：xdg-open/open 是短命启动器，Linux 上不 wait 会留僵尸）。
 #[tauri::command]
 pub fn open_browser(url: String) -> Result<(), AppError> {
     let url = url.trim().to_string();
@@ -214,25 +260,28 @@ pub fn open_browser(url: String) -> Result<(), AppError> {
         // ⚠️ rundll32 FileProtocolHandler 会把引号字符原样并入 URL 传给
         // ShellExecute（实测带引号打开失败）——而 is_browsable_url 已拒绝
         // 空格（URL 编码后无字面空格），故直接裸传 URL，不加引号。
-        std::process::Command::new("rundll32")
+        let child = std::process::Command::new("rundll32")
             .arg("url.dll,FileProtocolHandler")
             .arg(&url)
             .spawn()
             .map_err(|e| AppError::internal(format!("打开浏览器失败：{}", e)))?;
+        crate::domain::tools::reap_in_background(child);
     }
     #[cfg(target_os = "macos")]
     {
-        std::process::Command::new("open")
+        let child = std::process::Command::new("open")
             .arg(&url)
             .spawn()
             .map_err(|e| AppError::internal(format!("打开浏览器失败：{}", e)))?;
+        crate::domain::tools::reap_in_background(child);
     }
     #[cfg(target_os = "linux")]
     {
-        std::process::Command::new("xdg-open")
+        let child = std::process::Command::new("xdg-open")
             .arg(&url)
             .spawn()
             .map_err(|e| AppError::internal(format!("打开浏览器失败：{}", e)))?;
+        crate::domain::tools::reap_in_background(child);
     }
     tracing::info!("已在默认浏览器打开链接: {}", url);
     Ok(())
@@ -257,10 +306,10 @@ mod tests {
 
     #[test]
     fn parse_release_strips_v_prefix_and_prefers_exe_asset() {
-        let info = parse_release(&release_json("v1.2.0"), "0.1.0").unwrap();
+        let info = parse_release(&release_json("v1.2.0"), "0.1.0", AssetPlatform::Windows).unwrap();
         assert_eq!(info.latest, "1.2.0");
         assert_eq!(info.current, "0.1.0");
-        // 优先级：.exe/.msi/.zip 资产（.zip 在 .exe 之后，首个匹配 .exe）
+        // Windows 优先级：.exe/.msi/.zip 资产（.zip 在 .exe 之后，首个匹配 .exe）
         assert_eq!(
             info.download_url.as_deref(),
             Some("https://github.com/.../setup.exe")
@@ -269,7 +318,7 @@ mod tests {
 
     #[test]
     fn parse_release_tag_without_v_kept_as_is() {
-        let info = parse_release(&release_json("1.2.0"), "0.1.0").unwrap();
+        let info = parse_release(&release_json("1.2.0"), "0.1.0", AssetPlatform::Windows).unwrap();
         assert_eq!(info.latest, "1.2.0");
     }
 
@@ -280,7 +329,7 @@ mod tests {
             "html_url": "https://github.com/owner/repo/releases/tag/v1.2.0",
             "assets": []
         });
-        let info = parse_release(&json, "0.1.0").unwrap();
+        let info = parse_release(&json, "0.1.0", AssetPlatform::Windows).unwrap();
         assert_eq!(info.latest, "1.2.0");
         assert_eq!(
             info.download_url.as_deref(),
@@ -290,20 +339,108 @@ mod tests {
 
     #[test]
     fn parse_release_missing_tag_yields_none() {
-        assert!(parse_release(&json!({ "foo": 1 }), "0.1.0").is_none());
-        assert!(parse_release(&json!({ "tag_name": null }), "0.1.0").is_none());
+        assert!(parse_release(&json!({ "foo": 1 }), "0.1.0", AssetPlatform::Windows).is_none());
+        assert!(parse_release(&json!({ "tag_name": null }), "0.1.0", AssetPlatform::Windows).is_none());
     }
 
     #[test]
     fn parse_release_rejects_non_semver_tag() {
         // 误把分支名当 tag 发布（如 "main"）——不得当作版本展示
-        assert!(parse_release(&release_json("main"), "0.1.0").is_none());
-        assert!(parse_release(&release_json("vmain"), "0.1.0").is_none());
-        assert!(parse_release(&release_json("1.2"), "0.1.0").is_none());
-        assert!(parse_release(&release_json("release-1"), "0.1.0").is_none());
+        assert!(parse_release(&release_json("main"), "0.1.0", AssetPlatform::Windows).is_none());
+        assert!(parse_release(&release_json("vmain"), "0.1.0", AssetPlatform::Windows).is_none());
+        assert!(parse_release(&release_json("1.2"), "0.1.0", AssetPlatform::Windows).is_none());
+        assert!(parse_release(&release_json("release-1"), "0.1.0", AssetPlatform::Windows).is_none());
         // 预发布后缀仍视为合法版本
-        let info = parse_release(&release_json("v1.2.0-beta.1"), "0.1.0").unwrap();
+        let info = parse_release(&release_json("v1.2.0-beta.1"), "0.1.0", AssetPlatform::Windows).unwrap();
         assert_eq!(info.latest, "1.2.0-beta.1");
+    }
+
+    /// Linux 平台：跳过 Windows 资产（.exe），按 assets 顺序首个匹配
+    /// `.deb/.AppImage/.rpm/.tar.gz/.zst` 的资产（大小写不敏感）
+    #[test]
+    fn parse_release_linux_prefers_linux_assets() {
+        let json = json!({
+            "tag_name": "v1.2.0",
+            "html_url": "https://github.com/owner/repo/releases/tag/v1.2.0",
+            "assets": [
+                { "name": "app-setup.exe", "browser_download_url": "https://github.com/.../app-setup.exe" },
+                { "name": "app.AppImage", "browser_download_url": "https://github.com/.../app.AppImage" },
+                { "name": "app_1.2.0_amd64.deb", "browser_download_url": "https://github.com/.../app.deb" },
+                { "name": "notes.md", "browser_download_url": "https://github.com/.../notes.md" }
+            ]
+        });
+        // .exe 不匹配 Linux 规则；列表首个匹配是 .AppImage
+        let info = parse_release(&json, "0.1.0", AssetPlatform::Linux).unwrap();
+        assert_eq!(
+            info.download_url.as_deref(),
+            Some("https://github.com/.../app.AppImage")
+        );
+    }
+
+    /// Linux 后缀匹配大小写不敏感（.DEB 大写扩展名也命中）
+    #[test]
+    fn parse_release_linux_suffix_match_is_case_insensitive() {
+        let json = json!({
+            "tag_name": "v1.2.0",
+            "html_url": "https://github.com/owner/repo/releases/tag/v1.2.0",
+            "assets": [
+                { "name": "x", "browser_download_url": "https://github.com/.../app_1.2.0_amd64.DEB" }
+            ]
+        });
+        let info = parse_release(&json, "0.1.0", AssetPlatform::Linux).unwrap();
+        assert_eq!(
+            info.download_url.as_deref(),
+            Some("https://github.com/.../app_1.2.0_amd64.DEB")
+        );
+    }
+
+    /// Linux 覆盖 .tar.gz / .pkg.tar.zst / 裸 .zst 三种后缀
+    #[test]
+    fn parse_release_linux_matches_targz_and_zst_suffixes() {
+        let json = json!({
+            "tag_name": "v1.2.0",
+            "html_url": "https://github.com/owner/repo/releases/tag/v1.2.0",
+            "assets": [
+                { "name": "a", "browser_download_url": "https://github.com/.../missevan-recorder.tar.gz" },
+                { "name": "b", "browser_download_url": "https://github.com/.../missevan-recorder-1.2.0-1-x86_64.pkg.tar.zst" }
+            ]
+        });
+        let info = parse_release(&json, "0.1.0", AssetPlatform::Linux).unwrap();
+        // 列表首个匹配 = .tar.gz
+        assert_eq!(
+            info.download_url.as_deref(),
+            Some("https://github.com/.../missevan-recorder.tar.gz")
+        );
+
+        // 仅裸 .zst（无 .pkg.tar. 前缀）也命中
+        let json2 = json!({
+            "tag_name": "v1.2.0",
+            "html_url": "https://github.com/owner/repo/releases/tag/v1.2.0",
+            "assets": [
+                { "name": "c", "browser_download_url": "https://github.com/.../missevan-recorder.zst" }
+            ]
+        });
+        let info2 = parse_release(&json2, "0.1.0", AssetPlatform::Linux).unwrap();
+        assert_eq!(
+            info2.download_url.as_deref(),
+            Some("https://github.com/.../missevan-recorder.zst")
+        );
+    }
+
+    /// Windows 平台不匹配 Linux 资产（.deb）→ 退回 assets[0]（与旧版兜底一致）
+    #[test]
+    fn parse_release_windows_ignores_linux_assets_then_falls_back_to_first() {
+        let json = json!({
+            "tag_name": "v1.2.0",
+            "html_url": "https://github.com/owner/repo/releases/tag/v1.2.0",
+            "assets": [
+                { "name": "a", "browser_download_url": "https://github.com/.../app.deb" },
+                { "name": "b", "browser_download_url": "https://github.com/.../notes.md" }
+            ]
+        });
+        let info = parse_release(&json, "0.1.0", AssetPlatform::Windows).unwrap();
+        // 无 .exe/.msi/.zip 资产 → 回退 assets[0]（发布页/首个资产兜底）
+        assert_eq!(info.download_url.as_deref(), Some("https://github.com/.../app.deb"));
     }
 
     #[test]

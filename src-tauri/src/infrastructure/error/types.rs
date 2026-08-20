@@ -17,6 +17,8 @@ pub const RC_STREAM_UNAVAILABLE: &str = "RC_STREAM_UNAVAILABLE";
 pub const RC_ALREADY_RECORDING: &str = "RC_ALREADY_RECORDING";
 /// 并发录制上限（max_concurrent_recordings ≥ 1 时，活跃任务数达上限拒绝新录制）
 pub const RC_CONCURRENCY_LIMIT: &str = "RC_CONCURRENCY_LIMIT";
+/// 磁盘空间低于阈值（disk_space_limit_gb），拒绝启动录制（S2a 预检查）
+pub const RC_DISK_LOW: &str = "RC_DISK_LOW";
 /// IO 类错误
 pub const IO_DISK_FULL: &str = "IO_DISK_FULL";
 pub const IO_WRITE_FAIL: &str = "IO_WRITE_FAIL";

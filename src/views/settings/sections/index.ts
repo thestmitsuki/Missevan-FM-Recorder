@@ -17,6 +17,7 @@ import {
     type LucideIcon,
 } from "@lucide/vue";
 import type { GlobalConfig } from "@/types";
+import type { CategoryId } from "./types";
 import GeneralSection from "./GeneralSection.vue";
 import RecordingSection from "./RecordingSection.vue";
 import FileSection from "./FileSection.vue";
@@ -26,15 +27,7 @@ import AppearanceSection from "./AppearanceSection.vue";
 import ShortcutSection from "./ShortcutSection.vue";
 import AdvancedSection from "./AdvancedSection.vue";
 
-export type CategoryId =
-    | "general"
-    | "recording"
-    | "files"
-    | "network"
-    | "notification"
-    | "appearance"
-    | "shortcuts"
-    | "advanced";
+export type { CategoryId } from "./types";
 
 export interface SettingsCategory {
     id: CategoryId;

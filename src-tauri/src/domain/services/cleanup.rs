@@ -11,16 +11,16 @@
 
 use crate::domain::config::manager::ConfigManager;
 use crate::domain::config::model::GlobalConfig;
-use crate::domain::services::file_cache::{FileCacheHandle, FileCacheManager};
+use crate::domain::services::file_cache::{
+    FileCacheHandle, FileCacheManager, OutputScan, RecordingFile,
+};
 use crate::infrastructure::error::types::AppError;
 use crate::infrastructure::state::app_state::AppStateHandle;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::SystemTime;
 use tauri::WebviewWindow;
-
-/// 与文件缓存一致的录制文件扩展名
-const RECORDING_EXTENSIONS: [&str; 4] = ["m4a", "aac", "mp3", "flac"];
 
 /// 候选清理文件条目
 #[derive(Debug, Clone)]
@@ -87,8 +87,10 @@ pub fn plan_cleanup(
 }
 
 /// 执行一次录制文件清理（`run_cleanup_now` 命令与录制结束触发共用）：
-/// 扫描输出目录 → 过滤录制中的文件 → plan_cleanup → 删除 → 刷新文件缓存
+/// 单次扫描输出目录（O1 去双扫：遍历一次同时产出清理候选与缓存条目）→
+/// 过滤录制中的文件 → plan_cleanup → 删除 → 基于同一扫描产物刷新文件缓存
 ///（内部 emit `recording_files_changed`，前端文件列表即时更新）。
+/// 扫描与删除为同步阻塞 IO，整体放入 spawn_blocking，避免阻塞 tokio worker。
 pub async fn run_cleanup(
     window: WebviewWindow,
     cache: FileCacheHandle,
@@ -96,60 +98,158 @@ pub async fn run_cleanup(
     app_state: AppStateHandle,
 ) -> Result<CleanupSummary, AppError> {
     let config = config_manager.load()?;
-    let output_dir = Path::new(&config.global.output_dir);
+    let output_dir = Path::new(&config.global.output_dir).to_path_buf();
     // 录制中的文件跳过清理（FFmpeg 正在写入，删除会损坏录制）
+    //（闭包 move 用克隆；原值后续传给 refresh_from_files 标记缓存活跃态）
     let active_paths = app_state.lock().await.active_output_paths();
-    let candidates: Vec<CleanupCandidate> = scan_recording_files(output_dir)?
+    let active_paths_for_scan = active_paths.clone();
+    let retention_days = config.global.retention_days;
+    let max_total_gb = config.global.max_total_gb as u64;
+
+    // O1 去双扫 + 阻塞消除：同步阻塞 IO（递归扫描 + 删除）整体放入
+    // spawn_blocking——大目录/机械盘扫描与文件删除不再阻塞 tokio worker
+    //（录制结束自动清理不卡 UI/其他 async 任务）。单次遍历同时产出清理候选
+    // 与文件缓存条目（scan_output_once），删除后基于同一份扫描产物刷新缓存
+    //（refresh_from_files），不再二次全量扫描——旧实现此处 scan 一次、refresh
+    // 内部又 scan 一次，同一目录连续扫两遍。
+    let (remaining_files, summary) = tauri::async_runtime::spawn_blocking(move || {
+        let scan = FileCacheManager::scan_output_once(&output_dir).map_err(|e| {
+            AppError::system(
+                crate::infrastructure::error::types::IO_WRITE_FAIL,
+                format!("读取目录失败: {}", output_dir.display()),
+            )
+            .with_technical(e.to_string())
+        })?;
+        // 清理候选 = 扫描产物中非活跃录制、且修改时间可读的文件
+        let candidates: Vec<CleanupCandidate> = scan
+            .files
+            .iter()
+            .zip(scan.modified.iter())
+            .filter(|(f, _)| {
+                !active_paths_for_scan.contains(&crate::domain::services::file_cache::path_key(
+                    &f.path,
+                ))
+            })
+            .filter_map(|(f, m)| {
+                m.as_ref().map(|modified| CleanupCandidate {
+                    path: PathBuf::from(&f.path),
+                    modified: *modified,
+                    size: f.size,
+                })
+            })
+            .collect();
+        let planned = plan_cleanup(
+            &candidates,
+            retention_days,
+            max_total_gb,
+            SystemTime::now(),
+        );
+        let to_delete: HashSet<&PathBuf> = planned.iter().collect();
+
+        let mut files_deleted = 0usize;
+        let mut bytes_freed = 0u64;
+        // R1：记录「计划删除但删除失败」的文件——文件（可能被 Windows 文件锁/
+        // 权限拒绝删除）仍留在磁盘，必须保留在本轮缓存刷新结果中，保证文件
+        // 列表与磁盘实际状态一致（不再短暂"消失"，下次 refresh/手动清理可重试）
+        let mut delete_failed: HashSet<PathBuf> = HashSet::new();
+        for path in &to_delete {
+            // S1 纵深防御：删除前用 symlink_metadata（不跟随链接）复核——扫描侧
+            // 已拒绝链接项，此处兜底（如扫描与删除之间条目被替换成链接），
+            // 链接项一律跳过不删，杜绝触碰输出目录外的任何文件
+            let Ok(meta) = std::fs::symlink_metadata(path) else {
+                tracing::warn!("清理前读取元数据失败，跳过 {:?}", path);
+                continue;
+            };
+            if meta.file_type().is_symlink() {
+                tracing::warn!("跳过删除符号链接/junction 项 {:?}（S1 兜底）", path);
+                continue;
+            }
+            match std::fs::remove_file(path) {
+                Ok(_) => {
+                    files_deleted += 1;
+                    bytes_freed += meta.len();
+                }
+                Err(e) => {
+                    // Windows 文件锁（ffmpeg 仍持有句柄）/权限不足等：文件仍留在
+                    // 磁盘。记 warn 并把文件保留在缓存中（partition_cleanup_remainder），
+                    // 下次 refresh 或手动清理可再次尝试
+                    tracing::warn!(
+                        "清理失败 {:?}: {}（文件保留在磁盘与缓存中，下次清理可重试）",
+                        path,
+                        e
+                    );
+                    delete_failed.insert((*path).clone());
+                }
+            }
+        }
+        // 剩余 = 未计划删除 + 计划删除但删除失败（R1）；同一份扫描产物派生出
+        // 缓存剩余文件列表与剩余统计
+        let (remaining_files, files_remaining, bytes_remaining) =
+            partition_cleanup_remainder(scan, &candidates, &to_delete, &delete_failed);
+        tracing::info!(
+            "录制文件清理完成: 删除 {} 个文件 / 释放 {} 字节",
+            files_deleted,
+            bytes_freed
+        );
+        if !delete_failed.is_empty() {
+            tracing::warn!(
+                "{} 个文件删除失败（已保留在缓存中，下次清理可重试）: {:?}",
+                delete_failed.len(),
+                delete_failed
+            );
+        }
+
+        Ok::<_, AppError>((
+            remaining_files,
+            CleanupSummary {
+                files_deleted,
+                bytes_freed,
+                files_remaining,
+                bytes_remaining,
+            },
+        ))
+    })
+    .await
+    .map_err(|e| AppError::internal(format!("清理任务异常: {}", e)))??;
+
+    // 基于同一扫描结果刷新文件缓存（内部 emit recording_files_changed）
+    let manager = FileCacheManager::new(window, cache);
+    manager.refresh_from_files(remaining_files, active_paths).await?;
+
+    Ok(summary)
+}
+
+/// 计算清理后「剩余」集合（R1）：未计划删除的文件 + 计划删除但删除失败
+/// （文件仍在磁盘）的文件，都保留在刷新后的缓存与剩余统计中——文件列表与
+/// 磁盘实际状态一致，删除失败的文件不会从列表中"消失"（下次 refresh 或
+/// 手动清理可再次尝试删除）。
+///
+/// 返回（刷新缓存的剩余文件列表, files_remaining, bytes_remaining）。
+/// 注：remaining_files 基于扫描产物（全部录制扩展名文件）；files/bytes_remaining
+/// 基于清理候选（修改时间可读的文件）——与既有语义一致。
+fn partition_cleanup_remainder(
+    scan: OutputScan,
+    candidates: &[CleanupCandidate],
+    to_delete: &HashSet<&PathBuf>,
+    delete_failed: &HashSet<PathBuf>,
+) -> (Vec<RecordingFile>, usize, u64) {
+    let remaining_files: Vec<RecordingFile> = scan
+        .files
         .into_iter()
-        .filter(|c| {
-            !active_paths.contains(&crate::domain::services::file_cache::path_key(
-                &c.path.to_string_lossy(),
-            ))
+        .filter(|f| {
+            let p = PathBuf::from(&f.path);
+            !to_delete.contains(&p) || delete_failed.contains(&p)
         })
         .collect();
-    let planned = plan_cleanup(
-        &candidates,
-        config.global.retention_days,
-        config.global.max_total_gb as u64,
-        SystemTime::now(),
-    );
-    let to_delete: std::collections::HashSet<&PathBuf> = planned.iter().collect();
-
-    let mut files_deleted = 0usize;
-    let mut bytes_freed = 0u64;
-    for path in &to_delete {
-        if let Ok(meta) = std::fs::metadata(path) {
-            bytes_freed += meta.len();
-        }
-        match std::fs::remove_file(path) {
-            Ok(_) => files_deleted += 1,
-            Err(e) => tracing::warn!("清理失败 {:?}: {}", path, e),
-        }
-    }
     let mut files_remaining = 0usize;
     let mut bytes_remaining = 0u64;
-    for c in &candidates {
-        if !to_delete.contains(&c.path) {
+    for c in candidates {
+        if !to_delete.contains(&c.path) || delete_failed.contains(&c.path) {
             files_remaining += 1;
             bytes_remaining += c.size;
         }
     }
-    tracing::info!(
-        "录制文件清理完成: 删除 {} 个文件 / 释放 {} 字节",
-        files_deleted,
-        bytes_freed
-    );
-
-    // 刷新文件缓存（内部 emit recording_files_changed）
-    let manager = FileCacheManager::new(window, cache);
-    manager.refresh(&config_manager, &app_state).await?;
-
-    Ok(CleanupSummary {
-        files_deleted,
-        bytes_freed,
-        files_remaining,
-        bytes_remaining,
-    })
+    (remaining_files, files_remaining, bytes_remaining)
 }
 
 /// 是否启用自动清理（纯函数）：仅 `auto_cleanup_enabled` 为 true 时在每次
@@ -190,51 +290,40 @@ pub async fn cleanup_on_recording_end(
 }
 
 /// 递归扫描输出目录下的录制文件（扩展名与文件缓存一致）
+///
+/// O1：候选基于 `FileCacheManager::scan_output_once` 单次遍历产物构建——
+/// 清理与文件缓存共享同一份扫描结果，避免重复全量遍历（清理路径只扫一遍）。
+/// S1：遍历统一走 `fs_walk::safe_walk_files`（条目经 symlink_metadata 不
+/// 跟随链接判定，符号链接 / Windows junction 一律跳过），输出目录内的链接
+/// 不会把扫描带出目录外——杜绝自动清理误删目录外音频文件（数据丢失）。
+///
+/// 生产路径（run_cleanup）为去双扫已内联单次扫描（scan_output_once），本函数
+/// 保留作为「清理候选视图」的独立入口，主要被单测覆盖（含链接/junction 安全
+/// 回归）；不参与生产调用故加 allow(dead_code) 避免误报。
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn scan_recording_files(root: &Path) -> Result<Vec<CleanupCandidate>, AppError> {
-    let mut out = Vec::new();
-    if !root.exists() {
-        return Ok(out);
-    }
-    let mut stack = vec![root.to_path_buf()];
-    while let Some(dir) = stack.pop() {
-        let rd = std::fs::read_dir(&dir).map_err(|e| {
-            AppError::system(
-                crate::infrastructure::error::types::IO_WRITE_FAIL,
-                format!("读取目录失败: {}", dir.display()),
-            )
-            .with_technical(e.to_string())
-        })?;
-        for entry in rd.flatten() {
-            let path = entry.path();
-            // M7：用 DirEntry::file_type()（不跟随链接）判定，拒绝 junction/
-            // 符号链接项——避免扫描/清理越出输出目录（指向目录外位置的链接
-            // 会暴露并删除目录外 .m4a 文件）
-            let Ok(file_type) = entry.file_type() else {
-                continue;
-            };
-            if file_type.is_dir() {
-                stack.push(path);
-            } else if file_type.is_file() {
-                let is_recording = path
-                    .extension()
-                    .and_then(|e| e.to_str())
-                    .map(|e| RECORDING_EXTENSIONS.contains(&e.to_lowercase().as_str()))
-                    .unwrap_or(false);
-                if is_recording {
-                    if let Ok(meta) = path.metadata() {
-                        if let Ok(modified) = meta.modified() {
-                            out.push(CleanupCandidate {
-                                path,
-                                modified,
-                                size: meta.len(),
-                            });
-                        }
-                    }
-                }
-            }
-        }
-    }
-    Ok(out)
+    // 根目录读取失败透传为 AppError（与旧实现 read_dir 错误直接上抛一致）；
+    // 子树读取失败由 safe_walk_files 跳过，不中断整次扫描；modified 获取
+    // 失败的文件跳过（与旧实现 metadata().modified() 失败跳过一致）
+    let scan = FileCacheManager::scan_output_once(root).map_err(|e| {
+        AppError::system(
+            crate::infrastructure::error::types::IO_WRITE_FAIL,
+            format!("读取目录失败: {}", root.display()),
+        )
+        .with_technical(e.to_string())
+    })?;
+    Ok(scan
+        .files
+        .iter()
+        .zip(scan.modified.iter())
+        .filter_map(|(f, m)| {
+            m.as_ref().map(|modified| CleanupCandidate {
+                path: PathBuf::from(&f.path),
+                modified: *modified,
+                size: f.size,
+            })
+        })
+        .collect())
 }
 
 #[cfg(test)]
@@ -366,6 +455,92 @@ mod tests {
         assert!(scan_recording_files(&dir).unwrap().is_empty());
     }
 
+    // ── R1：删除失败的文件保留在缓存中（列表与磁盘一致）──
+
+    /// 构造扫描产物中的一条文件缓存条目
+    fn cache_file(name: &str, size: u64) -> RecordingFile {
+        RecordingFile {
+            id: name.to_string(),
+            name: name.to_string(),
+            path: format!("/recordings/{}", name),
+            size,
+            duration: 0.0,
+            anchor_name: String::new(),
+            created_at: SystemTime::now(),
+            group_prefix: None,
+            segment_index: None,
+            is_active: false,
+        }
+    }
+
+    #[test]
+    fn delete_failed_files_remain_in_cache_and_summary() {
+        // R1 回归：删除失败（Windows 文件锁/权限）的文件仍在磁盘，必须保留在
+        // 刷新后的缓存与剩余统计中——文件列表与磁盘一致，不短暂"消失"
+        let scan = OutputScan {
+            files: vec![
+                cache_file("a.m4a", 10),
+                cache_file("b.m4a", 20),
+                cache_file("c.m4a", 30),
+            ],
+            modified: vec![
+                Some(SystemTime::now()),
+                Some(SystemTime::now()),
+                Some(SystemTime::now()),
+            ],
+        };
+        let mk = |name: &str, size: u64| CleanupCandidate {
+            path: PathBuf::from(format!("/recordings/{}", name)),
+            modified: SystemTime::now(),
+            size,
+        };
+        let candidates = vec![mk("a.m4a", 10), mk("b.m4a", 20), mk("c.m4a", 30)];
+        // 计划删除 a、b；其中 b 删除失败（仍在磁盘）→ 保留；a 删除成功 → 移除
+        let mut to_delete: HashSet<&PathBuf> = HashSet::new();
+        to_delete.insert(&candidates[0].path);
+        to_delete.insert(&candidates[1].path);
+        let mut delete_failed: HashSet<PathBuf> = HashSet::new();
+        delete_failed.insert(candidates[1].path.clone());
+
+        let (remaining, files_remaining, bytes_remaining) =
+            partition_cleanup_remainder(scan, &candidates, &to_delete, &delete_failed);
+
+        let mut names: Vec<String> = remaining.iter().map(|f| f.name.clone()).collect();
+        names.sort();
+        assert_eq!(
+            names,
+            vec!["b.m4a", "c.m4a"],
+            "删除失败的文件必须保留在缓存中（a 已删除、不保留）"
+        );
+        assert_eq!(files_remaining, 2, "剩余统计应含删除失败文件");
+        assert_eq!(bytes_remaining, 20 + 30, "剩余字节应含删除失败文件");
+    }
+
+    #[test]
+    fn all_planned_deleted_removes_all_from_cache() {
+        // 全部删除成功：剩余集合与旧行为一致（无删除失败时无多余保留）
+        let scan = OutputScan {
+            files: vec![cache_file("a.m4a", 10), cache_file("b.m4a", 20)],
+            modified: vec![Some(SystemTime::now()), Some(SystemTime::now())],
+        };
+        let mk = |name: &str, size: u64| CleanupCandidate {
+            path: PathBuf::from(format!("/recordings/{}", name)),
+            modified: SystemTime::now(),
+            size,
+        };
+        let candidates = vec![mk("a.m4a", 10), mk("b.m4a", 20)];
+        let mut to_delete: HashSet<&PathBuf> = HashSet::new();
+        to_delete.insert(&candidates[0].path);
+        to_delete.insert(&candidates[1].path);
+        let delete_failed: HashSet<PathBuf> = HashSet::new();
+
+        let (remaining, files_remaining, bytes_remaining) =
+            partition_cleanup_remainder(scan, &candidates, &to_delete, &delete_failed);
+        assert!(remaining.is_empty(), "全部删除成功 → 缓存无剩余");
+        assert_eq!(files_remaining, 0);
+        assert_eq!(bytes_remaining, 0);
+    }
+
     #[test]
     fn scan_does_not_follow_symlink_or_junction_outside_root() {
         // M7 回归：输出目录内的链接（指向目录外位置）不得被扫描——否则清理
@@ -405,6 +580,57 @@ mod tests {
             .collect();
         assert_eq!(names, vec![root.join("real.m4a").to_string_lossy().into_owned()],
             "链接指向的目录外文件不得进入扫描结果");
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&outside);
+    }
+
+    /// S1 回归（Windows）：junction（`mklink /J`，无需管理员/开发者模式）
+    /// 指向输出目录外，`scan_recording_files` 不得把目录外 .m4a 纳入清理
+    /// 候选——否则自动清理会删除输出目录外文件（数据丢失）。
+    #[cfg(windows)]
+    #[test]
+    fn scan_skips_windows_junction_pointing_outside() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static COUNTER: AtomicUsize = AtomicUsize::new(0);
+        let root = std::env::temp_dir().join(format!(
+            "missevan-test-cleanup-junc-{}-{}",
+            std::process::id(),
+            COUNTER.fetch_add(1, Ordering::SeqCst)
+        ));
+        let outside = std::env::temp_dir().join(format!(
+            "missevan-test-cleanup-junc-out-{}-{}",
+            std::process::id(),
+            COUNTER.fetch_add(1, Ordering::SeqCst)
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&outside);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("secret.m4a"), b"x").unwrap();
+        std::fs::write(root.join("real.m4a"), b"x").unwrap();
+        let ok = std::process::Command::new("cmd")
+            .args([
+                "/C",
+                "mklink",
+                "/J",
+                root.join("linked").to_str().unwrap(),
+                outside.to_str().unwrap(),
+            ])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if !ok {
+            let _ = std::fs::remove_dir_all(&root);
+            let _ = std::fs::remove_dir_all(&outside);
+            return;
+        }
+        let found = scan_recording_files(&root).unwrap();
+        let names: Vec<String> = found
+            .iter()
+            .map(|c| c.path.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names, vec![root.join("real.m4a").to_string_lossy().into_owned()],
+            "junction 指向的目录外 .m4a 不得进入清理候选（数据丢失风险）");
         let _ = std::fs::remove_dir_all(&root);
         let _ = std::fs::remove_dir_all(&outside);
     }

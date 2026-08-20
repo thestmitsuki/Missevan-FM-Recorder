@@ -12,7 +12,7 @@
  */
 import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import { Bug, Download, LoaderCircle } from "@lucide/vue";
+import { Download, LoaderCircle } from "@lucide/vue";
 import pkg from "../../../package.json";
 import { Button } from "@/components/ui/button";
 import {
@@ -235,12 +235,14 @@ watch(open, (v) => {
 <template>
     <Dialog v-model:open="open">
         <DialogContent class="max-w-lg">
-            <DialogHeader>
+            <DialogHeader class="shrink-0">
                 <DialogTitle>{{ t("about.title") }}</DialogTitle>
                 <DialogDescription>{{ t("about.subtitle") }}</DialogDescription>
             </DialogHeader>
 
-            <div class="flex flex-col gap-4 px-6">
+            <div
+                class="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-6"
+            >
                 <!-- 应用信息（后端 get_app_info） -->
                 <dl class="grid grid-cols-[auto_1fr] gap-x-6 gap-y-1.5 text-sm">
                     <template v-if="info">
@@ -436,7 +438,6 @@ watch(open, (v) => {
                         </p>
                     </div>
                     <Button variant="outline" size="sm" @click="reportIssue">
-                        <Bug class="size-6" aria-hidden="true" />
                         {{ t("help.reportIssue") }}
                     </Button>
                 </div>
@@ -449,7 +450,7 @@ watch(open, (v) => {
                 </p>
             </div>
 
-            <DialogFooter>
+            <DialogFooter class="shrink-0">
                 <Button variant="outline" @click="open = false">
                     {{ t("about.close") }}
                 </Button>

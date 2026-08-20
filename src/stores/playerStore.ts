@@ -12,7 +12,8 @@ import { i18n } from "@/locales";
  * - audio 元素为**单例**，首次播放时创建并挂到 document.body——页面切换
  *   （FilesView 卸载）不影响播放；切回文件页时 UI 从 store 恢复。
  * - 队列/播放态/进度/音量全部收敛于此，FilesView 播放条只消费 store。
- * - 分段组连续播放 = queue 顺序播放，ended 自动切下一段（仍在全局 audio 上）。
+ * - 多文件队列播放（「播放全部」）= queue 顺序播放，ended 自动切下一个
+ *   （仍在全局 audio 上）。
  *
  * 加载失败提示（修复「切到文件页误报音频加载失败」根因）：
  * - 旧实现把 `<audio :src="audioUrl">` 放在组件内，页面每次挂载时 src 为空串，
@@ -33,8 +34,8 @@ export const usePlayerStore = defineStore("player", () => {
   const currentFile = computed(
     () => queue.value[queueIndex.value] ?? null,
   );
-  /** 是否分段组连续播放（队列 > 1） */
-  const isGroupPlay = computed(() => queue.value.length > 1);
+  /** 是否多文件队列播放（队列 > 1；「播放全部」时显示进度 x/y） */
+  const isQueuePlay = computed(() => queue.value.length > 1);
 
   // ── audio 单例（跨页面存活；首次播放时惰性创建）──
   let audio: HTMLAudioElement | null = null;
@@ -62,7 +63,7 @@ export const usePlayerStore = defineStore("player", () => {
       playing.value = false;
     });
     el.addEventListener("ended", () => {
-      // 分段组连续播放：顺序切下一段；单文件播放结束则停止
+      // 多文件队列播放：顺序切下一个；单文件播放结束则停止
       if (queueIndex.value < queue.value.length - 1) {
         queueIndex.value += 1;
         void playCurrent();
@@ -120,7 +121,12 @@ export const usePlayerStore = defineStore("player", () => {
     const el = audio;
     if (!el || !currentFile.value) return;
     if (el.paused) {
-      void playCurrent();
+      // 恢复播放：不重新设置 src —— 重新赋值 src 会重置播放位置到 0
+      // （表现为暂停后点播放进度被清空）。队列/进度仍在 audio 上，直接 play。
+      el.volume = volume.value;
+      void el.play().catch(() => {
+        playing.value = false;
+      });
     } else {
       el.pause();
     }
@@ -172,7 +178,7 @@ export const usePlayerStore = defineStore("player", () => {
     duration,
     volume,
     currentFile,
-    isGroupPlay,
+    isQueuePlay,
     playFiles,
     togglePlay,
     seek,

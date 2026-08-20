@@ -14,8 +14,8 @@ export type ViewMode = "card" | "list";
 /** 筛选条件（与 localStorage 持久化结构一致） */
 export interface LiveFilters {
   searchQuery: string;
-  /** 标签筛选（单选：固定 5 标签之一；null = 全部，不过滤） */
-  tagFilter: string | null;
+  /** 标签筛选（多选：固定 5 标签子集；空数组 = 全部，不过滤） */
+  tagFilter: string[];
   recordFilter: RecordFilter;
   liveFilter: LiveFilter;
 }
@@ -32,24 +32,26 @@ function loadViewMode(): ViewMode {
 }
 
 /**
- * 旧版 tagFilter 为 string[]（多选，含「无标签」哨兵 "__none__"）；
- * 新版为 string | null（null = 全部）。旧数据迁移：取首个非空非哨兵元素近似单选。
+ * 标签筛选迁移（兼容 localStorage 历史数据）：
+ * - 当前版本为 string[]（多选，空数组 = 全部）；
+ * - 中间版本为 string | null（单选），迁移为单元素数组 / 空数组；
+ * - 更早版本为 string[]（含「无标签」哨兵 "__none__"），剔除哨兵与空串后保留。
  */
-function loadTagFilter(raw: unknown): string | null {
-  if (typeof raw === "string") return raw || null;
+function loadTagFilter(raw: unknown): string[] {
   if (Array.isArray(raw)) {
-    const first = raw.find(
-      (t): t is string => typeof t === "string" && t !== "" && t !== "__none__",
+    return raw.filter(
+      (t): t is string =>
+        typeof t === "string" && t !== "" && t !== "__none__",
     );
-    return first ?? null;
   }
-  return null;
+  if (typeof raw === "string") return raw ? [raw] : [];
+  return [];
 }
 
 function loadFilters(): LiveFilters {
   const fallback: LiveFilters = {
     searchQuery: "",
-    tagFilter: null,
+    tagFilter: [],
     recordFilter: "all",
     liveFilter: "all",
   };
@@ -99,7 +101,7 @@ export const useAnchorStore = defineStore("anchor", () => {
   const initialFilters = loadFilters();
   const viewMode = ref<ViewMode>(loadViewMode());
   const searchQuery = ref(initialFilters.searchQuery);
-  const tagFilter = ref<string | null>(initialFilters.tagFilter);
+  const tagFilter = ref<string[]>(initialFilters.tagFilter);
   const recordFilter = ref<RecordFilter>(initialFilters.recordFilter);
   const liveFilter = ref<LiveFilter>(initialFilters.liveFilter);
 
@@ -152,17 +154,20 @@ export const useAnchorStore = defineStore("anchor", () => {
   /**
    * 筛选后的主播列表（实时生效）：
    * - 名称模糊匹配（不区分大小写）
-   * - 标签单选：选中固定标签时仅含该标签的主播命中；「全部」（null）不过滤
+   * - 标签多选：勾选多个标签时，命中任一勾选标签的主播通过（OR）；
+   *   未勾选（空数组）不过滤，显示全部
    * - 录制/直播状态单选
    */
   const filteredAnchors = computed(() => {
     const q = searchQuery.value.trim().toLowerCase();
-    const tag = tagFilter.value;
+    const tags = tagFilter.value;
     const record = recordFilter.value;
     const live = liveFilter.value;
     return anchors.value.filter((a) => {
       if (q && !(a.name ?? "").toLowerCase().includes(q)) return false;
-      if (tag !== null && !(a.tags ?? []).includes(tag)) return false;
+      if (tags.length > 0 && !tags.some((t) => (a.tags ?? []).includes(t))) {
+        return false;
+      }
       const st = statusMap.value[a.id];
       if (record === "recording" && !st?.is_recording) return false;
       if (record === "not-recording" && st?.is_recording) return false;
@@ -263,7 +268,9 @@ export const useAnchorStore = defineStore("anchor", () => {
   }
 
   async function stopRecording(anchorId: string) {
-    await api.stopRecording(anchorId);
+    // 走 stop_anchors_recording（M4 修复：该命令原本注册后无前端调用方；
+    // 含 pre_record_delay 延迟窗口内的启动取消；stop_recording 由调试页使用）
+    await api.stopAnchorsRecording(anchorId);
     await fetchRecordingStatuses();
   }
 
@@ -313,7 +320,7 @@ export const useAnchorStore = defineStore("anchor", () => {
 
   function clearFilters() {
     searchQuery.value = "";
-    tagFilter.value = null;
+    tagFilter.value = [];
     recordFilter.value = "all";
     liveFilter.value = "all";
   }

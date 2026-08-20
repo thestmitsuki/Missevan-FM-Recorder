@@ -1,0 +1,43 @@
+# 权限定义：Mock 调试命令（api/mock_cmds.rs）
+#
+# Mock 面板仅用于调试页（主窗口），全部为运行时状态写操作，不授予向导窗口。
+
+[[permission]]
+identifier = "allow-set-mock-live-data"
+description = "启用 set_mock_live_data 命令（写入模拟直播数据并自动启用 Mock 模式）"
+commands = { allow = ["set_mock_live_data"], deny = [] }
+
+[[permission]]
+identifier = "allow-set-mock-mode"
+description = "启用 set_mock_mode 命令（切换 Mock 模式开关）"
+commands = { allow = ["set_mock_mode"], deny = [] }
+
+[[permission]]
+identifier = "allow-list-mock-anchors"
+description = "启用 list_mock_anchors 命令（列出全部模拟主播）"
+commands = { allow = ["list_mock_anchors"], deny = [] }
+
+[[permission]]
+identifier = "allow-add-mock-anchor"
+description = "启用 add_mock_anchor 命令（新增/覆盖模拟主播）"
+commands = { allow = ["add_mock_anchor"], deny = [] }
+
+[[permission]]
+identifier = "allow-update-mock-anchor"
+description = "启用 update_mock_anchor 命令（更新模拟主播）"
+commands = { allow = ["update_mock_anchor"], deny = [] }
+
+[[permission]]
+identifier = "allow-remove-mock-anchor"
+description = "启用 remove_mock_anchor 命令（删除模拟主播）"
+commands = { allow = ["remove_mock_anchor"], deny = [] }
+
+[[permission]]
+identifier = "allow-set-all-mock-live"
+description = "启用 set_all_mock_live 命令（一键设置全部模拟主播开播/下播）"
+commands = { allow = ["set_all_mock_live"], deny = [] }
+
+[[permission]]
+identifier = "allow-reset-mock"
+description = "启用 reset_mock 命令（重置全部模拟数据）"
+commands = { allow = ["reset_mock"], deny = [] }

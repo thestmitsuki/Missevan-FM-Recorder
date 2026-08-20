@@ -64,3 +64,59 @@ jobs:
       - name: Test
         working-directory: src-tauri
         run: cargo test
+
+  frontend-linux:
+    name: Frontend Linux (type-check + build)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Cache node_modules
+        uses: actions/cache@v4
+        with:
+          path: node_modules
+          key: node_modules-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            node_modules-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type-check
+        run: npx vue-tsc -p tsconfig.app.json --noEmit
+
+      - name: Build (vite)
+        run: npx vite build
+
+  backend-linux:
+    name: Backend Linux (Arch container, cargo check + test)
+    runs-on: ubuntu-latest
+    container: archlinux/archlinux:base-devel
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Update system and install dependencies
+        # 官方 archlinux 容器为滚动更新基础镜像，先 -Syu 同步再装包；
+        # webkit2gtk-4.1/gtk3/libsoup3/librsvg 是 Tauri 2 在 Linux 构建与运行所需
+        run: |
+          pacman -Syu --noconfirm
+          pacman -S --noconfirm --needed base-devel rust nodejs npm \
+            webkit2gtk-4.1 gtk3 libsoup3 librsvg ffmpeg
+
+      # 注：容器内 actions/cache 与 runner 用户权限不兼容，故此处不做缓存以保持稳定
+
+      - name: Check
+        working-directory: src-tauri
+        run: cargo check
+
+      - name: Test
+        working-directory: src-tauri
+        run: cargo test

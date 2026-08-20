@@ -6,12 +6,13 @@
  * - 表单 = configStore.config 的深拷贝（reactive）+ 三个暂存字段（locale/theme/
  *   appearance 纯前端偏好），字段与后端 GlobalConfig 逐字对齐（snake_case 透传）。
  * - 任何修改 → dirty；切换分类/离开设置页时弹「是否保存更改？」（保存/不保存/取消）；
- * - 「保存更改」按钮 + 切换分类保存；需重启项（autostart/close_behavior/show_tray/
- *   log_level）修改后显示「部分更改将在下次启动后生效」横幅（规格 交互细节）；
- * - 语言/主题/外观/快捷键均为暂存态：save() 成功时统一提交
- *   （setLocale / themeStore.setMode / appearanceStore.update / save_config 整包落盘
- *   GlobalConfig.shortcuts），即「保存后生效」；离开守卫（onBeforeRouteLeave）
- *   保证未保存更改不会静默丢弃。
+ * - 「保存更改」按钮 + 切换分类保存；autostart/show_tray/close_behavior 即时生效（M3 修复：
+ *   set_autostart / reconcile_tray / 关闭事件实时读配置）；log_level 同样即时生效
+ *   （U5：save_config 落盘后经 LogLevelReload 热更新，无需重启，无「重启生效」横幅）；
+ * - 语言/主题/外观均为暂存态：save() 成功时统一提交（setLocale / themeStore.setMode /
+ *   appearanceStore.update），即「保存后生效」；快捷键（H2）当前版本功能未启用，
+ *   仅作占位展示、不再写入落盘配置（normalizeConfig 剔除）；离开守卫
+ *   （onBeforeRouteLeave）保证未保存更改不会静默丢弃。
  * - 输入实时校验（路径/数字范围/必填 → 红边框+提示，errors 按分类分发）；
  * - 底部「恢复默认值」（当前分类）+「全部恢复默认」（二次确认）——全部为暂存态。
  *
@@ -28,11 +29,11 @@ import {
     useAppearanceStore,
 } from "@/stores/appearanceStore";
 import { useThemeStore } from "@/stores/themeStore";
+import { isLinuxPlatform } from "@/services/platform";
 import { setLocale, type AppLocale } from "@/locales";
 import { api } from "@/services/api";
 import { CATEGORIES, type CategoryId } from "./sections";
 import type { SettingsCategory } from "./sections";
-import { DEFAULT_SHORTCUTS } from "./sections/ShortcutSection.vue";
 import {
     cloneForm,
     normalizeConfig,
@@ -74,6 +75,9 @@ const savedFlash = ref(false);
 let baseline: SettingsForm;
 const form = reactive<SettingsForm>(formFromStore());
 baseline = snapshotFrom(form);
+
+/** 当前表单相对快照是否被修改（分类切换/离开守卫/导航角标使用；需先声明） */
+const dirty = ref(false);
 
 /** 关于对话框（规格 §2.1：从设置页「关于」入口打开） */
 const aboutOpen = ref(false);
@@ -191,17 +195,7 @@ function onNavSelect(id: string) {
     selectCategory(id as CategoryId);
 }
 
-const dirty = ref(false);
 const hasErrors = ref(false);
-
-// 需重启生效的字段（修改后显示横幅）
-const RESTART_NEEDED_FIELDS = [
-    "autostart",
-    "close_behavior",
-    "show_tray",
-    "log_level",
-];
-const restartNeededDirty = ref(false);
 
 // 各分类错误（key = 字段名）
 const allErrors = reactive<Record<CategoryId, SectionErrors>>({
@@ -228,11 +222,6 @@ function recompute() {
     }
     hasErrors.value = Object.values(allErrors).some(
         (e) => Object.keys(e).length > 0,
-    );
-    restartNeededDirty.value = RESTART_NEEDED_FIELDS.some(
-        (f) =>
-            JSON.stringify((form as unknown as Record<string, unknown>)[f]) !==
-            JSON.stringify((baseline as unknown as Record<string, unknown>)[f]),
     );
 }
 
@@ -310,6 +299,11 @@ async function save(): Promise<boolean> {
     autostartWarn.value = null;
     restartMsg.value = null; // 新保存动作清除旧的后端操作提示
     try {
+        // Linux 未集成系统托盘（决策 #2）：保存时强制 close_behavior=exit，
+        // 保证落盘值语义正确（后端 decide_close_action 在 Linux 上恒回退 Exit）
+        if (isLinuxPlatform() && form.close_behavior === "tray") {
+            form.close_behavior = "exit";
+        }
         configStore.updateConfig(normalizeConfig(form));
         // 核心配置先落盘（失败则中止保存）
         await configStore.saveConfig();
@@ -369,9 +363,9 @@ function restoreCurrentCategory() {
         form.theme = "system";
         form.appearance = { ...DEFAULT_APPEARANCE };
     } else if (cat.id === "shortcuts") {
-        // 快捷键：直接重置表单字段（不再依赖 resetSignal 信号——
-        // 分类未挂载时信号会被吞导致不生效，I2）
-        form.shortcuts = { ...DEFAULT_SHORTCUTS };
+        // 快捷键（H2）：功能未启用，无写入动作——恢复默认不再触碰 form.shortcuts，
+        // 避免把默认键位带入保存链路（normalizeConfig 已剔除该字段，双保险）
+        // 分类无归属字段（fields: []），落入下方 for 循环同样为无操作
     } else {
         for (const f of cat.fields) {
             resetFieldToDefault(f);
@@ -385,7 +379,7 @@ function restoreAll() {
             form.theme = "system";
             form.appearance = { ...DEFAULT_APPEARANCE };
         } else if (cat.id === "shortcuts") {
-            form.shortcuts = { ...DEFAULT_SHORTCUTS };
+            // 快捷键（H2）：功能未启用，恢复默认不写入（见 restoreCurrentCategory 说明）
         } else {
             for (const f of cat.fields) {
                 resetFieldToDefault(f);
@@ -508,6 +502,11 @@ onMounted(async () => {
     }
     pauseWatch.value = true;
     Object.assign(form, formFromStore());
+    // Linux 未集成系统托盘：表单中历史遗留的 tray 值归一为 exit，
+    // 避免禁用状态下仍显示选中（在基线快照前处理，不产生 dirty）
+    if (isLinuxPlatform() && form.close_behavior === "tray") {
+        form.close_behavior = "exit";
+    }
     baseline = snapshotFrom(form);
     pauseWatch.value = false;
     recompute();
@@ -557,15 +556,6 @@ onMounted(async () => {
                     </Button>
                 </div>
             </header>
-
-            <!-- 需重启提示 -->
-            <div
-                v-if="restartNeededDirty && dirty"
-                class="settings-banner settings-banner-info"
-                role="status"
-            >
-                {{ t("settings.restartHint") }}
-            </div>
 
             <!-- 错误 / 成功反馈 -->
             <div

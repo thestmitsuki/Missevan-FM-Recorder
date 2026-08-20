@@ -11,6 +11,9 @@ export const DEFAULT_CONFIG: GlobalConfig = {
   segment_seconds: 0,
   disk_space_limit_gb: 10,
   ffmpeg_path: null,
+  // 遗留字段（L1 审查跟进）：早期「启用的主播 ID 列表」，当前版本未使用
+  //（主播实存于后端 anchors/*.toml）；保留仅为与后端 GlobalConfig 对齐
+  //（serde 兼容旧配置），前端不写入/不读取
   anchor_ids: [],
   check_interval_secs: 120, // 规格 §7.8：检测间隔默认 120s（Task 14 与后端统一）
   max_retries: 3,
@@ -21,7 +24,7 @@ export const DEFAULT_CONFIG: GlobalConfig = {
   check_updates: true,
   bitrate_kbps: 128,
   audio_only: true,
-  filename_template: "{anchor_name}/{date}_{time}_{anchor_name}_{index}.{ext}",
+  filename_template: "{anchor_name}/{date}_{time}_{anchor_name}.{ext}",
   max_concurrent_recordings: 3,
   pre_record_delay_secs: 0,
   post_record_action: "none",

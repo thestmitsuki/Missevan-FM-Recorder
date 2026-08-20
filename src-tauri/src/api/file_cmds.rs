@@ -4,7 +4,7 @@ use tauri_plugin_dialog::DialogExt;
 
 use crate::domain::config::manager::ConfigManager;
 use crate::domain::services::file_cache::{
-    path_key, FileCacheHandle, FileCacheManager, RecordingFile,
+    build_folder_tree, mark_active, path_key, FileCacheHandle, FileCacheManager, RecordingFile,
 };
 use crate::infrastructure::error::types::AppError;
 use crate::infrastructure::state::app_state::RecorderState;
@@ -22,7 +22,7 @@ pub async fn get_recording_files(
 
     let cache = cache.lock().await;
 
-    // 根据 search 过滤文件
+    // 根据 search 过滤文件（文件名 + 主播名，不区分大小写）
     let filter_fn = |file: &&RecordingFile| -> bool {
         if let Some(ref q) = search {
             file.name.contains(q.as_str()) || file.anchor_name.contains(q.as_str())
@@ -31,61 +31,24 @@ pub async fn get_recording_files(
         }
     };
 
-    let to_json = |f: &RecordingFile| -> serde_json::Value {
-        let mut v = serde_json::to_value(f).unwrap_or(serde_json::Value::Null);
-        // 以当前活跃任务为准重算 is_active（缓存可能是录制开始前的旧扫描）
-        if let Some(obj) = v.as_object_mut() {
-            obj.insert(
-                "is_active".to_string(),
-                serde_json::json!(active_paths.contains(&path_key(&f.path))),
-            );
-        }
-        v
-    };
-
-    let files: Vec<serde_json::Value> = cache
+    let mut files: Vec<RecordingFile> = cache
         .files
         .iter()
         .filter(|f| filter_fn(f))
-        .map(to_json)
+        .cloned()
         .collect();
 
-    let groups: Vec<serde_json::Value> = if let Some(ref q) = search {
-        cache
-            .groups
-            .iter()
-            .filter(|g| {
-                g.prefix.contains(q.as_str())
-                    || g.files
-                        .first()
-                        .map(|f| f.anchor_name.contains(q.as_str()))
-                        .unwrap_or(false)
-            })
-            .map(|g| {
-                serde_json::json!({
-                    "prefix": g.prefix,
-                    "total_size": g.total_size,
-                    "total_duration": g.total_duration,
-                    "files": g.files.iter().map(to_json).collect::<Vec<_>>(),
-                })
-            })
-            .collect()
-    } else {
-        cache
-            .groups
-            .iter()
-            .map(|g| {
-                serde_json::json!({
-                    "prefix": g.prefix,
-                    "total_size": g.total_size,
-                    "total_duration": g.total_duration,
-                    "files": g.files.iter().map(to_json).collect::<Vec<_>>(),
-                })
-            })
-            .collect()
-    };
+    // 以当前活跃任务为准重算 is_active（缓存可能是录制开始前的旧扫描）
+    mark_active(&mut files, &active_paths);
 
-    Ok(serde_json::json!({ "files": files, "groups": groups }))
+    // 聚合为文件夹树：录制输出目录 → 主播文件夹 → 音频文件（空文件夹剔除）
+    let folders: Vec<serde_json::Value> = build_folder_tree(&files)
+        .into_iter()
+        .filter(|f| !f.files.is_empty())
+        .map(|f| serde_json::to_value(f).unwrap_or(serde_json::Value::Null))
+        .collect();
+
+    Ok(serde_json::json!({ "folders": folders }))
 }
 
 #[tauri::command]

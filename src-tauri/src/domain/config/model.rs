@@ -10,13 +10,23 @@ pub struct GlobalConfig {
     pub segment_seconds: u64,  // 0 = 不分割
     pub disk_space_limit_gb: u64,
     pub ffmpeg_path: Option<String>,
-    pub anchor_ids: Vec<String>,  // 启用的主播 ID 列表
+    /// **遗留字段，当前版本未使用**：早期设计中的「启用的主播 ID 列表」。
+    /// 主播实存于独立的 `anchors/*.toml` 文件（ConfigManager.add_anchor），
+    /// 本字段从不被任何逻辑消费。保留仅为向后兼容旧配置文件
+    ///（serde 反序列化不报错，与 cleanup_time 同例）；前端不再写入/读取，
+    /// 保存/导入时按空列表原样带过，不影响任何行为。
+    pub anchor_ids: Vec<String>,
     pub check_interval_secs: u64, // 检测间隔（默认 120，规格 §7.8）
     pub max_retries: u32,         // 录制重试次数（默认 3）
     pub retry_delay_secs: u64,    // 重试间隔（默认 5）
     // —— 通用（§11.1）——
     pub autostart: bool,
     pub close_behavior: String, // "tray" | "exit"
+    /// **遗留字段（已简化，修复子代理 B）**：早期「是否显示系统托盘图标」独立开关。
+    /// 现托盘图标可见性由 `close_behavior` 派生（= "tray" 时显示 / = "exit" 时隐藏，
+    /// 见 tray 模块 should_hide_to_tray），本字段保留仅为兼容旧配置文件反序列化
+    /// （serde 读取不报错，不破坏已存配置）；新配置仍会序列化该字段（前端表单透传），
+    /// 值不影响任何行为。
     pub show_tray: bool,
     pub check_updates: bool,
     // —— 录制（§11.1）——
@@ -109,7 +119,7 @@ impl Default for GlobalConfig {
             bitrate_kbps: 128,
             audio_only: true,
             filename_template: String::from(
-                "{anchor_name}/{date}_{time}_{anchor_name}_{index}.{ext}",
+                "{anchor_name}/{date}_{time}_{anchor_name}.{ext}",
             ),
             max_concurrent_recordings: 3,
             pre_record_delay_secs: 0,
@@ -187,6 +197,14 @@ pub struct Config {
 }
 
 impl Config {
+    /// 全量字段校验（L7 跟进：补充数值上限校验）。
+    ///
+    /// 调用方：导入路径（manager.rs import_replace / import_merge，S4b）与
+    /// 调试诊断（debug_cmds::run_diagnostic）。上限与前端设置页校验
+    ///（src/views/settings/validation.ts inRange）对齐——只拒绝明显越界的
+    /// 异常输入，不改动合理值语义（0 = 不限制/不分割等语义化零值仍合法）。
+    /// 仅补充**上限**约束：下限保持既有语义（disk > 0、interval >= 5），
+    /// 不收紧旧配置中可能存在的下限边界值。
     pub fn is_valid(&self) -> Result<(), Vec<String>> {
         let mut errors = Vec::new();
         if self.global.output_dir.is_empty() {
@@ -195,11 +213,50 @@ impl Config {
         if self.global.disk_space_limit_gb == 0 {
             errors.push("磁盘阈值必须大于 0".to_string());
         }
+        if self.global.disk_space_limit_gb > 100_000 {
+            errors.push("磁盘阈值不能超过 100000 GB".to_string());
+        }
         if self.global.segment_seconds > 86400 {
             errors.push("分段秒数不能超过 86400".to_string());
         }
         if self.global.check_interval_secs < 5 {
             errors.push("检测间隔不能小于 5 秒".to_string());
+        }
+        if self.global.check_interval_secs > 86400 {
+            errors.push("检测间隔不能超过 86400 秒".to_string());
+        }
+        if self.global.retention_days > 3650 {
+            errors.push("保留天数不能超过 3650 天".to_string());
+        }
+        if self.global.max_total_gb > 100_000 {
+            errors.push("总大小上限不能超过 100000 GB".to_string());
+        }
+        if self.global.max_concurrent_recordings > 32 {
+            errors.push("并发录制数不能超过 32".to_string());
+        }
+        if self.global.pre_record_delay_secs > 86400 {
+            errors.push("录制前延迟不能超过 86400 秒".to_string());
+        }
+        if self.global.api_timeout_secs > 600 {
+            errors.push("API 超时不能超过 600 秒".to_string());
+        }
+        if self.global.stream_timeout_secs > 3600 {
+            errors.push("流超时不能超过 3600 秒".to_string());
+        }
+        if self.global.max_retries > 20 {
+            errors.push("重试次数不能超过 20".to_string());
+        }
+        if self.global.retry_delay_secs > 3600 {
+            errors.push("重试间隔不能超过 3600 秒".to_string());
+        }
+        if self.global.detector_concurrency > 64 {
+            errors.push("检测并发数不能超过 64".to_string());
+        }
+        if self.global.detector_jitter_secs > 86400 {
+            errors.push("检测抖动上限不能超过 86400 秒".to_string());
+        }
+        if self.global.bitrate_kbps > 320 {
+            errors.push("码率不能超过 320 kbps".to_string());
         }
         if !is_valid_record_format(&self.global.record_format) {
             errors.push("录制格式不支持（仅支持 m4a / mp3）".to_string());
@@ -243,9 +300,10 @@ segment_seconds = 0
 
     #[test]
     fn old_stored_filename_template_is_preserved_on_load() {
-        // 实装审查跟进：默认模板改为含 {index} 只影响**新默认值**；已存用户
-        // 配置里的旧模板由 serde 原样保留（default 仅在字段缺失时生效），
-        // 用户自定模板不被悄悄改写。
+        // 实装审查跟进：默认模板移除 {index} 只影响**新默认值**；已存用户
+        // 配置里的旧模板（含 {index}）由 serde 原样保留（default 仅在字段
+        // 缺失时生效），用户自定模板不被悄悄改写——渲染时 {index} 作为未知
+        // 变量原样保留（见 template.rs replace_variables 与测试）。
         let old = r#"
 filename_template = "{anchor_name}/{date}_{time}_{anchor_name}.{ext}"
 "#;
@@ -270,12 +328,13 @@ filename_template = "{anchor_name}/{date}_{time}_{anchor_name}.{ext}"
         assert!(cfg.audio_only);
         assert_eq!(
             cfg.filename_template,
-            "{anchor_name}/{date}_{time}_{anchor_name}_{index}.{ext}"
+            "{anchor_name}/{date}_{time}_{anchor_name}.{ext}"
         );
-        // 默认模板含 {index}（实装审查跟进：防同名主播同秒文件互相覆盖）
+        // 默认模板不含 {index}（实装审查跟进：同秒碰撞/上次残留由 engine
+        // deduplicate_output_path 兜底，分段模式由 ffmpeg %03d 管理）
         assert!(
-            cfg.filename_template.contains("{index}"),
-            "默认模板必须含 {{index}}: {}",
+            !cfg.filename_template.contains("{index}"),
+            "默认模板不得含 {{index}}: {}",
             cfg.filename_template
         );
         assert_eq!(cfg.max_concurrent_recordings, 3);
@@ -406,5 +465,70 @@ enable_check = true
         cfg.global.record_format = "../../pwn".to_string();
         let errs = cfg.is_valid().unwrap_err();
         assert!(errs.iter().any(|e| e.contains("录制格式")), "错误: {:?}", errs);
+    }
+
+    // ── L7 跟进：数值上限校验（与设置页 validation.ts inRange 对齐）──
+
+    #[test]
+    fn config_is_valid_accepts_default_and_boundary_values() {
+        // 默认配置合法
+        let cfg = Config::default();
+        assert!(cfg.is_valid().is_ok(), "默认配置必须通过校验");
+        // 边界值（上限本身）合法
+        let mut cfg = Config::default();
+        cfg.global.disk_space_limit_gb = 100_000;
+        cfg.global.segment_seconds = 86_400;
+        cfg.global.check_interval_secs = 86_400;
+        cfg.global.retention_days = 3_650;
+        cfg.global.max_total_gb = 100_000;
+        cfg.global.max_concurrent_recordings = 32;
+        cfg.global.pre_record_delay_secs = 86_400;
+        cfg.global.api_timeout_secs = 600;
+        cfg.global.stream_timeout_secs = 3_600;
+        cfg.global.max_retries = 20;
+        cfg.global.retry_delay_secs = 3_600;
+        cfg.global.detector_concurrency = 64;
+        cfg.global.detector_jitter_secs = 86_400;
+        cfg.global.bitrate_kbps = 320;
+        assert!(cfg.is_valid().is_ok(), "边界值必须通过校验: {:?}", cfg.is_valid().unwrap_err());
+        // 语义化零值（0 = 不限制/不分割）合法
+        let mut cfg = Config::default();
+        cfg.global.max_total_gb = 0;
+        cfg.global.segment_seconds = 0;
+        cfg.global.detector_jitter_secs = 0;
+        cfg.global.retry_delay_secs = 0;
+        assert!(cfg.is_valid().is_ok());
+    }
+
+    #[test]
+    fn config_is_valid_rejects_upper_bound_violations() {
+        // 超上限值逐一拒绝，错误消息包含对应字段说明
+        let cases: Vec<(fn(&mut GlobalConfig), &str)> = vec![
+            (|g| g.disk_space_limit_gb = 100_001, "磁盘阈值"),
+            (|g| g.segment_seconds = 86_401, "分段秒数"),
+            (|g| g.check_interval_secs = 86_401, "检测间隔"),
+            (|g| g.retention_days = 3_651, "保留天数"),
+            (|g| g.max_total_gb = 100_001, "总大小上限"),
+            (|g| g.max_concurrent_recordings = 33, "并发录制数"),
+            (|g| g.pre_record_delay_secs = 86_401, "录制前延迟"),
+            (|g| g.api_timeout_secs = 601, "API 超时"),
+            (|g| g.stream_timeout_secs = 3_601, "流超时"),
+            (|g| g.max_retries = 21, "重试次数"),
+            (|g| g.retry_delay_secs = 3_601, "重试间隔"),
+            (|g| g.detector_concurrency = 65, "检测并发数"),
+            (|g| g.detector_jitter_secs = 86_401, "检测抖动上限"),
+            (|g| g.bitrate_kbps = 321, "码率"),
+        ];
+        for (mutate, expected) in cases {
+            let mut cfg = Config::default();
+            mutate(&mut cfg.global);
+            let errs = cfg.is_valid().unwrap_err();
+            assert!(
+                errs.iter().any(|e| e.contains(expected)),
+                "字段 {} 超上限必须报错: {:?}",
+                expected,
+                errs
+            );
+        }
     }
 }

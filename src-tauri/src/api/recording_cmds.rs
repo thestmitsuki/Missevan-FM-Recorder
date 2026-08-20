@@ -1,69 +1,33 @@
 use tauri::State;
-use tokio_util::sync::CancellationToken;
 
 use crate::infrastructure::error::types::AppError;
-use crate::infrastructure::state::app_state::{RecorderState, Task};
+use crate::infrastructure::state::app_state::RecorderState;
 
-/// 启动录制任务
+/// 启动录制任务 —— 占位命令（L5 审查跟进）
 ///
-/// 从 anchor_cmds 或 detector 层调用，传入主播 ID 和推流 URL。
-/// 该命令会创建一个新的 tokio task 运行录制循环。
+/// **当前版本未使用**：本命令为早期占位实现（曾注册一个无真实 ffmpeg 的空
+/// 任务，插入空 output_path 且停不下来时占用活跃任务数/并发上限，属误用
+/// 陷阱）。现按项目惯例保留为**占位 + 禁用语义**：注册保持（命令存在），
+/// 调用一律返回明确错误，不注册任何任务、不占用任何运行时状态。
+///
+/// 实际录制入口：
+/// - 自动录制：检测循环（detector/loop.rs）→ `engine::start_ffmpeg_recording`
+///   （含双录防御/并发上限/路径模板渲染的完整实现）；
+/// - 手动停止：`stop_recording`（前端「停止录制」按钮调用）。
+///
+/// TODO（未来需要「手动指定流地址录制」时再实现）：对接录制引擎
+///（engine + monitor），至少需校验 stream_url / output_path 非空并走
+/// `start_ffmpeg_recording` 同款防线；不得恢复旧的空任务占位行为。
 #[tauri::command]
 pub async fn start_recording(
-    state: State<'_, RecorderState>,
-    anchor_id: String,
-    stream_url: String,
-    output_path: String,
+    _state: State<'_, RecorderState>,
+    _anchor_id: String,
+    _stream_url: String,
+    _output_path: String,
 ) -> Result<(), AppError> {
-    let mut app_state = state.state.lock().await;
-
-    if app_state.is_recording(&anchor_id) {
-        return Err(AppError::recording(
-            crate::infrastructure::error::types::RC_STREAM_UNAVAILABLE,
-            format!("主播 {} 已在录制中", anchor_id),
-        ));
-    }
-
-    let cancel_token = CancellationToken::new();
-    let cancel_clone = cancel_token.clone();
-    let anchor_id_clone = anchor_id.clone();
-
-    // 启动录制任务（占位——Phase 5 集成后对接录制引擎）
-    let handle = tokio::spawn(async move {
-        tracing::info!("录制任务启动: anchor_id={}", anchor_id_clone);
-        loop {
-            tokio::select! {
-                _ = cancel_clone.cancelled() => {
-                    tracing::info!("录制任务取消: anchor_id={}", anchor_id_clone);
-                    break;
-                }
-                _ = tokio::time::sleep(std::time::Duration::from_secs(10)) => {
-                    // 占位：实际录制循环在 monitor.rs 中
-                }
-            }
-        }
-    });
-
-    app_state.insert_task(
-        anchor_id.clone(),
-        Task {
-            anchor_id,
-            cancel_token,
-            handle,
-            anchor_name: String::new(),
-            room_id: String::new(),
-            output_path: String::new(),
-            started_at: std::time::Instant::now(),
-            pid: None,
-        },
-    );
-
-    tracing::info!(
-        "录制已开始: stream_url={}, output_path={}",
-        stream_url,
-        output_path
-    );
-    Ok(())
+    Err(AppError::config(
+        "start_recording 为占位命令，当前版本未使用；请使用自动录制（检测循环）或 stop_recording 管理录制",
+    ))
 }
 
 /// 停止录制任务

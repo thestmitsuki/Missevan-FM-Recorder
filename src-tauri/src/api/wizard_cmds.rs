@@ -1,7 +1,10 @@
 //! 设置向导相关 Tauri 命令（Task 7）
 //!
-//! - `download_ffmpeg`：流式下载 FFmpeg 便携版到 `{exe_dir}/ffmpeg/`，emit
-//!   `download:progress { percent, stage }` 事件，解压后更新配置并重新触发 FfmpegCheck
+//! - `download_ffmpeg`：流式下载 FFmpeg 便携版到 `{exe_dir}/ffmpeg/`（仅 Windows，
+//!   gyan.dev zip），emit `download:progress { percent, stage }` 事件，解压后重新触发
+//!   FfmpegCheck 并返回下载路径（修复子代理 B：**不写配置**——路径由前端暂存，
+//!   向导最后一步「完成」按钮时随 save_config 统一落盘）；Linux 不自动下载
+//!   （移植决策 #3），直接返回错误提示用系统包安装（Arch Linux：`sudo pacman -S ffmpeg`）
 //! - `exit_app`：退出应用
 //! - `finish_wizard`：向导完成（关闭向导窗 / 显示聚焦主窗 / 刷新文件缓存 / 唤醒检测循环）
 //!
@@ -9,26 +12,39 @@
 //! 命令须为 `pub(crate)` 才能被 lib.rs 根模块的 `generate_handler!` 通过全路径引用
 //! （Task 6 在根模块用非 pub 骨架可行，是因为宏与调用方同模块；E0255/E0603 已知坑）。
 
+#[cfg(windows)]
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+#[cfg(windows)]
 use futures_util::StreamExt;
-use tauri::{Emitter, Manager, State};
+// Emitter（window.emit）仅 Windows 下载进度事件使用；Manager / State 跨平台
+#[cfg(windows)]
+use tauri::Emitter;
+use tauri::{Manager, State};
 
 use crate::domain::config::manager::ConfigManager;
 use crate::domain::services::file_cache::{FileCacheHandle, FileCacheManager};
 use crate::infrastructure::checker::checks::{DiskSpaceCheck, FfmpegCheck, HealthCheck};
 use crate::infrastructure::checker::report::{CheckResult, CheckStatus, DiagnosticReport};
 use crate::infrastructure::state::app_state::RecorderState;
-use crate::infrastructure::error::types::{AppError, IO_WRITE_FAIL};
+// IO_WRITE_FAIL 仅 Windows 下载/解压路径使用（Linux 分支直接返回错误）
+#[cfg(windows)]
+use crate::infrastructure::error::types::IO_WRITE_FAIL;
+use crate::infrastructure::error::types::AppError;
 
-/// FFmpeg 下载源（gyan.dev 官方构建，内含 ffmpeg.exe / ffprobe.exe）
+/// FFmpeg 下载源（gyan.dev 官方构建，内含 ffmpeg.exe / ffprobe.exe；仅 Windows：
+/// 该源只有 Windows 构建，Linux 由用户安装系统包）
+#[cfg(windows)]
 const FFMPEG_DOWNLOAD_URL: &str = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip";
-/// 网络失败时提示手动下载
+/// 网络失败时提示手动下载（仅 Windows 下载路径使用）
+#[cfg(windows)]
 const MANUAL_DOWNLOAD_HINT: &str =
     "请前往 https://ffmpeg.org/download.html 手动下载 FFmpeg，并在配置中设置 ffmpeg_path";
 
-/// 需要从 zip 中提取的可执行文件名（不含路径，匹配 zip 内任意子目录层级）
+/// 需要从 zip 中提取的可执行文件名（不含路径，匹配 zip 内任意子目录层级；
+/// 仅 Windows：gyan.dev zip 只含 .exe 构建）
+#[cfg(windows)]
 const FFMPEG_ZIP_TARGETS: [&str; 2] = ["ffmpeg.exe", "ffprobe.exe"];
 
 /// 执行 `{exe} -version`，成功时返回首行版本信息
@@ -71,7 +87,12 @@ async fn tool_check(name: &str, candidates: &[std::path::PathBuf]) -> CheckResul
         status: CheckStatus::Failed,
         message: format!("未找到 {}", name),
         details: None,
-        suggestion: Some("请点击“下载并安装”按钮自动安装，或手动下载后设置 ffmpeg_path".into()),
+        // Linux 不自动下载（决策 #3）：提示系统包安装命令；Windows 走「下载并安装」按钮
+        suggestion: Some(if cfg!(target_os = "linux") {
+            "请自行安装 FFmpeg（Arch Linux 执行 sudo pacman -S ffmpeg），安装后重新检查".into()
+        } else {
+            "请点击“下载并安装”按钮自动安装，或手动下载后设置 ffmpeg_path".into()
+        }),
         duration_ms: start.elapsed().as_millis() as u64,
     }
 }
@@ -148,7 +169,8 @@ pub(crate) async fn run_wizard_health_check(
     Ok(DiagnosticReport::new(vec![ffmpeg, ffprobe, disk, write]))
 }
 
-/// `download:progress` 事件载荷（Task 8 向导 UI 依赖）
+/// `download:progress` 事件载荷（Task 8 向导 UI 依赖；仅 Windows 下载路径使用）
+#[cfg(windows)]
 #[derive(Debug, Clone, serde::Serialize)]
 struct DownloadProgress {
     /// 下载进度百分比（0-100；解压/验证阶段沿用上一值）
@@ -157,6 +179,22 @@ struct DownloadProgress {
     stage: &'static str,
 }
 
+/// `download_ffmpeg` 命令返回值（修复子代理 B）。
+///
+/// 下载成功**不再写配置**（配置文件唯一写入点在向导最后一步「完成」按钮）——
+/// ffmpeg/ffprobe 绝对路径随返回值交给前端暂存（wizardStore.staged），完成时
+/// 经 stagedToConfigPatch 一并写入 config.toml。
+#[derive(Debug, Clone, serde::Serialize)]
+pub(crate) struct DownloadFfmpegResult {
+    /// 下载完成后重新触发的 FFmpeg 检查结果
+    pub check: CheckResult,
+    /// 下载的 ffmpeg.exe 绝对路径（null = 未下载/自动探测）
+    pub ffmpeg_path: Option<String>,
+    /// 下载的 ffprobe.exe 绝对路径（空串 = 自动探测）
+    pub ffprobe_path: String,
+}
+
+#[cfg(windows)]
 impl DownloadProgress {
     fn emit(window: &tauri::Window, percent: u8, stage: &'static str) {
         let _ = window.emit(
@@ -173,14 +211,18 @@ impl DownloadProgress {
 ///
 /// 覆盖所有失败路径（下载中断、写入失败、解压失败等）的临时文件残留；
 /// 删除失败只记 warning 日志，绝不掩盖调用方的主错误（文件不存在视为成功）。
+/// 仅 Windows 下载/解压路径使用。
+#[cfg(windows)]
 struct TempFileGuard(PathBuf);
 
+#[cfg(windows)]
 impl TempFileGuard {
     fn new(path: PathBuf) -> Self {
         Self(path)
     }
 }
 
+#[cfg(windows)]
 impl Drop for TempFileGuard {
     fn drop(&mut self) {
         if let Err(e) = std::fs::remove_file(&self.0) {
@@ -195,6 +237,8 @@ impl Drop for TempFileGuard {
 ///
 /// 只提取 `ffmpeg.exe` / `ffprobe.exe`（忽略条目在 zip 内的子目录层级，
 /// 如 `ffmpeg-7.1-essentials_build/bin/ffmpeg.exe`），其余条目返回 None。
+/// 仅 Windows：gyan.dev zip 内的可执行文件均带 .exe 扩展名。
+#[cfg(windows)]
 fn flat_output_name(entry_name: &str) -> Option<&str> {
     let file_name = entry_name.rsplit(['/', '\\']).next().unwrap_or(entry_name);
     if FFMPEG_ZIP_TARGETS.contains(&file_name) {
@@ -206,7 +250,8 @@ fn flat_output_name(entry_name: &str) -> Option<&str> {
 
 /// 解压 zip 中需要的 ffmpeg/ffprobe 可执行文件到目标目录（扁平化）。
 ///
-/// 同步阻塞 IO，调用方应放入 `spawn_blocking`。
+/// 同步阻塞 IO，调用方应放入 `spawn_blocking`。仅 Windows。
+#[cfg(windows)]
 fn extract_ffmpeg_zip(zip_path: &Path, target_dir: &Path) -> Result<Vec<PathBuf>, AppError> {
     std::fs::create_dir_all(target_dir).map_err(|e| {
         AppError::system(IO_WRITE_FAIL, "创建 FFmpeg 目录失败").with_technical(e.to_string())
@@ -265,19 +310,57 @@ fn extract_ffmpeg_zip(zip_path: &Path, target_dir: &Path) -> Result<Vec<PathBuf>
 
 /// 下载 FFmpeg 便携版并解压到 `{exe_dir}/ffmpeg/`，完成后重新触发 FfmpegCheck。
 ///
-/// 流式下载（reqwest `bytes_stream`），按接收字节数计算百分比并 emit
-/// `download:progress` 事件；成功后把 `ffmpeg_path` / `ffprobe_path` 写入配置
-/// 并返回重检结果。失败返回 AppError（附带手动下载提示）。
+/// Windows：流式下载（reqwest `bytes_stream`），按接收字节数计算百分比并 emit
+/// `download:progress` 事件；成功后返回重检结果与下载路径（修复子代理 B：
+/// **不再写配置**——ffmpeg_path/ffprobe_path 由前端暂存，向导最后一步「完成」
+/// 按钮点击时随 save_config 统一落盘）。失败返回 AppError（附带手动下载提示）。
+/// Linux：不自动下载（移植决策 #3：gyan.dev 源只有 Windows 构建），直接返回
+/// 错误并提示用系统包安装（Arch Linux：`sudo pacman -S ffmpeg`）；其余非
+/// Windows 平台同理返回错误提示自行安装。
 #[tauri::command]
 pub(crate) async fn download_ffmpeg(
     window: tauri::Window,
-    config_manager: State<'_, Arc<ConfigManager>>,
-) -> Result<CheckResult, AppError> {
+) -> Result<DownloadFfmpegResult, AppError> {
+    #[cfg(windows)]
+    {
+        return download_ffmpeg_windows(window).await;
+    }
+    #[cfg(not(windows))]
+    {
+        // 非 Windows 不使用参数（消除未使用警告）
+        let _ = window;
+        let message = if cfg!(target_os = "linux") {
+            "当前系统为 Linux，请自行安装 FFmpeg（Arch Linux 执行 sudo pacman -S ffmpeg），安装后重新检查"
+        } else {
+            "当前系统不支持自动下载 FFmpeg，请自行安装后重新检查"
+        };
+        return Err(AppError::system(
+            crate::infrastructure::error::types::INT_UNEXPECTED,
+            message,
+        ));
+    }
+}
+
+/// Windows 下载实现（gyan.dev zip）：流式下载 → 解压 → 重检 → 返回路径。
+///
+/// 与 `download_ffmpeg` 命令分离：非 Windows 平台不编译本函数（含 zip 解压与
+/// reqwest stream 逻辑），命令签名保持跨平台一致。`#[tauri::command]` 宏只加在
+/// 命令入口上，本函数不重复生成 `__cmd__` 宏。
+#[cfg(windows)]
+async fn download_ffmpeg_windows(
+    window: tauri::Window,
+) -> Result<DownloadFfmpegResult, AppError> {
     use tokio::io::AsyncWriteExt;
 
     tracing::info!("开始下载 FFmpeg: {}", FFMPEG_DOWNLOAD_URL);
     DownloadProgress::emit(&window, 0, "connecting");
 
+    // G9 例外说明：FFmpeg 下载**不**复用共享 HTTP client（spider.rs
+    // `MissevanClient::from_config` 缓存实例）——共享池按 api_timeout_secs
+    //（默认 10s）与全局代理配置构建，而本下载是单次长时流式传输（600s 超时、
+    // 大文件、一次性的连接），复用一个 10s 超时的客户端会直接中断下载；且
+    // 走共享池会引入用户代理配置（可能干扰 gyan.dev 下载源）。保持独立
+    // 客户端不构成「命令层每次调用新建」的抖动模式（下载是向导中的一次性操作）。
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(600))
         .build()
@@ -363,15 +446,15 @@ pub(crate) async fn download_ffmpeg(
     let _ = std::fs::remove_file(&zip_path);
     tracing::info!("FFmpeg 解压完成: {:?}", extracted);
 
-    // 3. 更新配置中的 ffmpeg_path / ffprobe_path（指向本次下载的可执行文件）
+    // 3. 不再写配置（修复子代理 B 根因修复：配置文件的唯一写入点在向导最后一步
+    //    「完成」按钮；旧实现在此 save_global 会把 ffmpeg 路径提前落盘，配置在
+    //    向导第 3 步就已产生）。下载路径随返回值交给前端暂存
+    //    （wizardStore.staged.ffmpegPath / ffprobePath），完成时随 stagedToConfigPatch
+    //    一并写入 config.toml
     let ffmpeg_exe = ffmpeg_dir.join("ffmpeg.exe");
     let ffprobe_exe = ffmpeg_dir.join("ffprobe.exe");
-    let mut config = config_manager.load()?;
-    config.global.ffmpeg_path = Some(ffmpeg_exe.to_string_lossy().into_owned());
-    config.global.ffprobe_path = ffprobe_exe.to_string_lossy().into_owned();
-    config_manager.save_global(&config.global)?;
 
-    // 4. 重新触发 FfmpegCheck 并返回检测结果
+    // 4. 重新触发 FfmpegCheck 并返回检测结果 + 下载路径
     DownloadProgress::emit(&window, 100, "verifying");
     let check = FfmpegCheck {
         ffmpeg_path: Some(ffmpeg_exe.to_string_lossy().into_owned()),
@@ -379,7 +462,11 @@ pub(crate) async fn download_ffmpeg(
     let result = check.run().await;
     DownloadProgress::emit(&window, 100, "done");
     tracing::info!("FFmpeg 重检完成: {}", result.message);
-    Ok(result)
+    Ok(DownloadFfmpegResult {
+        check: result,
+        ffmpeg_path: Some(ffmpeg_exe.to_string_lossy().into_owned()),
+        ffprobe_path: ffprobe_exe.to_string_lossy().into_owned(),
+    })
 }
 
 /// 退出应用（向导窗的「退出」按钮；走统一优雅退出路径：保存配置 →
@@ -398,8 +485,10 @@ pub(crate) async fn finish_wizard(
     config_manager: State<'_, Arc<ConfigManager>>,
     detection_wake: State<'_, Arc<tokio::sync::Notify>>,
 ) -> Result<(), AppError> {
-    // 0. 标记引导完成（主 AGENT 引导逻辑修复）：config.toml 在第 3 步已写盘，
-    //    is_first_run 依赖 wizard_completed——置 true 后再次启动不再进引导
+    // 0. 标记引导完成（修复子代理 B：配置已由前端在「完成」按钮 save_config 时
+    //    全量落盘并显式写入 wizard_completed=true——stagedToConfigPatch 的
+    //    wizard_completed 与 finish_wizard 语义对齐；此处仅为幂等兜底：若配置
+    //    恰好未完成（理论不可达），置 true 后再次启动不再进引导）
     if let Ok(mut config) = config_manager.load() {
         if !config.global.wizard_completed {
             config.global.wizard_completed = true;
@@ -433,7 +522,7 @@ pub(crate) async fn finish_wizard(
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(all(test, windows))]
 mod tests {
     use super::*;
     use std::io::Write;

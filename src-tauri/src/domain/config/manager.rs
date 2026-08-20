@@ -1,8 +1,7 @@
-use std::path::PathBuf;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-// 仅供非测试构建使用（notifier 字段 / with_notifier，测试构建不链入 dispatcher 代码）
-#[cfg(not(test))]
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use crate::domain::config::model::{
     is_valid_record_format, AnchorConfig, Config, GlobalConfig,
@@ -32,6 +31,22 @@ static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
 /// 配置管理器——负责加载、保存、迁移配置（Task 18：写盘前备份 + 敏感字段混淆 + 损坏自动恢复）
 pub struct ConfigManager {
     data_dir: PathBuf,
+    /// M7：load() 结果缓存（读热路径：检测循环每轮 / monitor 每 10s 心跳都在
+    /// 调用，长期运行同步磁盘 IO 放大）。方案 A（事件失效缓存）：
+    /// - 缓存条目携带填充时的 version；命中条件 = 条目 version == 当前 version
+    /// - 全部写路径（save_global / add_anchor / remove_anchor /
+    ///   remove_all_anchors / delete_all，import 经它们落盘）开始与结束时各
+    ///   +1 version（invalidate）——写前旧条目失效（写期间 load 回退磁盘：
+    ///   原子 rename 保证读到旧或新的完整文件，绝无半写），写后再次失效
+    ///   （丢弃写期间可能填入的中间态条目），保证「写后立即可见」
+    /// - 并发写与缓存填充交错时 version 不匹配 → 本次结果不缓存，天然避免
+    ///   「写完成后缓存仍存旧值」
+    /// - 进程内唯一写者集假设成立：单实例锁保证无第二进程写同一配置目录；
+    ///   外部手工改文件在下次写失效前不可见——可接受的取舍（正常操作全部
+    ///   经本管理器）
+    cache: RwLock<Option<(u64, Arc<Config>)>>,
+    /// 缓存失效版本号（每次写路径 +1；见 cache 注释）
+    version: AtomicU64,
     /// 通知分发器（备份恢复通知、通知设置同步）；测试构建不编译（见 with_notifier 注释）
     #[cfg(not(test))]
     notifier: Option<Arc<NotificationDispatcher>>,
@@ -41,6 +56,8 @@ impl ConfigManager {
     pub fn new(data_dir: PathBuf) -> Self {
         Self {
             data_dir,
+            cache: RwLock::new(None),
+            version: AtomicU64::new(0),
             #[cfg(not(test))]
             notifier: None,
         }
@@ -78,14 +95,48 @@ impl ConfigManager {
         Ok(self.anchors_dir().join(format!("{}.toml", id)))
     }
 
-    /// 加载完整配置（全局 + 所有主播）。
+    /// 加载完整配置（缓存优先；M7）。对外语义与直接读磁盘一致：
+    /// - 命中缓存（version 未变）→ 直接返回，零磁盘 IO
+    /// - 未命中 / 写路径已失效 → 读磁盘并回填缓存；磁盘读取期间发生并发写
+    ///   （version 已变）→ 本次结果可能是旧值，跳过回填（下次 load 读磁盘）
+    pub fn load(&self) -> Result<Config, AppError> {
+        let version = self.version.load(Ordering::SeqCst);
+        if let Some((v, cfg)) = self
+            .cache
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+        {
+            if *v == version {
+                return Ok((**cfg).clone());
+            }
+        }
+        let cfg = self.load_from_disk()?;
+        let current = self.version.load(Ordering::SeqCst);
+        if current == version {
+            *self
+                .cache
+                .write()
+                .unwrap_or_else(|e| e.into_inner()) = Some((current, Arc::new(cfg.clone())));
+        }
+        Ok(cfg)
+    }
+
+    /// 缓存失效（M7）：写路径开始与结束时各调用一次。version +1 后所有旧
+    /// 缓存条目自动不命中（load 命中条件 = 条目 version == 当前 version）。
+    /// 失败路径同样先失效——磁盘未变时下次 load 回退磁盘读到原值，正确。
+    fn invalidate(&self) {
+        self.version.fetch_add(1, Ordering::SeqCst);
+    }
+
+    /// 从磁盘加载完整配置（无缓存；M7 内部/首启判定专用）。
     ///
     /// - 全局配置解析失败（损坏）时自动按新→旧回溯备份（规格 4.2，保留策略内最多
     ///   5 份，取首个可解析者），恢复成功后把备份内容写回 config.toml 修复磁盘文件，
     ///   并通知用户（`config_recovered`）；全部备份不可解析则返回原始错误
     /// - 敏感字段（proxy_password / cookie）从磁盘解密；
     ///   旧版明文配置由 `deobfuscate_or_plain` 回退原样返回（读兼容，不破坏）
-    pub fn load(&self) -> Result<Config, AppError> {
+    fn load_from_disk(&self) -> Result<Config, AppError> {
         let global_path = self.global_config_path();
         if !global_path.exists() {
             return Ok(Config {
@@ -101,6 +152,12 @@ impl ConfigManager {
         let mut global: GlobalConfig = match toml::from_str(&global_str) {
             Ok(g) => g,
             Err(parse_err) => {
+                // S4a：损坏不再静默——明确 error 日志（含路径与原因）
+                tracing::error!(
+                    "配置文件损坏: {}（{}），尝试从备份恢复",
+                    global_path.display(),
+                    parse_err
+                );
                 // 损坏：按新→旧遍历备份（保留策略内最多 5 份），取首个可解析者恢复。
                 // 最新备份本身也可能损坏/半写——回溯更旧备份避免恢复失败；
                 // 全部不可解析则返回原始解析错误。
@@ -112,9 +169,14 @@ impl ConfigManager {
                         continue;
                     };
                     if let Ok(g) = toml::from_str::<GlobalConfig>(&s) {
+                        // S4a：恢复成功——先保留损坏副本（.corrupt.<时间戳>）供诊断，
+                        // 再写回修复。用「复制」而非「改名」：写回失败时损坏文件仍在
+                        // 原位，下次 load 可再次尝试恢复（改名挪走则文件缺失会静默
+                        // 回退默认配置，反而丢失恢复机会）
+                        self.preserve_corrupt(&global_path, false);
                         // 恢复成功后把备份内容写回 config.toml：修复磁盘上的损坏文件，
                         // 避免下次启动/下次命令再次走恢复路径（写回失败不阻断本次加载）；
-                        // 与 save_global 一致用临时文件 + rename 原子替换（M1）
+                        // 与 save_global 一致用临时文件 + fsync + rename 原子替换（M1/S4a）
                         if let Err(e) = self.atomic_write_global(&s) {
                             tracing::warn!("配置恢复后写回 config.toml 失败（本次加载不受影响）: {}", e);
                         }
@@ -154,11 +216,24 @@ impl ConfigManager {
                 if entry.path().extension().map_or(false, |ext| ext == "toml") {
                     let anchor_str = std::fs::read_to_string(entry.path())
                         .map_err(|e| AppError::config(format!("读取主播配置失败: {}", e)))?;
-                    if let Ok(mut anchor) = toml::from_str::<AnchorConfig>(&anchor_str) {
-                        if let Some(cookie) = &anchor.cookie {
-                            anchor.cookie = Some(crypto::deobfuscate_or_plain(cookie, &key));
+                    match toml::from_str::<AnchorConfig>(&anchor_str) {
+                        Ok(mut anchor) => {
+                            if let Some(cookie) = &anchor.cookie {
+                                anchor.cookie = Some(crypto::deobfuscate_or_plain(cookie, &key));
+                            }
+                            anchors.push(anchor);
                         }
-                        anchors.push(anchor);
+                        Err(parse_err) => {
+                            // S4a：损坏/非法主播文件不再静默丢弃——明确 error 日志
+                            // （含路径与原因）+ 保留损坏副本（.corrupt.<时间戳>）供
+                            // 诊断；其余主播正常加载，不阻断启动
+                            tracing::error!(
+                                "主播配置文件损坏，已跳过加载: {}（{}）",
+                                entry.path().display(),
+                                parse_err
+                            );
+                            self.preserve_corrupt(&entry.path(), true);
+                        }
                     }
                 }
             }
@@ -201,6 +276,8 @@ impl ConfigManager {
     /// 2. proxy_password 混淆后落盘（读取时解密；旧明文配置读兼容）
     /// 3. 成功后同步通知设置到分发器（系统通知开关 / 事件勾选即时生效）
     pub fn save_global(&self, config: &GlobalConfig) -> Result<(), AppError> {
+        // M7：写开始——旧缓存条目失效（写期间 load 回退磁盘）
+        self.invalidate();
         // M1 审查跟进：record_format 会被拼入输出文件扩展名（engine.rs 输出路径），
         // 白名单校验拒绝 `../../` 等路径穿越注入。save_config / import_config /
         // set_shortcut / set_autostart 全部写路径都经本函数落盘，一处把关全盖。
@@ -240,25 +317,50 @@ impl ConfigManager {
             notifier.sync_from_config(config);
         }
 
+        // M7：写结束——丢弃写期间可能填入的中间态缓存条目（保证写后立即可见）
+        self.invalidate();
+
         Ok(())
     }
 
-    /// 原子写全局配置（M1 + 审查跟进）：
-    /// 1. 全程持 `GLOBAL_CONFIG_WRITE_LOCK`——锁粒度覆盖「写临时文件 → rename
-    ///    替换」整段序列，并发写命令（save_config / import_config / set_shortcut
-    ///    / set_autostart / load 恢复回写）串行化，杜绝共享 tmp 互相覆盖与
-    ///    remove/rename 交错（曾可致 config.toml 被删后 rename 失败 → 文件缺失）
-    /// 2. 临时文件名唯一化（`config.toml.tmp.<pid>.<seq>`）作双保险：即使未来
-    ///    某调用路径漏拿锁，两个写者也各写各的 tmp，不会互相覆盖
-    /// 3. 直接 rename 替换目标，不先 remove：Windows 下 std::fs::rename 走
-    ///    MoveFileExW 且带 MOVEFILE_REPLACE_EXISTING，Unix 下 rename(2) 同样
-    ///    原子替换——两种平台 rename 都覆盖已存在目标；先 remove 反而制造
-    ///    config.toml 短暂缺失的窗口，并发 load() 会静默读到默认配置。
-    ///    临时文件残留（异常中断）不影响下次加载——load 只读 `config.toml`。
+    /// 原子写全局配置（M1 + S4a）：与主播配置统一走 `atomic_write_file`
+    /// （临时文件 + fsync + rename 原子替换）。
     fn atomic_write_global(&self, content: &str) -> Result<(), AppError> {
         let target = self.global_config_path();
-        let tmp = self.config_dir().join(format!(
-            "config.toml.tmp.{}.{}",
+        self.atomic_write_file(&target, content)
+    }
+
+    /// 原子写单配置文件（M1 + S4a）——全局 config.toml 与主播 toml 统一路径：
+    /// 1. 写同目录临时文件（`<原名>.tmp.<pid>.<seq>`，与目标同卷）→ fsync 内容
+    ///    落盘 → rename 原子替换目标。全程持 `GLOBAL_CONFIG_WRITE_LOCK`（锁粒度
+    ///    覆盖「写 tmp → rename」整段序列），并发写命令（save_config /
+    ///    import_config / set_shortcut / set_autostart / add_anchor / load 恢复
+    ///    回写）串行化，杜绝共享 tmp 互相覆盖与 remove/rename 交错（曾可致
+    ///    config.toml 缺失）
+    /// 2. 临时文件名唯一化（`<原名>.tmp.<pid>.<seq>`）作双保险：即使未来某调用
+    ///    路径漏拿锁，两个写者也各写各的 tmp，不会互相覆盖
+    /// 3. **不先删目标**：替换成功前原文件始终保留。rename 覆盖已存在目标在
+    ///    Unix（rename(2)）与 Windows（std::fs::rename → MoveFileExW +
+    ///    MOVEFILE_REPLACE_EXISTING，同卷原子替换）均成立；本机 Windows 上既有
+    ///    测试（并发写 / 恢复回写 / 重复保存）已实证 rename 直替可用，故不引入
+    ///    「先移走原文件再 rename」的备份舞步——那会制造目标短暂缺失的非原子窗口。
+    ///    rename 失败时目标保持原状（原文件未受损），调用方按错误处理
+    /// 4. fsync：内容落盘后再 rename——掉电/崩溃不产生「rename 已完成但内容未
+    ///    落盘」的空/半文件；目录 fsync 为尽力而为（Unix 打开目录同步；Windows
+    ///    无等价 std API，NTFS 元数据自身事务性较好，跳过）
+    /// 5. 临时文件残留（异常中断）不影响加载——load 只读正式文件名
+    fn atomic_write_file(&self, target: &Path, content: &str) -> Result<(), AppError> {
+        let dir = target
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        let name = target
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "config.toml".to_string());
+        let tmp = dir.join(format!(
+            "{}.tmp.{}.{}",
+            name,
             std::process::id(),
             TMP_SEQ.fetch_add(1, Ordering::Relaxed)
         ));
@@ -266,24 +368,49 @@ impl ConfigManager {
         let _guard = GLOBAL_CONFIG_WRITE_LOCK
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        std::fs::write(&tmp, content).map_err(|e| {
+        {
+            let mut f = std::fs::File::create(&tmp).map_err(|e| {
+                AppError::system(
+                    crate::infrastructure::error::types::IO_WRITE_FAIL,
+                    "写入配置失败",
+                )
+                .with_technical(format!("{}", e))
+            })?;
+            f.write_all(content.as_bytes()).map_err(|e| {
+                AppError::system(
+                    crate::infrastructure::error::types::IO_WRITE_FAIL,
+                    "写入配置失败",
+                )
+                .with_technical(format!("{}", e))
+            })?;
+            // S4a：fsync 内容落盘后再 rename——掉电/崩溃不产生半写文件
+            f.sync_all().map_err(|e| {
+                AppError::system(
+                    crate::infrastructure::error::types::IO_WRITE_FAIL,
+                    "写入配置失败",
+                )
+                .with_technical(format!("fsync 失败: {}", e))
+            })?;
+        }
+        std::fs::rename(&tmp, target).map_err(|e| {
             AppError::system(
                 crate::infrastructure::error::types::IO_WRITE_FAIL,
                 "写入配置失败",
             )
             .with_technical(format!("{}", e))
         })?;
-        std::fs::rename(&tmp, &target).map_err(|e| {
-            AppError::system(
-                crate::infrastructure::error::types::IO_WRITE_FAIL,
-                "写入配置失败",
-            )
-            .with_technical(format!("{}", e))
-        })
+        // 目录 fsync（尽力而为）：rename 目录项变更落盘；失败忽略
+        #[cfg(unix)]
+        if let Ok(d) = std::fs::File::open(dir) {
+            let _ = d.sync_all();
+        }
+        Ok(())
     }
 
     /// 添加主播（cookie 混淆后落盘；读取时解密；旧明文配置读兼容）
     pub fn add_anchor(&self, anchor: &AnchorConfig) -> Result<(), AppError> {
+        // M7：写开始——旧缓存条目失效（写期间 load 回退磁盘）
+        self.invalidate();
         let dir = self.anchors_dir();
         std::fs::create_dir_all(&dir).map_err(|e| {
             AppError::system(
@@ -301,13 +428,12 @@ impl ConfigManager {
         let toml_str = toml::to_string_pretty(&stored)
             .map_err(|e| AppError::config(format!("序列化主播配置失败: {}", e)))?;
 
-        std::fs::write(self.anchor_path(&anchor.id)?, toml_str).map_err(|e| {
-            AppError::system(
-                crate::infrastructure::error::types::IO_WRITE_FAIL,
-                "写入主播配置失败",
-            )
-            .with_technical(format!("{}", e))
-        })?;
+        // S4a：主播配置也走原子写（临时文件 + fsync + rename）——直接覆写中途
+        // 崩溃/断电会产生半写文件，被 load 静默跳过（架构审查 TOP3 主播链路）
+        self.atomic_write_file(&self.anchor_path(&anchor.id)?, &toml_str)?;
+
+        // M7：写结束（见 save_global 同款注释）
+        self.invalidate();
 
         Ok(())
     }
@@ -377,8 +503,46 @@ impl ConfigManager {
             .collect()
     }
 
+    /// S4a：保留损坏配置文件副本供诊断——`<原名>.corrupt.<YYYYMMDDHHMMSSmmm>`
+    /// （全局配置在配置目录、主播配置在 anchors/ 内）。`.corrupt.` 后缀不在
+    /// 备份枚举与加载的文件名匹配范围内，不会被误读。
+    /// - `move_original=true`：原文件改名为副本位（主播文件用——损坏文件留在原位
+    ///   会在每次缓存失效后的 load 重复告警）
+    /// - `move_original=false`：复制副本、原文件保留（全局配置用——恢复写回失败时
+    ///   损坏文件仍在原位，下次 load 可再次尝试恢复）
+    /// 副本保留失败仅告警，不阻断加载/恢复。
+    fn preserve_corrupt(&self, path: &Path, move_original: bool) {
+        static CORRUPT_SEQ: AtomicU64 = AtomicU64::new(0);
+        let ts = chrono::Local::now().format("%Y%m%d%H%M%S%.6f");
+        let seq = CORRUPT_SEQ.fetch_add(1, Ordering::Relaxed) % 100;
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "config.toml".to_string());
+        let corrupt = path.with_file_name(format!("{}.corrupt.{}.{:02}", name, ts, seq));
+        let result = if move_original {
+            std::fs::rename(path, &corrupt)
+        } else {
+            std::fs::copy(path, &corrupt).map(|_| ())
+        };
+        match result {
+            Ok(()) => tracing::info!(
+                "损坏配置副本已保留供诊断: {} -> {}",
+                path.display(),
+                corrupt.display()
+            ),
+            Err(e) => tracing::warn!(
+                "保留损坏配置副本失败（{}）: {}",
+                corrupt.display(),
+                e
+            ),
+        }
+    }
+
     /// 删除主播
     pub fn remove_anchor(&self, id: &str) -> Result<(), AppError> {
+        // M7：写开始——旧缓存条目失效
+        self.invalidate();
         let path = self.anchor_path(id)?;
         if path.exists() {
             std::fs::remove_file(&path).map_err(|e| {
@@ -389,6 +553,8 @@ impl ConfigManager {
                 .with_technical(format!("{}", e))
             })?;
         }
+        // M7：写结束（见 save_global 同款注释）
+        self.invalidate();
         Ok(())
     }
 
@@ -397,12 +563,16 @@ impl ConfigManager {
     /// 引导完成标记：首次向导第 3 步检查通过即写盘（config.toml 存在），但
     /// 用户未到第 4 步「进入应用」就退出时引导未完成——此时必须再次打开引导窗
     /// （规格「若用户未完成配置而关闭，再次启动时仍会重新打开引导窗口」）。
+    ///
+    /// M7：保持走磁盘（`load_from_disk` 绕过缓存）——首启判定是低频路径，
+    /// 不依赖缓存失效时序（delete_all 后文件缺失直接短路；外部写盘场景读到
+    /// 最新），避免缓存引入任何首启误判风险。
     pub fn is_first_run(&self) -> bool {
         if !self.global_config_path().exists() {
             return true;
         }
         // 配置存在但引导未完成（wizard_completed=false，首次写盘时显式设置）
-        match self.load() {
+        match self.load_from_disk() {
             Ok(config) => !config.global.wizard_completed,
             Err(_) => true, // 配置损坏：保守视为首次运行（引导可重建）
         }
@@ -411,6 +581,8 @@ impl ConfigManager {
     /// 删除全部配置（config.toml + anchors/），供 reset_config 使用。
     /// 仅当配置目录存在时才删除；不存在视为成功（幂等）。
     pub fn delete_all(&self) -> Result<(), AppError> {
+        // M7：写开始——旧缓存条目失效（含「目录不存在时静默成功」的幂等路径）
+        self.invalidate();
         let dir = self.config_dir();
         if dir.exists() {
             std::fs::remove_dir_all(&dir).map_err(|e| {
@@ -421,13 +593,19 @@ impl ConfigManager {
                 .with_technical(format!("{}", e))
             })?;
         }
+        // M7：写结束（见 save_global 同款注释）
+        self.invalidate();
         Ok(())
     }
 
     /// 删除全部主播配置（import replace 全替换时先清空再写入）
     pub fn remove_all_anchors(&self) -> Result<(), AppError> {
+        // M7：写开始——旧缓存条目失效
+        self.invalidate();
         let dir = self.anchors_dir();
         if !dir.exists() {
+            // 目录不存在视为成功（幂等）；写结束失效见函数末尾
+            self.invalidate();
             return Ok(());
         }
         for entry in std::fs::read_dir(&dir)
@@ -444,6 +622,8 @@ impl ConfigManager {
                 })?;
             }
         }
+        // M7：写结束（见 save_global 同款注释）
+        self.invalidate();
         Ok(())
     }
 
@@ -549,6 +729,20 @@ impl ConfigManager {
             }
         }
 
+        // S4b（M2 跟进）：写入前执行与正常加载相同的全量字段校验（复用
+        // Config::is_valid）——越界数值 / 非法录制格式 / 空输出目录等非法值
+        // 返回明确错误，不落盘、不静默接受
+        let candidate = Config {
+            global: global.clone(),
+            anchors: deduped.iter().map(|a| (*a).clone()).collect(),
+        };
+        if let Err(errors) = candidate.is_valid() {
+            return Err(AppError::config(format!(
+                "导入配置校验失败: {}",
+                errors.join("；")
+            )));
+        }
+
         // 写入
         self.save_global(&global)?;
         if let Some(ref list) = file_anchors {
@@ -625,6 +819,25 @@ impl ConfigManager {
                     }
                 }
             }
+        }
+
+        // S4b（M2 跟进）：合并结果写入前执行全量字段校验（复用 Config::is_valid），
+        // 非法输入返回明确错误且不落盘
+        let mut candidate_anchors = current.anchors.clone();
+        for a in &file_anchors {
+            if !candidate_anchors.iter().any(|la| la.id == a.id) {
+                candidate_anchors.push(a.clone());
+            }
+        }
+        let candidate = Config {
+            global: global.clone(),
+            anchors: candidate_anchors,
+        };
+        if let Err(errors) = candidate.is_valid() {
+            return Err(AppError::config(format!(
+                "导入配置校验失败: {}",
+                errors.join("；")
+            )));
         }
 
         // 校验全部通过：先写 global，再写新增主播（与本地重复者跳过，保留本地）
@@ -1009,6 +1222,55 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    #[test]
+    fn load_with_missing_config_returns_defaults_without_writing() {
+        // 启动/向导早期绝不落盘（修复子代理 B）：配置不存在时 load 只返回内存
+        // 默认值，不创建任何文件（get_config / 向导第 1-3 步 / lib.rs setup 只读）
+        let dir = std::env::temp_dir().join(format!(
+            "missevan-load-no-create-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let manager = ConfigManager::new(dir.clone());
+        let cfg = manager.load().unwrap();
+        assert!(
+            !manager.global_config_path().exists(),
+            "加载默认配置不得创建配置文件"
+        );
+        assert_eq!(cfg.global.output_dir, "./recordings");
+        assert!(cfg.anchors.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn wizard_completion_write_contains_all_staged_fields() {
+        // 向导最后一步「完成」的落盘载荷（前端 stagedToConfigPatch 全量 + 
+        // wizard_completed=true）：autostart / trayMinimize→close_behavior /
+        // wizard_completed 必须全部写入（非默认值也能写入，H1 回归防护）
+        let dir = std::env::temp_dir().join(format!(
+            "missevan-wizard-complete-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let manager = ConfigManager::new(dir.clone());
+        let mut g = GlobalConfig::default();
+        g.output_dir = "D:/recordings".into();
+        g.record_format = "mp3".into();
+        g.autostart = true; // 非默认（默认 false）
+        g.close_behavior = "tray".into();
+        g.wizard_completed = true;
+        manager.save_global(&g).unwrap();
+        let loaded = manager.load().unwrap().global;
+        assert_eq!(loaded.output_dir, "D:/recordings");
+        assert_eq!(loaded.record_format, "mp3");
+        assert!(loaded.autostart);
+        assert_eq!(loaded.close_behavior, "tray");
+        assert!(loaded.wizard_completed);
+        assert!(!manager.is_first_run(), "完成落盘后下次启动进入主页面");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn test_save_and_load_global() {
         let dir = std::env::temp_dir().join("missevan-test-config-2");
         let _ = std::fs::remove_dir_all(&dir);
@@ -1183,7 +1445,7 @@ mod tests {
     fn add_anchor_rejects_path_traversal_id() {
         let (manager, dir) = setup_config();
         let anchor = AnchorConfig {
-            id: "../../../../Users/admin/Desktop/pwn".into(),
+            id: "../../../../tmp/pwn".into(),
             name: "x".into(),
             url: "https://m.missevan.com/live/1".into(),
             room_id: "1".into(),
@@ -1396,15 +1658,210 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    // ── M7：load() 缓存（读热路径去磁盘 IO；写后立即可见）──
+
+    #[test]
+    fn load_reflects_save_immediately() {
+        let dir = unique_dir("cache-save");
+        let manager = ConfigManager::new(dir.clone());
+        let mut cfg = GlobalConfig::default();
+        cfg.output_dir = "A:/one".to_string();
+        manager.save_global(&cfg).unwrap();
+        assert_eq!(manager.load().unwrap().global.output_dir, "A:/one");
+        // 写后立即可见：再次保存不同值，load 必须返回新值（不得返回缓存旧值）
+        cfg.output_dir = "B:/two".to_string();
+        manager.save_global(&cfg).unwrap();
+        assert_eq!(manager.load().unwrap().global.output_dir, "B:/two");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn repeated_loads_without_writes_are_consistent() {
+        let (manager, dir) = setup_config();
+        let a = manager.load().unwrap();
+        let b = manager.load().unwrap();
+        let c = manager.load().unwrap();
+        // 未写时多次 load 结果一致（缓存命中路径稳定）
+        assert_eq!(a.global.output_dir, b.global.output_dir);
+        assert_eq!(a.global.output_dir, c.global.output_dir);
+        assert_eq!(a.anchors.len(), b.anchors.len());
+        assert_eq!(a.anchors.len(), c.anchors.len());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn concurrent_loads_do_not_panic() {
+        let (manager, dir) = setup_config();
+        std::thread::scope(|s| {
+            let manager_ref = &manager; // 引用是 Copy，各闭包各持一份
+            for _ in 0..8usize {
+                s.spawn(move || {
+                    for _ in 0..20usize {
+                        let cfg = manager_ref.load().unwrap();
+                        // 并发读：内容完整一致（缓存与磁盘回退两路都不 panic）
+                        assert_eq!(cfg.anchors.len(), 2);
+                        assert_eq!(cfg.global.output_dir, "D:/recordings");
+                    }
+                });
+            }
+        });
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn anchor_writes_invalidate_load_cache() {
+        let (manager, dir) = setup_config();
+        assert_eq!(manager.load().unwrap().anchors.len(), 2);
+        // add_anchor 后立即可见
+        manager
+            .add_anchor(&AnchorConfig {
+                id: "a9".into(),
+                name: "主播9".into(),
+                url: "https://m.missevan.com/live/9".into(),
+                room_id: "9".into(),
+                proxy: None,
+                cookie: None,
+                enable_check: true,
+                avatar_url: None,
+                tags: Vec::new(),
+            })
+            .unwrap();
+        assert_eq!(manager.load().unwrap().anchors.len(), 3);
+        // remove_anchor 后立即可见
+        manager.remove_anchor("a9").unwrap();
+        assert_eq!(manager.load().unwrap().anchors.len(), 2);
+        // remove_all_anchors 后立即可见（import replace 清空路径）
+        manager.remove_all_anchors().unwrap();
+        assert!(manager.load().unwrap().anchors.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn delete_all_removes_config_dir_and_resets_first_run() {
         let (manager, dir) = setup_config();
         assert!(!manager.is_first_run());
+        // M7：预热缓存后再删除——缓存不得残留删除前的配置
+        assert_eq!(manager.load().unwrap().anchors.len(), 2);
         manager.delete_all().unwrap();
         assert!(manager.is_first_run());
         assert!(!dir.exists());
+        // M7：删除后 load 返回默认配置（缓存已失效，非残留旧值）
+        let loaded = manager.load().unwrap();
+        assert!(loaded.anchors.is_empty());
         // 幂等：再次删除成功
         manager.delete_all().unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── S4a：原子写（临时文件 + fsync + rename）与损坏告警/副本保留 ──
+
+    #[test]
+    fn global_write_is_atomic_with_no_tmp_residue() {
+        let dir = unique_dir("atomic-global");
+        let manager = ConfigManager::new(dir.clone());
+        manager.save_global(&GlobalConfig::default()).unwrap();
+        // 原子写后：无临时文件残留，正式文件完整可解析
+        let tmp_files: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.contains(".tmp."))
+            .collect();
+        assert!(tmp_files.is_empty(), "原子写后不得残留临时文件: {:?}", tmp_files);
+        assert!(
+            toml::from_str::<GlobalConfig>(
+                &std::fs::read_to_string(manager.global_config_path()).unwrap()
+            )
+            .is_ok()
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn anchor_write_is_atomic_with_no_tmp_residue() {
+        let (manager, dir) = setup_config();
+        // 原子写后：anchors/ 内无临时文件残留，主播文件完整可解析
+        let tmp_files: Vec<_> = std::fs::read_dir(manager.anchors_dir())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.contains(".tmp."))
+            .collect();
+        assert!(tmp_files.is_empty(), "原子写后不得残留临时文件: {:?}", tmp_files);
+        let parsed: AnchorConfig = toml::from_str(
+            &std::fs::read_to_string(manager.anchors_dir().join("a1.toml")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(parsed.id, "a1");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn corrupted_global_config_is_preserved_and_recovered() {
+        let dir = unique_dir("corrupt-preserve");
+        let manager = ConfigManager::new(dir.clone());
+        let mut cfg = GlobalConfig::default();
+        cfg.output_dir = "D:/recordings".to_string();
+        manager.save_global(&cfg).unwrap();
+        cfg.output_dir = "E:/recordings".to_string();
+        manager.save_global(&cfg).unwrap(); // 第二次保存 → 备份 = D:/recordings
+        // 损坏当前文件（绕过写入直接覆写垃圾）→ 应记录告警、保留副本并从备份恢复
+        std::fs::write(manager.global_config_path(), "{{{ not valid toml").unwrap();
+        let loaded = manager.load().unwrap();
+        assert_eq!(loaded.global.output_dir, "D:/recordings", "应从最近备份恢复");
+        // 损坏原件保留为 config.toml.corrupt.* 副本供诊断（不再被恢复写回覆盖销毁）
+        let corrupts: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.starts_with("config.toml.corrupt."))
+            .collect();
+        assert_eq!(corrupts.len(), 1, "损坏副本应保留 1 份: {:?}", corrupts);
+        assert!(
+            std::fs::read_to_string(dir.join(&corrupts[0]))
+                .unwrap()
+                .contains("not valid toml"),
+            "副本内容应为损坏原件"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn corrupted_anchor_file_is_preserved_and_skipped() {
+        let (manager, dir) = setup_config();
+        // 损坏一个主播文件（绕过写入直接覆写垃圾）→ 不静默丢弃：跳过 + 保留副本
+        std::fs::write(manager.anchors_dir().join("a1.toml"), "{{{ bad toml").unwrap();
+        let loaded = manager.load().unwrap();
+        assert_eq!(loaded.anchors.len(), 1, "损坏主播应被跳过，其余正常加载");
+        assert_eq!(loaded.anchors[0].id, "a2");
+        let corrupts: Vec<_> = std::fs::read_dir(manager.anchors_dir())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.starts_with("a1.toml.corrupt."))
+            .collect();
+        assert_eq!(corrupts.len(), 1, "损坏副本应保留 1 份: {:?}", corrupts);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── S4b（M2 跟进）：import 写入前全量字段校验（复用 Config::is_valid）──
+
+    #[test]
+    fn import_rejects_invalid_field_values_without_writing() {
+        let (manager, dir) = setup_config();
+        // check_interval_secs < 5：越界数值应被 Config::is_valid 拒绝（replace/merge）
+        let bad_interval = r#"{"global": {"output_dir": "D:/x", "check_interval_secs": 1}}"#;
+        assert!(manager.import_json(bad_interval, "replace").is_err());
+        assert!(manager.import_json(bad_interval, "merge").is_err());
+        // disk_space_limit_gb = 0：同样拒绝
+        let bad_disk = r#"{"global": {"output_dir": "D:/x", "disk_space_limit_gb": 0}}"#;
+        assert!(manager.import_json(bad_disk, "replace").is_err());
+        // 未落盘：原配置保持不变（输出目录、间隔、主播列表均未被污染）
+        let loaded = manager.load().unwrap();
+        assert_eq!(loaded.global.check_interval_secs, 120);
+        assert_eq!(loaded.global.disk_space_limit_gb, 10);
+        assert_eq!(loaded.global.output_dir, "D:/recordings");
+        assert_eq!(loaded.anchors.len(), 2);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

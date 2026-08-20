@@ -1,0 +1,71 @@
+# 权限定义：调试命令（api/debug_cmds.rs）
+
+[[permission]]
+identifier = "allow-run-health-check"
+description = "启用 run_health_check 命令（运行诊断检查并发送通知）"
+commands = { allow = ["run_health_check"], deny = [] }
+
+[[permission]]
+identifier = "allow-get-debug-info"
+description = "启用 get_debug_info 命令（读取调试信息概览）"
+commands = { allow = ["get_debug_info"], deny = [] }
+
+[[permission]]
+identifier = "allow-get-logs"
+description = "启用 get_logs 命令（读取实时日志缓冲）"
+commands = { allow = ["get_logs"], deny = [] }
+
+[[permission]]
+identifier = "allow-clear-logs"
+description = "启用 clear_logs 命令（清空实时日志缓冲）"
+commands = { allow = ["clear_logs"], deny = [] }
+
+[[permission]]
+identifier = "allow-get-network-logs"
+description = "启用 get_network_logs 命令（读取网络请求插桩记录）"
+commands = { allow = ["get_network_logs"], deny = [] }
+
+[[permission]]
+identifier = "allow-clear-network-logs"
+description = "启用 clear_network_logs 命令（清空网络请求插桩记录）"
+commands = { allow = ["clear_network_logs"], deny = [] }
+
+[[permission]]
+identifier = "allow-get-detector-stats"
+description = "启用 get_detector_stats 命令（读取检测循环统计）"
+commands = { allow = ["get_detector_stats"], deny = [] }
+
+[[permission]]
+identifier = "allow-trigger-detection-now"
+description = "启用 trigger_detection_now 命令（立即唤醒触发一轮直播检测）"
+commands = { allow = ["trigger_detection_now"], deny = [] }
+
+[[permission]]
+identifier = "allow-reset-detector-stats"
+description = "启用 reset_detector_stats 命令（重置检测统计计数）"
+commands = { allow = ["reset_detector_stats"], deny = [] }
+
+[[permission]]
+identifier = "allow-get-recorder-state"
+description = "启用 get_recorder_state 命令（读取录制引擎活跃任务与历史）"
+commands = { allow = ["get_recorder_state"], deny = [] }
+
+[[permission]]
+identifier = "allow-get-file-cache-state"
+description = "启用 get_file_cache_state 命令（读取文件缓存状态）"
+commands = { allow = ["get_file_cache_state"], deny = [] }
+
+[[permission]]
+identifier = "allow-clear-file-cache"
+description = "启用 clear_file_cache 命令（清空内存文件缓存索引）"
+commands = { allow = ["clear_file_cache"], deny = [] }
+
+[[permission]]
+identifier = "allow-get-mock-state"
+description = "启用 get_mock_state 命令（读取 Mock 面板状态）"
+commands = { allow = ["get_mock_state"], deny = [] }
+
+[[permission]]
+identifier = "allow-export-diagnostic-report"
+description = "启用 export_diagnostic_report 命令（导出诊断报告 JSON）"
+commands = { allow = ["export_diagnostic_report"], deny = [] }

@@ -1,0 +1,46 @@
+# 权限定义：主播管理命令（api/anchor_cmds.rs）
+#
+# Tauri 2 应用级 ACL：tauri-build 自动收集本目录（permissions/**/*.toml）生成
+# 应用清单（__app-acl__）。清单一旦存在，所有未在窗口 capability 中授予的
+# 命令都会在 IPC 层被拒绝（fail-closed）——本文件把每个命令映射为可授予的
+# `allow-<命令名>` 权限（命令名下划线转连字符），由 capabilities/*.json 按窗口分配。
+
+[[permission]]
+identifier = "allow-get-anchors"
+description = "启用 get_anchors 命令（读取主播列表，含头像网络拉取）"
+commands = { allow = ["get_anchors"], deny = [] }
+
+[[permission]]
+identifier = "allow-add-anchor"
+description = "启用 add_anchor 命令（新增主播并写入配置）"
+commands = { allow = ["add_anchor"], deny = [] }
+
+[[permission]]
+identifier = "allow-get-anchor-profile"
+description = "启用 get_anchor_profile 命令（读取主播公开资料）"
+commands = { allow = ["get_anchor_profile"], deny = [] }
+
+[[permission]]
+identifier = "allow-remove-anchor"
+description = "启用 remove_anchor 命令（删除主播：停止录制 + 清理状态 + 删除配置）"
+commands = { allow = ["remove_anchor"], deny = [] }
+
+[[permission]]
+identifier = "allow-refresh-anchor"
+description = "启用 refresh_anchor 命令（刷新主播信息并写回配置）"
+commands = { allow = ["refresh_anchor"], deny = [] }
+
+[[permission]]
+identifier = "allow-update-anchor"
+description = "启用 update_anchor 命令（更新主播配置，含保存即停语义）"
+commands = { allow = ["update_anchor"], deny = [] }
+
+[[permission]]
+identifier = "allow-stop-anchors-recording"
+description = "启用 stop_anchors_recording 命令（停止指定主播的录制任务）"
+commands = { allow = ["stop_anchors_recording"], deny = [] }
+
+[[permission]]
+identifier = "allow-get-recording-status"
+description = "启用 get_recording_status 命令（读取主播录制/直播状态）"
+commands = { allow = ["get_recording_status"], deny = [] }

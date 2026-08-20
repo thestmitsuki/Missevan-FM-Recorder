@@ -1,0 +1,31 @@
+# 权限定义：录制文件管理命令（api/file_cmds.rs）
+
+[[permission]]
+identifier = "allow-get-recording-files"
+description = "启用 get_recording_files 命令（读取录制文件列表，支持搜索）"
+commands = { allow = ["get_recording_files"], deny = [] }
+
+[[permission]]
+identifier = "allow-refresh-recording-files"
+description = "启用 refresh_recording_files 命令（重新扫描录制文件并刷新缓存）"
+commands = { allow = ["refresh_recording_files"], deny = [] }
+
+[[permission]]
+identifier = "allow-rename-recording-file"
+description = "启用 rename_recording_file 命令（重命名输出目录内的录制文件）"
+commands = { allow = ["rename_recording_file"], deny = [] }
+
+[[permission]]
+identifier = "allow-delete-recording-file"
+description = "启用 delete_recording_file 命令（删除输出目录内的录制文件）"
+commands = { allow = ["delete_recording_file"], deny = [] }
+
+[[permission]]
+identifier = "allow-play-recording-file"
+description = "启用 play_recording_file 命令（将录制文件路径转换为播放 URL）"
+commands = { allow = ["play_recording_file"], deny = [] }
+
+[[permission]]
+identifier = "allow-pick-output-dir"
+description = "启用 pick_output_dir 命令（弹出系统目录选择对话框）"
+commands = { allow = ["pick_output_dir"], deny = [] }
