@@ -3,6 +3,9 @@ name: Build Release
 on:
   workflow_dispatch: # 仅手动触发构建
 
+permissions:
+  contents: write
+
 jobs:
   # ================= Windows: NSIS 安装包 + 单文件绿色版 EXE =================
   build-windows:
