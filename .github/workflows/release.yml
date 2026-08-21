@@ -174,7 +174,7 @@ jobs:
           depends=('webkit2gtk-4.1' 'gtk3' 'libsoup3' 'librsvg' 'libappindicator-gtk3')
           source=()
           package() {
-            cp -r "\$srcdir/usr/." "\$pkgdir/"
+            cp -a "$srcdir/usr" "$pkgdir/"
           }
           EOF
 
@@ -183,6 +183,15 @@ jobs:
           chown -R builder:builder pkgbuild
           cd pkgbuild
           su builder -c "makepkg -f --nodeps --skipinteg"
+
+          # 4) 校验包布局:所有条目必须位于 /usr 下(防 usrmerge 回归)
+          #    .PKGINFO/.MTREE/.BUILDINFO 等元数据以点开头,予以排除
+          bad_paths=$(bsdtar -tf missevan-recorder-*.pkg.tar.zst \
+            | grep -Ev '^(usr/?|\.)' || true)
+          if [ -n "$bad_paths" ]; then
+            echo "::error::PKG 包含非 /usr 顶层条目: $bad_paths"
+            exit 1
+          fi
 
       - name: Upload Arch PKG artifact
         uses: actions/upload-artifact@v4
