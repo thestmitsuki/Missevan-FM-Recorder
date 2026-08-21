@@ -21,6 +21,34 @@ pub(crate) fn path_key(p: &str) -> String {
     p.replace('\\', "/")
 }
 
+/// 路径是否属于活跃录制（含分段段文件）。活跃集合来自
+/// `AppState::active_output_paths`（分段任务登记的是**无扩展名前缀**，非分段
+/// 是完整文件名）：
+/// 1. 精确匹配活跃路径（非分段录制文件）；或
+/// 2. 路径形如 `{活跃分段前缀}_{NNN}.{ext}`（NNN ≥ 3 位，%03d 语义）——
+///    正在写入的段文件 `{前缀}_000.m4a` 等据此识别，杜绝删除/重命名/自动清理
+///    误伤正在录制的段文件（Linux 上删除后 ffmpeg 继续写已删除 inode，段丢失）。
+/// 误判方向保守：宁可不删/不可删，也不允许误删活跃段。
+pub(crate) fn is_active_path(path: &str, active_paths: &std::collections::HashSet<String>) -> bool {
+    let key = path_key(path);
+    if active_paths.contains(&key) {
+        return true;
+    }
+    active_paths.iter().any(|prefix| {
+        let Some(rest) = key.strip_prefix(prefix.as_str()) else {
+            return false;
+        };
+        let Some(digits) = rest.strip_prefix('_') else {
+            return false;
+        };
+        let Some(dot) = digits.find('.') else {
+            return false;
+        };
+        let (num, tail) = digits.split_at(dot);
+        num.len() >= 3 && num.chars().all(|c| c.is_ascii_digit()) && tail.starts_with('.')
+    })
+}
+
 // 文件信息结构
 #[derive(Debug, Clone, Serialize)]
 pub struct RecordingFile {
@@ -173,10 +201,11 @@ impl FileCache {
     }
 }
 
-/// 按活跃录制输出路径集合标记 `is_active`（路径经 path_key 归一化后比较）。
+/// 按活跃录制输出路径集合标记 `is_active`（路径经 path_key 归一化后比较；
+/// 分段段文件经 is_active_path 前缀匹配识别）。
 pub(crate) fn mark_active(files: &mut [RecordingFile], active_paths: &HashSet<String>) {
     for f in files {
-        f.is_active = active_paths.contains(&path_key(&f.path));
+        f.is_active = is_active_path(&f.path, active_paths);
     }
 }
 
@@ -445,6 +474,48 @@ mod tests {
         }
         assert_eq!(cache.scan_log.len(), SCAN_LOG_LIMIT);
         assert_eq!(cache.state().scan_log.len(), SCAN_LOG_LIMIT);
+    }
+
+    #[test]
+    fn is_active_path_exact_and_segment_matching() {
+        use std::collections::HashSet;
+        let active: HashSet<String> = [
+            // 分段任务登记的是无扩展名前缀
+            "/out/主播A/2026-08-21_18-00-00_主播A".to_string(),
+            // 非分段任务是完整文件名
+            "/out/主播B/b.m4a".to_string(),
+        ]
+        .into();
+        // 精确匹配（非分段）
+        assert!(is_active_path("/out/主播B/b.m4a", &active));
+        assert!(!is_active_path("/out/主播B/c.m4a", &active));
+        // 分段段文件（前缀 + _NNN.ext，NNN ≥ 3 位）
+        assert!(is_active_path(
+            "/out/主播A/2026-08-21_18-00-00_主播A_000.m4a",
+            &active
+        ));
+        assert!(is_active_path(
+            "/out/主播A/2026-08-21_18-00-00_主播A_012.m4a",
+            &active
+        ));
+        // 非段文件不误判
+        assert!(!is_active_path(
+            "/out/主播A/2026-08-21_18-00-00_主播A_1.m4a",
+            &active
+        )); // 1 位数字不是 %03d 形态
+        assert!(!is_active_path(
+            "/out/主播A/2026-08-21_18-00-00_主播A_abc.m4a",
+            &active
+        ));
+        assert!(!is_active_path(
+            "/out/主播A/2026-08-21_18-00-00_主播A.m4a",
+            &active
+        )); // 无 _NNN 段号
+        // 目录分隔符归一化（Windows `\`）
+        assert!(is_active_path(
+            r"\out\主播A\2026-08-21_18-00-00_主播A_000.m4a",
+            &active
+        ));
     }
 
     #[test]

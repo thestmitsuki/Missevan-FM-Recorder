@@ -77,7 +77,11 @@ impl FfmpegCommandBuilder {
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::piped());
 
-        cmd.arg("-y"); // 覆盖已有文件
+        // 不覆盖已存在文件（`-n` = never overwrite）：重名时 ffmpeg 直接报错
+        // 退出（stderr 见日志），绝不静默覆盖旧录制；退出由 monitor 按崩溃路径
+        // 收尾，检测循环自动重启（重启前 dedup/分段前缀去重已换名）。
+        // 替代原 `-y`（覆盖）——覆盖在「跨主播同秒同名 / 残留竞态」下会静默丢数据。
+        cmd.arg("-n");
 
         // 流媒体读超时（stream_timeout_secs → `-rw_timeout` 微秒）：HTTP/flv/m3u8
         // 拉流下网络中断超过该时长，ffmpeg 报错退出（monitor 统一收尾），
@@ -351,5 +355,21 @@ mod tests {
             .collect();
         assert!(args.contains(&"-q:a".to_string()));
         assert!(args.contains(&"2".to_string()));
+    }
+
+    #[test]
+    fn build_uses_never_overwrite_not_yes() {
+        // 风险修复：-y（静默覆盖）→ -n（不覆盖，重名报错退出，绝不丢旧数据）
+        let args: Vec<String> = FfmpegCommandBuilder::new()
+            .input_url("http://x")
+            .output_path("out.m4a")
+            .format("m4a")
+            .build()
+            .as_std()
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert!(args.contains(&"-n".to_string()), "必须传 -n（不覆盖），实际: {:?}", args);
+        assert!(!args.contains(&"-y".to_string()), "-y（覆盖）必须移除，实际: {:?}", args);
     }
 }

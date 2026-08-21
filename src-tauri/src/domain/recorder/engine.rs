@@ -46,11 +46,30 @@ pub enum ChildProbe {
     Exited(std::process::ExitStatus),
 }
 
-/// 异常退出判定（纯逻辑，便于单测；B1）：仅当「子进程已退出」且「取消令牌未
-/// 触发」判定为异常退出——停止流程正在终止子进程时（cancel 已触发）子进程退出
-/// 属正常停止，不得误判为崩溃。
+/// 异常退出判定（纯逻辑，便于单测；B1）：仅当「子进程已退出且退出码非 0」且
+/// 「取消令牌未触发」判定为异常退出——
+/// - 退出码 0（`ExitStatus::success()`）：ffmpeg 读到流 EOF 正常结束直播（主播
+///   下播），**不得**误判为崩溃（原实现忽略退出码，正常下播被误判 REC_CRASH：
+///   完整录音被改名 `.part` 并在下次启动被清理删除、崩溃熔断计数累积）。
+///   正常结束由 monitor 下一 tick 的 API 直播判定（REC_ENDED）收尾；
+/// - 信号终止（`code()` 为 None）：`success()` 为 false → 异常；
+/// - 停止流程正在终止子进程时（cancel 已触发）子进程退出属正常停止，不得
+///   误判为崩溃。
 pub fn is_abnormal_exit(probe: ChildProbe, cancel_requested: bool) -> bool {
-    matches!(probe, ChildProbe::Exited(_)) && !cancel_requested
+    matches!(probe, ChildProbe::Exited(s) if !s.success()) && !cancel_requested
+}
+
+/// 正常结束判定（与 [`is_abnormal_exit`] 互补；B1 补充）：子进程以成功码退出
+/// （exit 0——ffmpeg 读到流 EOF，主播下播或流断开）且非用户取消 → 视为正常
+/// 结束，monitor 按正常收尾（保留完整文件、移除录制标记、触发录制后动作），
+/// 由检测循环下一轮按主播直播状态决定是否自动重启录制。
+///
+/// 边界修复背景：exit 0 不再误判崩溃（见 `is_abnormal_exit`）后，若 monitor
+/// 在进程正常退出时继续空转（进程已死、任务仍挂起），将失去旧逻辑意外提供
+/// 的「流断即崩溃重启」自动重连能力——此处主动结束本轮录制，主播仍在播则
+/// 检测循环自动恢复，已下播则不重启。
+pub fn is_clean_exit(probe: ChildProbe, cancel_requested: bool) -> bool {
+    matches!(probe, ChildProbe::Exited(s) if s.success()) && !cancel_requested
 }
 
 /// 停止流程动作（B2 超时决策）
@@ -141,6 +160,16 @@ pub async fn start_ffmpeg_recording(
     );
     let output_path =
         build_recording_output_path(output_dir, &rendered, ext, config.segment_seconds);
+    // 分段模式残留段文件可达性测试（`-n` 不覆盖模式配套）：输出目录已存在
+    // `{前缀}_NNN.{ext}` 残留段文件（上次异常退出/强杀残留未被启动清理移除）时
+    // 前缀去重（`_2`/`_3`…），避免 ffmpeg `-n` 模式下因首段文件已存在而拒绝
+    // 启动。非分段模式已有 deduplicate_output_path 兜底（build 内），此处补齐
+    // 分段缺口。非分段不重复处理。
+    let output_path = if config.segment_seconds > 0 {
+        deduplicate_segment_prefix(&output_path, ext)
+    } else {
+        output_path
+    };
     if let Some(parent) = std::path::Path::new(&output_path).parent() {
         std::fs::create_dir_all(parent).map_err(|e| {
             AppError::system(
@@ -769,6 +798,62 @@ fn deduplicate_output_path(path: &str) -> String {
         }
     }
     path.to_string()
+}
+
+/// 分段模式残留段文件可达性测试 + 前缀去重（`-n` 不覆盖模式配套）：
+/// 输出目录已存在 `{prefix}_{NNN}.{ext}`（NNN ≥ 3 位，%03d 语义）形态的残留
+/// 段文件时，在扩展名前追加 `_2`/`_3`…（最多 100 次，之后放弃追加原样返回）。
+/// 非分段模式由 `deduplicate_output_path` 兜底；分段模式此前不做存在性检查
+/// （依赖 ffmpeg `%03d` 序号 + `-y` 覆盖），改用 `-n` 后此处成为分段模式
+/// 的唯一重名防线，防 ffmpeg 因首段文件已存在而拒绝启动。
+fn deduplicate_segment_prefix(output_path: &str, ext: &str) -> String {
+    if !segment_residue_exists(output_path, ext) {
+        return output_path.to_string();
+    }
+    for n in 2..=100u32 {
+        let candidate = format!("{}_{}", output_path, n);
+        if !segment_residue_exists(&candidate, ext) {
+            return candidate;
+        }
+    }
+    output_path.to_string()
+}
+
+/// 输出目录中是否存在 `{prefix}_{NNN}.{ext}` 形态的残留段文件（NNN ≥ 3 位数字）。
+fn segment_residue_exists(prefix: &str, ext: &str) -> bool {
+    let path = std::path::Path::new(prefix);
+    let Some(base) = path.file_name().and_then(|n| n.to_str()) else {
+        return false;
+    };
+    let parent = match path.parent() {
+        Some(p) if !p.as_os_str().is_empty() => p.to_path_buf(),
+        _ => std::path::PathBuf::from("."),
+    };
+    let Ok(entries) = std::fs::read_dir(&parent) else {
+        return false;
+    };
+    for entry in entries.flatten() {
+        let Some(name) = entry.file_name().to_str().map(|s| s.to_string()) else {
+            continue;
+        };
+        let Some(rest) = name.strip_prefix(base) else {
+            continue;
+        };
+        let Some(digits) = rest.strip_prefix('_') else {
+            continue;
+        };
+        let Some(dot) = digits.find('.') else {
+            continue;
+        };
+        let (num, tail) = digits.split_at(dot);
+        if num.len() >= 3
+            && num.chars().all(|c| c.is_ascii_digit())
+            && tail == format!(".{}", ext)
+        {
+            return true;
+        }
+    }
+    false
 }
 
 /// 构造录制输出路径（纯函数，便于单测）：`{output_dir}/{模板渲染结果}`。
@@ -1558,6 +1643,44 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    // ── 分段前缀去重（-n 不覆盖模式配套：残留段文件 → 前缀换名）──
+
+    #[test]
+    fn segment_prefix_dedups_when_residue_segments_exist() {
+        let dir = unique_dir("segres");
+        std::fs::create_dir_all(&dir).unwrap();
+        let prefix = dir.join("主播A_20260821_183000").to_string_lossy().into_owned();
+        // 残留段文件 _000.m4a / _001.m4a（上次异常退出残留）
+        std::fs::write(dir.join("主播A_20260821_183000_000.m4a"), b"x").unwrap();
+        std::fs::write(dir.join("主播A_20260821_183000_001.m4a"), b"x").unwrap();
+        assert_eq!(
+            deduplicate_segment_prefix(&prefix, "m4a"),
+            dir.join("主播A_20260821_183000_2").to_string_lossy().into_owned(),
+            "有残留段 → 前缀追加 _2"
+        );
+        // _2 前缀也有残留 → _3
+        std::fs::write(dir.join("主播A_20260821_183000_2_000.m4a"), b"x").unwrap();
+        assert_eq!(
+            deduplicate_segment_prefix(&prefix, "m4a"),
+            dir.join("主播A_20260821_183000_3").to_string_lossy().into_owned()
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn segment_prefix_unchanged_when_no_residue() {
+        let dir = unique_dir("segfree");
+        std::fs::create_dir_all(&dir).unwrap();
+        let prefix = dir.join("clean_20260821").to_string_lossy().into_owned();
+        assert_eq!(deduplicate_segment_prefix(&prefix, "m4a"), prefix, "无残留 → 原样返回");
+        // 非段形态文件不影响（_1 一位数字、_abc、.part 等）
+        std::fs::write(dir.join("clean_20260821_1.m4a"), b"x").unwrap();
+        std::fs::write(dir.join("clean_20260821_abc.m4a"), b"x").unwrap();
+        std::fs::write(dir.join("clean_20260821_000.m4a.part"), b"x").unwrap();
+        assert_eq!(deduplicate_segment_prefix(&prefix, "m4a"), prefix, "非段形态不触发去重");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     // ── 输出路径构造（模板渲染结果 → 录制输出路径；音频文件名按模板渲染）──
 
     #[test]
@@ -1643,7 +1766,7 @@ mod tests {
     // ── B1：进程存活探测 / 异常退出判定 ──
 
     /// 获取一个真实「已退出」状态的 ExitStatus（ExitStatus 无公开构造器，用
-    /// 真实子进程收割获得；仅作为纯逻辑判定的状态载体）
+    /// 真实子进程收割获得；仅作为纯逻辑判定的状态载体）。exit 0 = 正常结束。
     fn exited_status() -> std::process::ExitStatus {
         #[cfg(windows)]
         let status = std::process::Command::new("cmd")
@@ -1657,19 +1780,62 @@ mod tests {
         status
     }
 
+    /// 获取一个真实「失败退出」状态（exit 1；模拟 ffmpeg 网络中断/磁盘满/
+    /// `-n` 重名等崩溃场景的退出码）
+    fn failed_status() -> std::process::ExitStatus {
+        #[cfg(windows)]
+        let status = std::process::Command::new("cmd")
+            .args(["/c", "exit 1"])
+            .status()
+            .expect("获取退出状态失败");
+        #[cfg(not(windows))]
+        let status = std::process::Command::new("sh")
+            .args(["-c", "exit 1"])
+            .status()
+            .expect("获取退出状态失败");
+        status
+    }
+
     #[test]
-    fn abnormal_exit_requires_exited_and_no_cancel() {
-        let exited = ChildProbe::Exited(exited_status());
+    fn abnormal_exit_requires_failure_status_and_no_cancel() {
+        // 退出码 0（ffmpeg 读到流 EOF 正常结束直播）→ 不得误判为崩溃
+        let exited_ok = ChildProbe::Exited(exited_status());
         assert!(
-            is_abnormal_exit(exited, false),
-            "已退出且取消未触发 → 异常退出"
+            !is_abnormal_exit(exited_ok, false),
+            "exit 0（正常 EOF 结束）不得误判为崩溃（否则完整录音被改名 .part）"
+        );
+        assert!(!is_abnormal_exit(exited_ok, true), "取消已触发 → 正常停止");
+        // 非 0 退出码（网络中断/磁盘满/-n 重名）且取消未触发 → 异常崩溃
+        let exited_fail = ChildProbe::Exited(failed_status());
+        assert!(
+            is_abnormal_exit(exited_fail, false),
+            "exit 非 0 → 异常退出"
         );
         assert!(
-            !is_abnormal_exit(exited, true),
+            !is_abnormal_exit(exited_fail, true),
             "已退出但取消已触发（停止流程正在终止）→ 正常停止，不得误判崩溃"
         );
         assert!(!is_abnormal_exit(ChildProbe::Running, false));
         assert!(!is_abnormal_exit(ChildProbe::Unknown, false));
+    }
+
+    #[test]
+    fn clean_exit_requires_success_status_and_no_cancel() {
+        // exit 0（ffmpeg 读到流 EOF 正常结束）且未取消 → 正常结束收尾
+        let exited_ok = ChildProbe::Exited(exited_status());
+        assert!(is_clean_exit(exited_ok, false), "exit 0 → 正常结束");
+        assert!(
+            !is_clean_exit(exited_ok, true),
+            "取消已触发 → 由停止流程处理，不得重复收尾"
+        );
+        // 非 0 退出 / 信号 / 运行中 → 非正常结束（走崩溃或继续循环）
+        let exited_fail = ChildProbe::Exited(failed_status());
+        assert!(!is_clean_exit(exited_fail, false), "exit 非 0 → 崩溃路径");
+        assert!(!is_clean_exit(ChildProbe::Running, false));
+        assert!(!is_clean_exit(ChildProbe::Unknown, false));
+        // 与 is_abnormal_exit 互补：exit 0 非异常，exit 非 0 非正常
+        assert!(!is_abnormal_exit(exited_ok, false));
+        assert!(!is_clean_exit(exited_fail, false));
     }
 
     #[test]

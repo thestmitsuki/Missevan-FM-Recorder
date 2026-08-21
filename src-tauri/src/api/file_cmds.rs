@@ -4,7 +4,7 @@ use tauri_plugin_dialog::DialogExt;
 
 use crate::domain::config::manager::ConfigManager;
 use crate::domain::services::file_cache::{
-    build_folder_tree, mark_active, path_key, FileCacheHandle, FileCacheManager, RecordingFile,
+    build_folder_tree, mark_active, FileCacheHandle, FileCacheManager, RecordingFile,
 };
 use crate::infrastructure::error::types::AppError;
 use crate::infrastructure::state::app_state::RecorderState;
@@ -72,14 +72,12 @@ pub async fn rename_recording_file(
     recorder_state: State<'_, RecorderState>,
 ) -> Result<(), AppError> {
     // 录制中文件禁止重命名（FFmpeg 正在写入：Windows 共享冲突 + 数据损坏风险）
-    if recorder_state
-        .state
-        .lock()
-        .await
-        .active_output_paths()
-        .contains(&path_key(&old_path))
+    // 含分段段文件（is_active_path 前缀匹配 `{前缀}_NNN.{ext}`）
     {
-        return Err(AppError::config("录制中的文件不能重命名"));
+        let active = recorder_state.state.lock().await.active_output_paths();
+        if crate::domain::services::file_cache::is_active_path(&old_path, &active) {
+            return Err(AppError::config("录制中的文件不能重命名"));
+        }
     }
     // H4：路径必须位于输出目录内（canonicalize 前缀匹配）；new_name 服务端消毒
     let config = config_manager.load()?;
@@ -93,6 +91,16 @@ pub async fn rename_recording_file(
         .ok_or_else(|| AppError::config("无法获取文件所在目录"))?;
     validate_new_name(&new_name)?;
     let new_path = parent.join(format!("{}.{}", new_name.trim(), ext));
+    // 目标重名检查（风险 1 修复）：std::fs::rename 在 Windows 上经
+    // MoveFileExW + MOVEFILE_REPLACE_EXISTING 会**静默覆盖**已存在目标——
+    // 旧录音将永久丢失（与 ffmpeg `-y` 覆盖同类风险）。改名目标已存在时
+    // 明确拒绝，由用户换名，绝不覆盖。
+    if new_path.exists() {
+        return Err(AppError::config(format!(
+            "同名文件已存在: {}（拒绝覆盖，请换一个名字）",
+            new_path.display()
+        )));
+    }
     std::fs::rename(&old, &new_path)?;
 
     // 重命名后刷新缓存
@@ -109,14 +117,12 @@ pub async fn delete_recording_file(
     recorder_state: State<'_, RecorderState>,
 ) -> Result<(), AppError> {
     // 录制中文件禁止删除（FFmpeg 正在写入，删除会导致录制损坏/数据丢失）
-    if recorder_state
-        .state
-        .lock()
-        .await
-        .active_output_paths()
-        .contains(&path_key(&path))
+    // 含分段段文件（is_active_path 前缀匹配 `{前缀}_NNN.{ext}`）
     {
-        return Err(AppError::config("录制中的文件不能删除"));
+        let active = recorder_state.state.lock().await.active_output_paths();
+        if crate::domain::services::file_cache::is_active_path(&path, &active) {
+            return Err(AppError::config("录制中的文件不能删除"));
+        }
     }
     // H4：路径必须位于输出目录内（canonicalize 前缀匹配）——杜绝任意文件删除
     let config = config_manager.load()?;

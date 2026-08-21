@@ -9,7 +9,8 @@ use crate::domain::recorder::disk::{
     check_disk_space, DiskSpaceStatus, CRASH_BACKOFF_THRESHOLD,
 };
 use crate::domain::recorder::engine::{
-    is_abnormal_exit, mark_crash_partials, ChildProbe, FfmpegRecorder, RecorderEngine,
+    is_abnormal_exit, is_clean_exit, mark_crash_partials, ChildProbe, FfmpegRecorder,
+    RecorderEngine,
 };
 use crate::domain::services::cleanup::cleanup_on_recording_end;
 use crate::domain::services::file_cache::{FileCacheHandle, FileCacheManager};
@@ -146,6 +147,25 @@ pub async fn monitor_recording(
                     } else {
                         mark_crash_partials(&output_path, false, &config.record_format);
                     }
+                    break;
+                }
+
+                // B1 补充：ffmpeg 以成功码退出（exit 0——流 EOF，主播下播或流
+                // 断开）且非用户取消 → 按正常结束收尾（abnormal_exit=false：
+                // 保留完整文件、移除录制标记、触发录制后动作）。检测循环下一轮
+                // 按主播直播状态决定是否自动重启——主播仍在播则自动恢复录制，
+                // 已下播则不重启。
+                // 边界修复：exit 0 不再误判崩溃（is_abnormal_exit 修复）后，若
+                // 此处不主动结束，进程已死而任务仍挂起，将空转到 API 判定下播/
+                // 手动停止/24h 超时，失去旧逻辑意外提供的「流断即重启」重连能力。
+                if is_clean_exit(probe, cancel_token.is_cancelled()) {
+                    notifier
+                        .info(
+                            "REC_ENDED",
+                            format!("录制结束: {}", anchor_name),
+                            "FFmpeg 正常结束（流 EOF），录音已保存".to_string(),
+                        )
+                        .await;
                     break;
                 }
 

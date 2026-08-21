@@ -121,14 +121,16 @@ pub async fn run_cleanup(
             .with_technical(e.to_string())
         })?;
         // 清理候选 = 扫描产物中非活跃录制、且修改时间可读的文件
+        // （is_active_path：非分段精确匹配 + 分段段文件 `{前缀}_NNN.{ext}` 前缀匹配）
         let candidates: Vec<CleanupCandidate> = scan
             .files
             .iter()
             .zip(scan.modified.iter())
             .filter(|(f, _)| {
-                !active_paths_for_scan.contains(&crate::domain::services::file_cache::path_key(
+                !crate::domain::services::file_cache::is_active_path(
                     &f.path,
-                ))
+                    &active_paths_for_scan,
+                )
             })
             .filter_map(|(f, m)| {
                 m.as_ref().map(|modified| CleanupCandidate {
