@@ -9,7 +9,7 @@ import { onMounted, onUnmounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import type { UnlistenFn } from "@tauri-apps/api/event";
-import { Check } from "@lucide/vue";
+import { Check, X } from "@lucide/vue";
 
 import { api } from "@/services/api";
 import { isWizardWindow } from "@/services/window";
@@ -38,6 +38,18 @@ const { t } = useI18n();
 const configStore = useConfigStore();
 const themeStore = useThemeStore();
 const wizardStore = useWizardStore();
+
+/** Linux（WebKitGTK UA 含 "Linux"）：无边框窗口需自绘拖拽条与关闭按钮 */
+const isLinux = navigator.userAgent.includes("Linux");
+
+/** 关闭请求：走 onCloseRequested 守卫（M4 确认对话框），与非 Linux 系统标题栏关闭一致 */
+function requestClose() {
+    try {
+        void getCurrentWebviewWindow().close();
+    } catch {
+        /* 非 Tauri 环境（浏览器调试）忽略 */
+    }
+}
 
 // ── 步骤状态 ──
 const currentStep = ref(1);
@@ -104,6 +116,24 @@ onUnmounted(() => {
     <div
         class="flex h-screen flex-col overflow-hidden bg-background text-foreground"
     >
+        <!-- ── Linux 无边框拖拽条（Arch 包无顶部操作栏；仅 Linux 渲染，
+             关闭按钮触发 onCloseRequested 确认守卫）── -->
+        <div
+            v-if="isLinux"
+            class="flex h-8 shrink-0 items-center justify-between bg-background/95 px-3 text-xs text-muted-foreground"
+            data-tauri-drag-region
+        >
+            <span class="select-none">Missevan Recorder</span>
+            <button
+                type="button"
+                class="grid size-6 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                aria-label="关闭"
+                @mousedown.stop
+                @click="requestClose"
+            >
+                <X class="size-4" />
+            </button>
+        </div>
         <!-- ── 顶部步骤条：已完成绿勾 / 当前蓝点 / 未完成灰点 + 第 X/4 步 ── -->
         <header class="shrink-0 border-b-0 bg-background/95 px-6 pt-4 pb-3">
             <div class="mb-2 text-right text-xs text-muted-foreground">

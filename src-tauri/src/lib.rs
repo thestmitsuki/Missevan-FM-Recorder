@@ -336,6 +336,20 @@ pub fn run() {
             let window = handle.get_webview_window("main").expect("未找到主窗口");
             let window_for_recording = window.clone();
 
+            // Arch/Linux：无系统标题栏（无顶部操作栏）——前端 TopBar / 向导拖拽条
+            // 提供 data-tauri-drag-region 拖拽区域与窗口控制按钮。仅 Linux 生效，
+            // Windows/macOS 保留系统标题栏（与现有外观一致）。
+            #[cfg(target_os = "linux")]
+            {
+                for label in ["main", "wizard"] {
+                    if let Some(w) = app.get_webview_window(label) {
+                        if let Err(e) = w.set_decorations(false) {
+                            tracing::warn!("设置无边框窗口失败 ({}): {}", label, e);
+                        }
+                    }
+                }
+            }
+
             {
                 let state: tauri::State<'_, RecorderState> = app.state();
                 state.set_app_handle(handle.clone());
