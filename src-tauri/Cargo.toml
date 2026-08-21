@@ -1,6 +1,6 @@
 [package]
 name = "app"
-version = "0.2.0"
+version = "0.2.1"
 description = "missevan-recorder — Tauri 2 desktop app"
 authors = ["thestmitsuki"]
 license = "MIT"
@@ -53,6 +53,9 @@ dirs = "6"
 toml = "0.8"
 # base64 0.22（rust-version 1.60 ≤ MSRV 1.89.0；已在锁文件——Task 18 敏感字段混淆）
 base64 = "0.22"
+# sha2 0.10（rust-version 1.56 ≤ MSRV 1.89.0）：引导页 FFmpeg zip SHA256 完整性校验
+#（占位启用：期望哈希待定，见 wizard_cmds::FFMPEG_ZIP_SHA256）
+sha2 = "0.10"
 url = "2"
 # socks feature：全局代理 socks5 支持（spider::proxy_from_config 用 Proxy::all("socks5://…")）
 reqwest = { version = "0.12", features = ["json", "stream", "socks"] }

@@ -33,48 +33,64 @@ pub struct UpdateInfo {
     pub latest: String,
     /// 当前版本（CARGO_PKG_VERSION）
     pub current: String,
-    /// 下载链接：优先匹配 .exe/.msi/.zip 资产 → 首个资产 → 发布页 html_url
+    /// 下载链接：按平台关键词匹配资产（win / appimage / arch）；无匹配资产时
+    /// 回退发布页 html_url（用户自行选择，绝不下载错误平台的包）
     pub download_url: Option<String>,
 }
 
-/// 下载资产平台匹配（P1-9：按平台优先匹配安装包后缀，大小写不敏感）。
+/// 下载资产平台匹配（P1-9：按平台关键词匹配发布资产名，大小写不敏感）。
+///
+/// 发布资产命名约定：Windows 包名含 `win`（如 `missevan-recorder_1.2.0_win_x64.exe`）、
+/// AppImage 包名含 `appimage`（如 `..._linux.AppImage`）、Arch 包名含 `arch`
+/// （如 `..._arch_x86_64.pkg.tar.zst`）。按关键词而非后缀匹配，避免资产后缀
+/// 变化（如 `.exe` 改 `.msi`）导致匹配失败后错误回退到首个资产。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AssetPlatform {
-    /// Windows：优先 `.exe/.msi/.zip`（默认行为，与旧版一致）
+    /// Windows：包名含 `win`
     Windows,
-    /// Linux：优先 `.deb/.AppImage/.rpm/.tar.gz/.zst/.pkg.tar.zst`
-    Linux,
+    /// Linux（AppImage）：包名含 `appimage`
+    AppImage,
+    /// Linux（Arch 系发行版）：包名含 `arch`
+    Arch,
 }
 
 impl AssetPlatform {
-    /// 当前运行平台（编译期确定；macOS 暂按 Windows 匹配规则——资产通常同时
-    /// 发布，兜底行为一致）
+    /// 当前运行平台：Windows → `Windows`；Linux 按发行版区分 Arch（读
+    /// `/etc/os-release`，覆盖 Arch / Manjaro / EndeavourOS 等 Arch 系）与
+    /// AppImage（其余发行版）；macOS 暂按 Windows 规则兜底（资产通常同时发布）。
     pub fn current() -> Self {
-        if cfg!(target_os = "linux") {
-            AssetPlatform::Linux
+        if cfg!(target_os = "windows") {
+            AssetPlatform::Windows
+        } else if cfg!(target_os = "linux") && is_arch_linux() {
+            AssetPlatform::Arch
+        } else if cfg!(target_os = "linux") {
+            AssetPlatform::AppImage
         } else {
             AssetPlatform::Windows
         }
     }
 
-    /// 资产 URL（已小写）是否匹配本平台的安装包后缀
+    /// 资产 URL（已小写）是否含本平台关键词
     fn matches(self, lower_url: &str) -> bool {
         match self {
-            AssetPlatform::Windows => {
-                lower_url.ends_with(".exe")
-                    || lower_url.ends_with(".msi")
-                    || lower_url.ends_with(".zip")
-            }
-            AssetPlatform::Linux => {
-                lower_url.ends_with(".deb")
-                    || lower_url.ends_with(".appimage")
-                    || lower_url.ends_with(".rpm")
-                    || lower_url.ends_with(".tar.gz")
-                    || lower_url.ends_with(".zst")
-                    || lower_url.ends_with(".pkg.tar.zst")
-            }
+            AssetPlatform::Windows => lower_url.contains("win"),
+            AssetPlatform::AppImage => lower_url.contains("appimage"),
+            AssetPlatform::Arch => lower_url.contains("arch"),
         }
     }
+}
+
+/// Linux 发行版检测：`/etc/os-release` 的 `ID=arch` 或 `ID_LIKE` 含 `arch`。
+/// 仅 Linux 上调用（Windows/macOS 分支不读取该文件）。
+fn is_arch_linux() -> bool {
+    std::fs::read_to_string("/etc/os-release")
+        .map(|content| {
+            content.lines().any(|line| {
+                line.starts_with("ID=arch")
+                    || (line.starts_with("ID_LIKE=") && line.contains("arch"))
+            })
+        })
+        .unwrap_or(false)
 }
 
 /// 从 GitHub `releases/latest` 响应体解析更新信息（纯函数，单测覆盖）。
@@ -84,9 +100,9 @@ impl AssetPlatform {
 /// - **tag 必须是语义化版本**（至少 `数字.数字.数字`，可带 `-预发布` 后缀）——
 ///   误把分支名（如 "main"）当作 tag 发布时，非版本 tag 返回 `None`
 ///   （check_update 报「检查更新失败」而非把 "main" 当版本展示）；
-/// - 下载链接优先级：`assets[]` 中 `browser_download_url` 匹配 `platform`
-///   后缀规则的首个资产 → `assets[0]` 的 `browser_download_url` → `html_url`
-///   （发布页兜底）。
+/// - 下载链接优先级：`assets[]` 中 `browser_download_url` 含 `platform`
+///   关键词（win / appimage / arch）的首个资产 → `html_url`（发布页兜底）。
+///   无匹配资产时**不**回退首个资产——避免下载到错误平台的包。
 pub fn parse_release(
     json: &serde_json::Value,
     current: &str,
@@ -113,7 +129,6 @@ pub fn parse_release(
             urls.iter()
                 .copied()
                 .find(|u| platform.matches(&u.to_lowercase()))
-                .or_else(|| urls.first().copied())
         })
         .map(|s| s.to_string())
         .or_else(|| json.get("html_url").and_then(|h| h.as_str()).map(|s| s.to_string()));
@@ -297,22 +312,22 @@ mod tests {
             "tag_name": tag,
             "html_url": "https://github.com/thestmitsuki/Missevan-FM-Recorder/releases/tag/v1.2.0",
             "assets": [
-                { "name": "setup.exe", "browser_download_url": "https://github.com/.../setup.exe" },
-                { "name": "app.zip", "browser_download_url": "https://github.com/.../app.zip" },
+                { "name": "missevan-recorder_1.2.0_win_x64.exe", "browser_download_url": "https://github.com/.../missevan-recorder_1.2.0_win_x64.exe" },
+                { "name": "missevan-recorder_1.2.0_win_x64_portable.exe", "browser_download_url": "https://github.com/.../missevan-recorder_1.2.0_win_x64_portable.exe" },
                 { "name": "notes.md", "browser_download_url": "https://github.com/.../notes.md" }
             ]
         })
     }
 
     #[test]
-    fn parse_release_strips_v_prefix_and_prefers_exe_asset() {
+    fn parse_release_strips_v_prefix_and_prefers_win_asset() {
         let info = parse_release(&release_json("v1.2.0"), "0.1.0", AssetPlatform::Windows).unwrap();
         assert_eq!(info.latest, "1.2.0");
         assert_eq!(info.current, "0.1.0");
-        // Windows 优先级：.exe/.msi/.zip 资产（.zip 在 .exe 之后，首个匹配 .exe）
+        // Windows 关键词 `win`：两个 win 资产中取首个
         assert_eq!(
             info.download_url.as_deref(),
-            Some("https://github.com/.../setup.exe")
+            Some("https://github.com/.../missevan-recorder_1.2.0_win_x64.exe")
         );
     }
 
@@ -355,81 +370,65 @@ mod tests {
         assert_eq!(info.latest, "1.2.0-beta.1");
     }
 
-    /// Linux 平台：跳过 Windows 资产（.exe），按 assets 顺序首个匹配
-    /// `.deb/.AppImage/.rpm/.tar.gz/.zst` 的资产（大小写不敏感）
+    /// AppImage 平台：跳过 win / arch 资产，按关键词 `appimage` 匹配
     #[test]
-    fn parse_release_linux_prefers_linux_assets() {
+    fn parse_release_appimage_matches_by_keyword() {
         let json = json!({
             "tag_name": "v1.2.0",
             "html_url": "https://github.com/owner/repo/releases/tag/v1.2.0",
             "assets": [
-                { "name": "app-setup.exe", "browser_download_url": "https://github.com/.../app-setup.exe" },
-                { "name": "app.AppImage", "browser_download_url": "https://github.com/.../app.AppImage" },
-                { "name": "app_1.2.0_amd64.deb", "browser_download_url": "https://github.com/.../app.deb" },
+                { "name": "missevan-recorder_1.2.0_win_x64.exe", "browser_download_url": "https://github.com/.../missevan-recorder_1.2.0_win_x64.exe" },
+                { "name": "missevan-recorder_1.2.0_linux.AppImage", "browser_download_url": "https://github.com/.../missevan-recorder_1.2.0_linux.AppImage" },
+                { "name": "missevan-recorder_1.2.0_arch_x86_64.pkg.tar.zst", "browser_download_url": "https://github.com/.../missevan-recorder_1.2.0_arch_x86_64.pkg.tar.zst" },
                 { "name": "notes.md", "browser_download_url": "https://github.com/.../notes.md" }
             ]
         });
-        // .exe 不匹配 Linux 规则；列表首个匹配是 .AppImage
-        let info = parse_release(&json, "0.1.0", AssetPlatform::Linux).unwrap();
+        let info = parse_release(&json, "0.1.0", AssetPlatform::AppImage).unwrap();
         assert_eq!(
             info.download_url.as_deref(),
-            Some("https://github.com/.../app.AppImage")
+            Some("https://github.com/.../missevan-recorder_1.2.0_linux.AppImage")
         );
     }
 
-    /// Linux 后缀匹配大小写不敏感（.DEB 大写扩展名也命中）
+    /// Arch 平台：按关键词 `arch` 匹配 pkg.tar.zst 资产
     #[test]
-    fn parse_release_linux_suffix_match_is_case_insensitive() {
+    fn parse_release_arch_matches_by_keyword() {
         let json = json!({
             "tag_name": "v1.2.0",
             "html_url": "https://github.com/owner/repo/releases/tag/v1.2.0",
             "assets": [
-                { "name": "x", "browser_download_url": "https://github.com/.../app_1.2.0_amd64.DEB" }
+                { "name": "missevan-recorder_1.2.0_win_x64.exe", "browser_download_url": "https://github.com/.../missevan-recorder_1.2.0_win_x64.exe" },
+                { "name": "missevan-recorder_1.2.0_linux.AppImage", "browser_download_url": "https://github.com/.../missevan-recorder_1.2.0_linux.AppImage" },
+                { "name": "missevan-recorder_1.2.0_arch_x86_64.pkg.tar.zst", "browser_download_url": "https://github.com/.../missevan-recorder_1.2.0_arch_x86_64.pkg.tar.zst" }
             ]
         });
-        let info = parse_release(&json, "0.1.0", AssetPlatform::Linux).unwrap();
+        let info = parse_release(&json, "0.1.0", AssetPlatform::Arch).unwrap();
         assert_eq!(
             info.download_url.as_deref(),
-            Some("https://github.com/.../app_1.2.0_amd64.DEB")
+            Some("https://github.com/.../missevan-recorder_1.2.0_arch_x86_64.pkg.tar.zst")
         );
     }
 
-    /// Linux 覆盖 .tar.gz / .pkg.tar.zst / 裸 .zst 三种后缀
+    /// 关键词匹配大小写不敏感（`LINUX.APPIMAGE` 大写也命中）
     #[test]
-    fn parse_release_linux_matches_targz_and_zst_suffixes() {
+    fn parse_release_keyword_match_is_case_insensitive() {
         let json = json!({
             "tag_name": "v1.2.0",
             "html_url": "https://github.com/owner/repo/releases/tag/v1.2.0",
             "assets": [
-                { "name": "a", "browser_download_url": "https://github.com/.../missevan-recorder.tar.gz" },
-                { "name": "b", "browser_download_url": "https://github.com/.../missevan-recorder-1.2.0-1-x86_64.pkg.tar.zst" }
+                { "name": "x", "browser_download_url": "https://github.com/.../missevan-recorder_1.2.0_LINUX.APPIMAGE" }
             ]
         });
-        let info = parse_release(&json, "0.1.0", AssetPlatform::Linux).unwrap();
-        // 列表首个匹配 = .tar.gz
+        let info = parse_release(&json, "0.1.0", AssetPlatform::AppImage).unwrap();
         assert_eq!(
             info.download_url.as_deref(),
-            Some("https://github.com/.../missevan-recorder.tar.gz")
-        );
-
-        // 仅裸 .zst（无 .pkg.tar. 前缀）也命中
-        let json2 = json!({
-            "tag_name": "v1.2.0",
-            "html_url": "https://github.com/owner/repo/releases/tag/v1.2.0",
-            "assets": [
-                { "name": "c", "browser_download_url": "https://github.com/.../missevan-recorder.zst" }
-            ]
-        });
-        let info2 = parse_release(&json2, "0.1.0", AssetPlatform::Linux).unwrap();
-        assert_eq!(
-            info2.download_url.as_deref(),
-            Some("https://github.com/.../missevan-recorder.zst")
+            Some("https://github.com/.../missevan-recorder_1.2.0_LINUX.APPIMAGE")
         );
     }
 
-    /// Windows 平台不匹配 Linux 资产（.deb）→ 退回 assets[0]（与旧版兜底一致）
+    /// 无本平台关键词资产 → 回退发布页 html_url（**不**取首个资产）
     #[test]
-    fn parse_release_windows_ignores_linux_assets_then_falls_back_to_first() {
+    fn parse_release_no_platform_match_falls_back_to_html_url() {
         let json = json!({
             "tag_name": "v1.2.0",
             "html_url": "https://github.com/owner/repo/releases/tag/v1.2.0",
@@ -438,9 +437,12 @@ mod tests {
                 { "name": "b", "browser_download_url": "https://github.com/.../notes.md" }
             ]
         });
+        // Windows 平台无 `win` 关键词资产 → 不下载错误平台包，回退发布页（用户自行选择）
         let info = parse_release(&json, "0.1.0", AssetPlatform::Windows).unwrap();
-        // 无 .exe/.msi/.zip 资产 → 回退 assets[0]（发布页/首个资产兜底）
-        assert_eq!(info.download_url.as_deref(), Some("https://github.com/.../app.deb"));
+        assert_eq!(
+            info.download_url.as_deref(),
+            Some("https://github.com/owner/repo/releases/tag/v1.2.0")
+        );
     }
 
     #[test]

@@ -147,39 +147,13 @@ jobs:
             pkgbuild/src/usr/share/icons/hicolor/512x512/apps/missevan-recorder.png
           install -Dm644 src-tauri/icons/128x128.png \
             pkgbuild/src/usr/share/icons/hicolor/128x128/apps/missevan-recorder.png
-          # install -D 不会为桌面文件创建 applications 目录,先补齐
+          # 2) 从 packaging/arch/ 复制 desktop 文件与 PKGBUILD 模板（业务内容与
+          #    CI 流程分离,便于本地维护/校验;版本号经 __PKGVER__ 占位符 + sed 注入,
+          #    不依赖外层 sh 的转义)
           mkdir -p pkgbuild/src/usr/share/applications
-          cat > pkgbuild/src/usr/share/applications/missevan-recorder.desktop <<'DESKTOP'
-          [Desktop Entry]
-          Type=Application
-          Name=Missevan Recorder
-          GenericName=猫耳FM录制器
-          Comment=猫耳 FM 直播自动录制工具
-          Exec=missevan-recorder
-          Icon=missevan-recorder
-          Terminal=false
-          Categories=AudioVideo;Audio;Utility;
-          StartupNotify=true
-          DESKTOP
-
-          # 2) 生成 PKGBUILD。定界符加引号 → 内容完全字面,外层 sh(set -u)
-          #    不会展开 $srcdir/$pkgdir;版本号经占位符 + sed 注入(不依赖转义)
-          cat > pkgbuild/PKGBUILD <<'EOF'
-          pkgname=missevan-recorder
-          pkgver=__PKGVER__
-          pkgrel=1
-          pkgdesc="猫耳 FM 直播自动录制工具"
-          arch=('x86_64')
-          url="https://github.com/thestmitsuki/Missevan-FM-Recorder"
-          license=('MIT')
-          depends=('webkit2gtk-4.1' 'gtk3' 'libsoup3' 'librsvg' 'libappindicator-gtk3')
-          source=()
-          package() {
-            # 必须复制 usr 目录本身(而非 usr/.),否则 bin/share 会错位到
-            # 包根,产生顶层 /bin 与 Arch filesystem 包冲突(usrmerge 布局)
-            cp -a "$srcdir/usr" "$pkgdir/"
-          }
-          EOF
+          install -Dm644 packaging/arch/missevan-recorder.desktop \
+            pkgbuild/src/usr/share/applications/missevan-recorder.desktop
+          cp packaging/arch/PKGBUILD pkgbuild/PKGBUILD
           sed -i "s|__PKGVER__|${version}|" pkgbuild/PKGBUILD
 
           # 3) makepkg 拒绝 root 运行,切换到 builder 用户执行

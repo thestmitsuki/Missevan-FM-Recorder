@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Missevan Recorder
+GenericName=猫耳FM录制器
+Comment=猫耳 FM 直播自动录制工具
+Exec=missevan-recorder
+Icon=missevan-recorder
+Terminal=false
+Categories=AudioVideo;Audio;Utility;
+StartupNotify=true

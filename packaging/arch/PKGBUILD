@@ -1,0 +1,16 @@
+# PKGBUILD 模板（Arch Linux 打包；由 release.yml 从本文件复制并注入版本号）
+# 版本号经 __PKGVER__ 占位符 + sed 注入（不依赖转义，见 release.yml）
+pkgname=missevan-recorder
+pkgver=__PKGVER__
+pkgrel=1
+pkgdesc="猫耳 FM 直播自动录制工具"
+arch=('x86_64')
+url="https://github.com/thestmitsuki/Missevan-FM-Recorder"
+license=('MIT')
+depends=('webkit2gtk-4.1' 'gtk3' 'libsoup3' 'librsvg' 'libappindicator-gtk3')
+source=()
+package() {
+  # 必须复制 usr 目录本身(而非 usr/.),否则 bin/share 会错位到
+  # 包根,产生顶层 /bin 与 Arch filesystem 包冲突(usrmerge 布局)
+  cp -a "$srcdir/usr" "$pkgdir/"
+}

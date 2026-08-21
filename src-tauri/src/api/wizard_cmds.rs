@@ -47,6 +47,44 @@ const MANUAL_DOWNLOAD_HINT: &str =
 #[cfg(windows)]
 const FFMPEG_ZIP_TARGETS: [&str; 2] = ["ffmpeg.exe", "ffprobe.exe"];
 
+/// FFmpeg zip 的期望 SHA256（小写十六进制；当前为**占位 None**）。
+///
+/// 尚未确定如何获取 gyan.dev 官方构建的 SHA256 清单，先跳过校验保持原有
+/// 下载逻辑；确定来源后填入哈希即自动启用强校验——下载损坏 / 被篡改的
+/// zip 在解压前被拦截（校验失败返回错误并清理临时文件）。
+#[cfg(windows)]
+const FFMPEG_ZIP_SHA256: Option<&str> = None;
+
+/// 校验下载的 FFmpeg zip 的 SHA256（若已配置期望值）。
+/// 期望值未配置（占位）时直接通过，不改变原有下载/解压流程。
+#[cfg(windows)]
+fn verify_ffmpeg_zip_sha256(zip_path: &std::path::Path) -> Result<(), AppError> {
+    let Some(expected) = FFMPEG_ZIP_SHA256 else {
+        tracing::debug!("FFmpeg zip SHA256 校验未配置（占位），跳过校验");
+        return Ok(());
+    };
+    use sha2::{Digest, Sha256};
+    let mut file = std::fs::File::open(zip_path).map_err(|e| {
+        AppError::system(IO_WRITE_FAIL, "打开下载的 zip 失败").with_technical(e.to_string())
+    })?;
+    let mut hasher = Sha256::new();
+    std::io::copy(&mut file, &mut hasher).map_err(|e| {
+        AppError::system(IO_WRITE_FAIL, "计算 zip SHA256 失败").with_technical(e.to_string())
+    })?;
+    let actual = hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{:02x}", b))
+        .collect::<String>();
+    if !actual.eq_ignore_ascii_case(expected) {
+        return Err(AppError::system(IO_WRITE_FAIL, "FFmpeg 下载校验失败（SHA256 不匹配）")
+            .with_technical(format!("期望 {}，实际 {}", expected, actual))
+            .with_suggestion(MANUAL_DOWNLOAD_HINT));
+    }
+    tracing::info!("FFmpeg zip SHA256 校验通过: {}", actual);
+    Ok(())
+}
+
 /// 执行 `{exe} -version`，成功时返回首行版本信息
 async fn probe_tool_version(exe: &std::path::Path) -> Option<String> {
     // 隐藏控制台（tools.rs::apply_create_no_window）：首启向导环境检查 / 下载后
@@ -433,7 +471,11 @@ async fn download_ffmpeg_windows(
     DownloadProgress::emit(&window, 100, "downloading");
     tracing::info!("FFmpeg 下载完成: {} bytes", downloaded);
 
-    // 2. 解压 ffmpeg.exe / ffprobe.exe（阻塞 IO 放入 spawn_blocking）
+    // 2. SHA256 完整性校验（占位启用）：期望哈希未配置时跳过，保持原逻辑；
+    //    配置后在此拦截损坏/被篡改的 zip（失败时临时文件由 _zip_guard 清理）
+    verify_ffmpeg_zip_sha256(&zip_path)?;
+
+    // 3. 解压 ffmpeg.exe / ffprobe.exe（阻塞 IO 放入 spawn_blocking）
     DownloadProgress::emit(&window, 100, "extracting");
     let extracted: Vec<PathBuf> = tauri::async_runtime::spawn_blocking({
         let zip_path = zip_path.clone();
@@ -446,7 +488,7 @@ async fn download_ffmpeg_windows(
     let _ = std::fs::remove_file(&zip_path);
     tracing::info!("FFmpeg 解压完成: {:?}", extracted);
 
-    // 3. 不再写配置（修复子代理 B 根因修复：配置文件的唯一写入点在向导最后一步
+    // 4. 不再写配置（修复子代理 B 根因修复：配置文件的唯一写入点在向导最后一步
     //    「完成」按钮；旧实现在此 save_global 会把 ffmpeg 路径提前落盘，配置在
     //    向导第 3 步就已产生）。下载路径随返回值交给前端暂存
     //    （wizardStore.staged.ffmpegPath / ffprobePath），完成时随 stagedToConfigPatch
@@ -454,7 +496,7 @@ async fn download_ffmpeg_windows(
     let ffmpeg_exe = ffmpeg_dir.join("ffmpeg.exe");
     let ffprobe_exe = ffmpeg_dir.join("ffprobe.exe");
 
-    // 4. 重新触发 FfmpegCheck 并返回检测结果 + 下载路径
+    // 5. 重新触发 FfmpegCheck 并返回检测结果 + 下载路径
     DownloadProgress::emit(&window, 100, "verifying");
     let check = FfmpegCheck {
         ffmpeg_path: Some(ffmpeg_exe.to_string_lossy().into_owned()),
