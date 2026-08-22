@@ -24,6 +24,7 @@ import {
 } from "@/components/ui/select";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Switch } from "@/components/ui/switch";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
 const props = defineProps<{
     config: SettingsForm;
@@ -119,238 +120,258 @@ const postActions = [
 <template>
     <div class="space-y-6">
         <!-- ── 基本设置 ── -->
-        <div class="rounded-lg border p-4">
-            <h3 class="mb-4 text-sm font-semibold">{{ t("settings.recording.basicTitle") }}</h3>
-            <div class="space-y-4">
-                <!-- 输出目录（必填） -->
-                <div class="space-y-1.5">
-                    <Label for="cfg-output-dir">{{ t("settings.recording.outputDir") }}</Label>
-                    <div class="flex gap-2">
+        <Card class="gap-0 rounded-lg p-4 shadow-none">
+            <CardHeader class="mb-4 gap-0 p-0">
+                <CardTitle class="text-sm font-semibold">{{ t("settings.recording.basicTitle") }}</CardTitle>
+            </CardHeader>
+            <CardContent class="p-0">
+                <div class="space-y-4">
+                    <!-- 输出目录（必填） -->
+                    <div class="space-y-1.5">
+                        <Label for="cfg-output-dir">{{ t("settings.recording.outputDir") }}</Label>
+                        <div class="flex gap-2">
+                            <Input
+                                id="cfg-output-dir"
+                                v-model="config.output_dir"
+                                :class="errors.output_dir ? 'border-destructive focus-visible:ring-destructive/40' : ''"
+                                :aria-invalid="!!errors.output_dir"
+                                :placeholder="t('settings.recording.outputDirPlaceholder')"
+                            />
+                            <Button variant="outline" @click="emit('browseOutputDir')">
+                                {{ t("settings.recording.browse") }}
+                            </Button>
+                        </div>
+                        <p v-if="errors.output_dir" class="text-xs text-destructive">
+                            {{ errors.output_dir }}
+                        </p>
+                    </div>
+
+                    <!-- 录制格式 -->
+                    <div class="space-y-2">
+                        <Label>{{ t("settings.recording.recordFormat") }}</Label>
+                        <RadioGroup v-model="config.record_format" class="flex gap-5">
+                            <div class="flex items-center gap-2">
+                                <RadioGroupItem id="cfg-fmt-m4a" value="m4a" class="size-4" />
+                                <Label for="cfg-fmt-m4a">{{ t("settings.recording.formatM4A") }}</Label>
+                            </div>
+                            <div class="flex items-center gap-2">
+                                <RadioGroupItem id="cfg-fmt-mp3" value="mp3" class="size-4" />
+                                <Label for="cfg-fmt-mp3">{{ t("settings.recording.formatMP3") }}</Label>
+                            </div>
+                        </RadioGroup>
+                    </div>
+
+                    <!-- 音频比特率（shadcn Select，选项 64/128/192/256/320） -->
+                    <div class="space-y-1.5">
+                        <Label for="cfg-bitrate">{{ t("settings.recording.bitrate") }}</Label>
+                        <Select v-model="config.bitrate_kbps">
+                            <SelectTrigger id="cfg-bitrate" class="w-40">
+                                <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                                <SelectItem
+                                    v-for="b in bitrateOptions"
+                                    :key="b"
+                                    :value="b"
+                                    >{{ b }}kbps</SelectItem
+                                >
+                            </SelectContent>
+                        </Select>
+                        <p v-if="errors.bitrate_kbps" class="text-xs text-destructive">
+                            {{ errors.bitrate_kbps }}
+                        </p>
+                    </div>
+
+                    <!-- 仅录制音频流 -->
+                    <div class="flex items-center justify-between gap-4">
+                        <div>
+                            <Label for="cfg-audio-only">{{ t("settings.recording.audioOnly") }}</Label>
+                            <p class="mt-0.5 text-xs text-muted-foreground">
+                                {{ t("settings.recording.audioOnlyHint") }}
+                            </p>
+                        </div>
+                        <Switch id="cfg-audio-only" v-model:checked="config.audio_only" />
+                    </div>
+
+                    <!-- 分段录制 -->
+                    <div class="flex items-center justify-between gap-4">
+                        <div>
+                            <Label for="cfg-segment-enable">{{ t("settings.recording.segmentEnable") }}</Label>
+                            <p class="mt-0.5 text-xs text-muted-foreground">
+                                {{ t("settings.recording.segmentHint") }}
+                            </p>
+                        </div>
+                        <Switch id="cfg-segment-enable" v-model:checked="segmentEnabled" />
+                    </div>
+                    <div class="space-y-1.5">
+                        <Label for="cfg-segment-secs">{{ t("settings.recording.segmentSeconds") }}</Label>
                         <Input
-                            id="cfg-output-dir"
-                            v-model="config.output_dir"
-                            :class="errors.output_dir ? 'border-destructive focus-visible:ring-destructive/40' : ''"
-                            :aria-invalid="!!errors.output_dir"
-                            :placeholder="t('settings.recording.outputDirPlaceholder')"
+                            id="cfg-segment-secs"
+                            v-model="segmentSecondsText"
+                            inputmode="numeric"
+                            :class="errors.segment_seconds || segmentSecondsInvalid ? 'border-destructive focus-visible:ring-destructive/40' : ''"
+                            :aria-invalid="!!errors.segment_seconds || segmentSecondsInvalid"
+                            :disabled="!segmentEnabled"
                         />
-                        <Button variant="outline" @click="emit('browseOutputDir')">
-                            {{ t("settings.recording.browse") }}
-                        </Button>
-                    </div>
-                    <p v-if="errors.output_dir" class="text-xs text-destructive">
-                        {{ errors.output_dir }}
-                    </p>
-                </div>
-
-                <!-- 录制格式 -->
-                <div class="space-y-2">
-                    <Label>{{ t("settings.recording.recordFormat") }}</Label>
-                    <RadioGroup v-model="config.record_format" class="flex gap-5">
-                        <div class="flex items-center gap-2">
-                            <RadioGroupItem id="cfg-fmt-m4a" value="m4a" class="size-4" />
-                            <Label for="cfg-fmt-m4a">{{ t("settings.recording.formatM4A") }}</Label>
-                        </div>
-                        <div class="flex items-center gap-2">
-                            <RadioGroupItem id="cfg-fmt-mp3" value="mp3" class="size-4" />
-                            <Label for="cfg-fmt-mp3">{{ t("settings.recording.formatMP3") }}</Label>
-                        </div>
-                    </RadioGroup>
-                </div>
-
-                <!-- 音频比特率（shadcn Select，选项 64/128/192/256/320） -->
-                <div class="space-y-1.5">
-                    <Label for="cfg-bitrate">{{ t("settings.recording.bitrate") }}</Label>
-                    <Select v-model="config.bitrate_kbps">
-                        <SelectTrigger id="cfg-bitrate" class="w-40">
-                            <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                            <SelectItem
-                                v-for="b in bitrateOptions"
-                                :key="b"
-                                :value="b"
-                                >{{ b }}kbps</SelectItem
-                            >
-                        </SelectContent>
-                    </Select>
-                    <p v-if="errors.bitrate_kbps" class="text-xs text-destructive">
-                        {{ errors.bitrate_kbps }}
-                    </p>
-                </div>
-
-                <!-- 仅录制音频流 -->
-                <div class="flex items-center justify-between gap-4">
-                    <div>
-                        <Label for="cfg-audio-only">{{ t("settings.recording.audioOnly") }}</Label>
-                        <p class="mt-0.5 text-xs text-muted-foreground">
-                            {{ t("settings.recording.audioOnlyHint") }}
+                        <p v-if="errors.segment_seconds" class="text-xs text-destructive">
+                            {{ errors.segment_seconds }}
                         </p>
                     </div>
-                    <Switch id="cfg-audio-only" v-model:checked="config.audio_only" />
                 </div>
-
-                <!-- 分段录制 -->
-                <div class="flex items-center justify-between gap-4">
-                    <div>
-                        <Label for="cfg-segment-enable">{{ t("settings.recording.segmentEnable") }}</Label>
-                        <p class="mt-0.5 text-xs text-muted-foreground">
-                            {{ t("settings.recording.segmentHint") }}
-                        </p>
-                    </div>
-                    <Switch id="cfg-segment-enable" v-model:checked="segmentEnabled" />
-                </div>
-                <div class="space-y-1.5">
-                    <Label for="cfg-segment-secs">{{ t("settings.recording.segmentSeconds") }}</Label>
-                    <Input
-                        id="cfg-segment-secs"
-                        v-model="segmentSecondsText"
-                        inputmode="numeric"
-                        :class="errors.segment_seconds || segmentSecondsInvalid ? 'border-destructive focus-visible:ring-destructive/40' : ''"
-                        :aria-invalid="!!errors.segment_seconds || segmentSecondsInvalid"
-                        :disabled="!segmentEnabled"
-                    />
-                    <p v-if="errors.segment_seconds" class="text-xs text-destructive">
-                        {{ errors.segment_seconds }}
-                    </p>
-                </div>
-            </div>
-        </div>
+            </CardContent>
+        </Card>
 
         <!-- ── 文件名模板 ── -->
-        <div class="rounded-lg border p-4">
-            <h3 class="mb-1 text-sm font-semibold">
-                {{ t("settings.recording.templateTitle") }}
-            </h3>
-            <p class="mb-3 text-xs text-muted-foreground">{{ t("settings.recording.templateDesc") }}</p>
-            <div class="space-y-1.5">
-                <Input
-                    ref="templateInput"
-                    v-model="config.filename_template"
-                    @focus="templateFocused = true"
-                    @blur="templateFocused = false"
-                    :class="errors.filename_template ? 'border-destructive focus-visible:ring-destructive/40' : ''"
-                    :aria-invalid="!!errors.filename_template"
-                    :placeholder="t('settings.recording.templatePlaceholder')"
-                />
-                <div class="flex flex-wrap items-center gap-1.5">
-                    <span class="text-xs text-muted-foreground">{{ t("settings.recording.tplVars") }}:</span>
-                    <Button
-                        v-for="v in templateVars"
-                        :key="v.token"
-                        type="button"
-                        size="xs"
-                        variant="outline"
-                        @click="insertVariable(v.token)"
+        <Card class="gap-0 rounded-lg p-4 shadow-none">
+            <CardHeader class="mb-3 gap-1 p-0">
+                <CardTitle class="text-sm font-semibold">
+                    {{ t("settings.recording.templateTitle") }}
+                </CardTitle>
+                <p class="text-xs text-muted-foreground">{{ t("settings.recording.templateDesc") }}</p>
+            </CardHeader>
+            <CardContent class="p-0">
+                <div class="space-y-1.5">
+                    <Input
+                        ref="templateInput"
+                        v-model="config.filename_template"
+                        @focus="templateFocused = true"
+                        @blur="templateFocused = false"
+                        :class="errors.filename_template ? 'border-destructive focus-visible:ring-destructive/40' : ''"
+                        :aria-invalid="!!errors.filename_template"
+                        :placeholder="t('settings.recording.templatePlaceholder')"
+                    />
+                    <div class="flex flex-wrap items-center gap-1.5">
+                        <span class="text-xs text-muted-foreground">{{ t("settings.recording.tplVars") }}:</span>
+                        <Button
+                            v-for="v in templateVars"
+                            :key="v.token"
+                            type="button"
+                            size="xs"
+                            variant="outline"
+                            @click="insertVariable(v.token)"
+                        >
+                            {{ v.token }}
+                        </Button>
+                    </div>
+                    <p v-if="errors.filename_template" class="text-xs text-destructive">
+                        {{ errors.filename_template }}
+                    </p>
+                    <div
+                        v-if="templatePreview"
+                        class="rounded-md bg-muted/60 px-3 py-2 text-xs text-muted-foreground"
                     >
-                        {{ v.token }}
-                    </Button>
+                        <span class="mr-2 font-medium">{{ t("settings.recording.tplPreviewLabel") }}:</span>
+                        <span class="break-all font-mono text-foreground">{{ templatePreview }}</span>
+                    </div>
                 </div>
-                <p v-if="errors.filename_template" class="text-xs text-destructive">
-                    {{ errors.filename_template }}
-                </p>
-                <div
-                    v-if="templatePreview"
-                    class="rounded-md bg-muted/60 px-3 py-2 text-xs text-muted-foreground"
-                >
-                    <span class="mr-2 font-medium">{{ t("settings.recording.tplPreviewLabel") }}:</span>
-                    <span class="break-all font-mono text-foreground">{{ templatePreview }}</span>
-                </div>
-            </div>
-        </div>
+            </CardContent>
+        </Card>
 
         <!-- ── 并发录制限制 ── -->
-        <div class="rounded-lg border p-4">
-            <h3 class="mb-1 text-sm font-semibold">{{ t("settings.recording.concurrencyTitle") }}</h3>
-            <p class="mb-3 text-xs text-muted-foreground">
-                {{ t("settings.recording.concurrencyHint") }}
-            </p>
-            <div class="space-y-1.5">
-                <Label for="cfg-max-concurrent">{{ t("settings.recording.maxConcurrent") }}</Label>
-                <Input
-                    id="cfg-max-concurrent"
-                    v-model="maxConcurrentText"
-                    inputmode="numeric"
-                    class="w-40"
-                    :class="errors.max_concurrent_recordings || maxConcurrentInvalid ? 'border-destructive focus-visible:ring-destructive/40' : ''"
-                    :aria-invalid="!!errors.max_concurrent_recordings || maxConcurrentInvalid"
-                />
-                <p v-if="errors.max_concurrent_recordings" class="text-xs text-destructive">
-                    {{ errors.max_concurrent_recordings }}
+        <Card class="gap-0 rounded-lg p-4 shadow-none">
+            <CardHeader class="mb-3 gap-1 p-0">
+                <CardTitle class="text-sm font-semibold">{{ t("settings.recording.concurrencyTitle") }}</CardTitle>
+                <p class="text-xs text-muted-foreground">
+                    {{ t("settings.recording.concurrencyHint") }}
                 </p>
-            </div>
-        </div>
+            </CardHeader>
+            <CardContent class="p-0">
+                <div class="space-y-1.5">
+                    <Label for="cfg-max-concurrent">{{ t("settings.recording.maxConcurrent") }}</Label>
+                    <Input
+                        id="cfg-max-concurrent"
+                        v-model="maxConcurrentText"
+                        inputmode="numeric"
+                        class="w-40"
+                        :class="errors.max_concurrent_recordings || maxConcurrentInvalid ? 'border-destructive focus-visible:ring-destructive/40' : ''"
+                        :aria-invalid="!!errors.max_concurrent_recordings || maxConcurrentInvalid"
+                    />
+                    <p v-if="errors.max_concurrent_recordings" class="text-xs text-destructive">
+                        {{ errors.max_concurrent_recordings }}
+                    </p>
+                </div>
+            </CardContent>
+        </Card>
 
         <!-- ── 录制前延迟 ── -->
-        <div class="rounded-lg border p-4">
-            <h3 class="mb-1 text-sm font-semibold">{{ t("settings.recording.preDelayTitle") }}</h3>
-            <p class="mb-3 text-xs text-muted-foreground">{{ t("settings.recording.preDelayHint") }}</p>
-            <div class="space-y-1.5">
-                <Label for="cfg-pre-delay">{{ t("settings.recording.preRecordDelay") }}</Label>
-                <Input
-                    id="cfg-pre-delay"
-                    v-model="preRecordDelayText"
-                    inputmode="numeric"
-                    class="w-40"
-                    :class="errors.pre_record_delay_secs || preRecordDelayInvalid ? 'border-destructive focus-visible:ring-destructive/40' : ''"
-                    :aria-invalid="!!errors.pre_record_delay_secs || preRecordDelayInvalid"
-                />
-                <p v-if="errors.pre_record_delay_secs" class="text-xs text-destructive">
-                    {{ errors.pre_record_delay_secs }}
-                </p>
-            </div>
-        </div>
+        <Card class="gap-0 rounded-lg p-4 shadow-none">
+            <CardHeader class="mb-3 gap-1 p-0">
+                <CardTitle class="text-sm font-semibold">{{ t("settings.recording.preDelayTitle") }}</CardTitle>
+                <p class="text-xs text-muted-foreground">{{ t("settings.recording.preDelayHint") }}</p>
+            </CardHeader>
+            <CardContent class="p-0">
+                <div class="space-y-1.5">
+                    <Label for="cfg-pre-delay">{{ t("settings.recording.preRecordDelay") }}</Label>
+                    <Input
+                        id="cfg-pre-delay"
+                        v-model="preRecordDelayText"
+                        inputmode="numeric"
+                        class="w-40"
+                        :class="errors.pre_record_delay_secs || preRecordDelayInvalid ? 'border-destructive focus-visible:ring-destructive/40' : ''"
+                        :aria-invalid="!!errors.pre_record_delay_secs || preRecordDelayInvalid"
+                    />
+                    <p v-if="errors.pre_record_delay_secs" class="text-xs text-destructive">
+                        {{ errors.pre_record_delay_secs }}
+                    </p>
+                </div>
+            </CardContent>
+        </Card>
 
         <!-- ── 录制后动作 ── -->
-        <div class="rounded-lg border p-4">
-            <h3 class="mb-3 text-sm font-semibold">
-                {{ t("settings.recording.postActionTitle") }}
-            </h3>
-            <RadioGroup v-model="config.post_record_action" class="mb-4 flex flex-col gap-2">
-                <div v-for="a in postActions" :key="a.value" class="flex items-center gap-2">
-                    <RadioGroupItem
-                        :id="`cfg-post-${a.value}`"
-                        :value="a.value"
-                        class="size-4"
+        <Card class="gap-0 rounded-lg p-4 shadow-none">
+            <CardHeader class="mb-3 gap-0 p-0">
+                <CardTitle class="text-sm font-semibold">
+                    {{ t("settings.recording.postActionTitle") }}
+                </CardTitle>
+            </CardHeader>
+            <CardContent class="p-0">
+                <RadioGroup v-model="config.post_record_action" class="mb-4 flex flex-col gap-2">
+                    <div v-for="a in postActions" :key="a.value" class="flex items-center gap-2">
+                        <RadioGroupItem
+                            :id="`cfg-post-${a.value}`"
+                            :value="a.value"
+                            class="size-4"
+                        />
+                        <Label :for="`cfg-post-${a.value}`">{{ t(a.labelKey) }}</Label>
+                    </div>
+                </RadioGroup>
+                <div v-if="config.post_record_action === 'command'" class="space-y-1.5">
+                    <Label for="cfg-post-command">{{ t("settings.recording.postCommandLabel") }}</Label>
+                    <Input
+                        id="cfg-post-command"
+                        v-model="config.post_record_command"
+                        :class="errors.post_record_command ? 'border-destructive focus-visible:ring-destructive/40' : ''"
+                        :aria-invalid="!!errors.post_record_command"
+                        :placeholder="t('settings.recording.postCommandPlaceholder')"
                     />
-                    <Label :for="`cfg-post-${a.value}`">{{ t(a.labelKey) }}</Label>
+                    <div class="space-y-1 rounded-md bg-muted/60 px-3 py-2 text-xs text-muted-foreground">
+                        <p class="font-medium text-foreground">{{ t("settings.recording.postCommandHintTitle") }}</p>
+                        <ul class="space-y-0.5">
+                            <li>
+                                <code class="rounded bg-background/80 px-1 font-mono">{file}</code>
+                                <span class="ml-1">{{ t("settings.recording.postCommandVarFile") }}</span>
+                            </li>
+                            <li>
+                                <code class="rounded bg-background/80 px-1 font-mono">{output_dir}</code>
+                                <span class="ml-1">{{ t("settings.recording.postCommandVarOutputDir") }}</span>
+                            </li>
+                            <li>
+                                <code class="rounded bg-background/80 px-1 font-mono">{anchor_name}</code>
+                                <span class="ml-1">{{ t("settings.recording.postCommandVarAnchor") }}</span>
+                            </li>
+                            <li>
+                                <code class="rounded bg-background/80 px-1 font-mono">{room_id}</code>
+                                <span class="ml-1">{{ t("settings.recording.postCommandVarRoom") }}</span>
+                            </li>
+                        </ul>
+                        <p>{{ t("settings.recording.postCommandHintShell") }}</p>
+                        <p class="font-mono text-foreground">{{ t("settings.recording.postCommandHintExample") }}</p>
+                    </div>
+                    <p v-if="errors.post_record_command" class="text-xs text-destructive">
+                        {{ errors.post_record_command }}
+                    </p>
                 </div>
-            </RadioGroup>
-            <div v-if="config.post_record_action === 'command'" class="space-y-1.5">
-                <Label for="cfg-post-command">{{ t("settings.recording.postCommandLabel") }}</Label>
-                <Input
-                    id="cfg-post-command"
-                    v-model="config.post_record_command"
-                    :class="errors.post_record_command ? 'border-destructive focus-visible:ring-destructive/40' : ''"
-                    :aria-invalid="!!errors.post_record_command"
-                    :placeholder="t('settings.recording.postCommandPlaceholder')"
-                />
-                <div class="space-y-1 rounded-md bg-muted/60 px-3 py-2 text-xs text-muted-foreground">
-                    <p class="font-medium text-foreground">{{ t("settings.recording.postCommandHintTitle") }}</p>
-                    <ul class="space-y-0.5">
-                        <li>
-                            <code class="rounded bg-background/80 px-1 font-mono">{file}</code>
-                            <span class="ml-1">{{ t("settings.recording.postCommandVarFile") }}</span>
-                        </li>
-                        <li>
-                            <code class="rounded bg-background/80 px-1 font-mono">{output_dir}</code>
-                            <span class="ml-1">{{ t("settings.recording.postCommandVarOutputDir") }}</span>
-                        </li>
-                        <li>
-                            <code class="rounded bg-background/80 px-1 font-mono">{anchor_name}</code>
-                            <span class="ml-1">{{ t("settings.recording.postCommandVarAnchor") }}</span>
-                        </li>
-                        <li>
-                            <code class="rounded bg-background/80 px-1 font-mono">{room_id}</code>
-                            <span class="ml-1">{{ t("settings.recording.postCommandVarRoom") }}</span>
-                        </li>
-                    </ul>
-                    <p>{{ t("settings.recording.postCommandHintShell") }}</p>
-                    <p class="font-mono text-foreground">{{ t("settings.recording.postCommandHintExample") }}</p>
-                </div>
-                <p v-if="errors.post_record_command" class="text-xs text-destructive">
-                    {{ errors.post_record_command }}
-                </p>
-            </div>
-        </div>
+            </CardContent>
+        </Card>
     </div>
 </template>

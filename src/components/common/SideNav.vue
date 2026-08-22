@@ -7,8 +7,12 @@
  * 选中态：solid primary 高亮（aria-current="page"）。
  * 底部附加项（footerItems）：如设置页「关于」入口。
  * 窄屏（<=720px）：转为横向滚动导航行（与 AppLayout 底部导航断点一致）。
+ *
+ * 按钮统一使用 ui/button（ghost）：图标 + 文字左对齐（justify-start），
+ * 选中态用 primary 覆盖；窄屏时隐藏文字只留图标（.side-nav-item-label）。
  */
 import type { Component } from "vue";
+import { Button } from "@/components/ui/button";
 
 /** 左导航条目配置 */
 export interface SideNavItem {
@@ -50,12 +54,15 @@ const emit = defineEmits<{
             {{ props.title }}
         </h2>
         <nav class="side-nav-list">
-            <button
+            <Button
                 v-for="item in props.items"
                 :key="item.id"
-                type="button"
-                class="side-nav-item"
-                :class="{ active: props.activeId === item.id }"
+                variant="ghost"
+                class="side-nav-btn h-auto w-full justify-start gap-2.5 rounded-md px-2.5 py-2 text-[13px] font-medium"
+                :class="{
+                    'bg-primary text-primary-foreground hover:bg-primary/85 hover:text-primary-foreground dark:hover:bg-primary/85 dark:hover:text-primary-foreground':
+                        props.activeId === item.id,
+                }"
                 :aria-current="props.activeId === item.id ? 'page' : undefined"
                 @click="emit('select', item.id)"
             >
@@ -66,20 +73,20 @@ const emit = defineEmits<{
                     class="size-1.5 shrink-0 rounded-full bg-primary-foreground/80"
                     aria-hidden="true"
                 />
-            </button>
+            </Button>
         </nav>
         <!-- 底部附加区（如设置页「关于」入口） -->
         <div v-if="props.footerItems.length" class="side-nav-footer">
-            <button
+            <Button
                 v-for="item in props.footerItems"
                 :key="item.id"
-                type="button"
-                class="side-nav-item"
+                variant="ghost"
+                class="side-nav-btn h-auto w-full justify-start gap-2.5 rounded-md px-2.5 py-2 text-[13px] font-medium text-muted-foreground"
                 @click="emit('select', item.id)"
             >
                 <component :is="item.icon" v-if="item.icon" class="size-4 shrink-0" />
                 <span class="side-nav-item-label min-w-0 flex-1 truncate text-left">{{ item.label }}</span>
-            </button>
+            </Button>
         </div>
     </aside>
 </template>
@@ -109,36 +116,6 @@ const emit = defineEmits<{
     gap: 2px;
     padding: 0 8px;
 }
-.side-nav-item {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    width: 100%;
-    padding: 8px 10px;
-    border: none;
-    border-radius: 6px;
-    background: transparent;
-    color: var(--muted-foreground);
-    font-size: 0.8125rem;
-    font-weight: 500;
-    cursor: pointer;
-    text-align: left;
-    outline: none;
-    transition:
-        background 0.15s,
-        color 0.15s;
-}
-.side-nav-item:hover {
-    background: var(--accent);
-    color: var(--accent-foreground);
-}
-.side-nav-item.active {
-    background: var(--primary);
-    color: var(--primary-foreground);
-}
-.side-nav-item:focus-visible {
-    box-shadow: 0 0 0 2px var(--ring);
-}
 .side-nav-footer {
     padding: 0px 8px;
 }
@@ -155,7 +132,7 @@ const emit = defineEmits<{
     .side-nav-footer {
         padding: 0 4px;
     }
-    .side-nav-item {
+    .side-nav-btn {
         justify-content: center;
         padding: 8px 0;
     }

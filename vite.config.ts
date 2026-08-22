@@ -1,3 +1,4 @@
+/// <reference types="vitest/config" />
 import { defineConfig } from "vite";
 import vue from "@vitejs/plugin-vue";
 import tailwindcss from "@tailwindcss/vite";
@@ -58,5 +59,12 @@ export default defineConfig(async () => ({
     watch: {
       ignored: ["**/src-tauri/**"],
     },
+  },
+  // vitest 单元测试配置（仅 dev；build 阶段 vite 不加载 test 字段）
+  test: {
+    // jsdom：接近真实浏览器行为，localStorage/Date/navigator 支持成熟，
+    // 与 store 持久化逻辑（localStorage）和设置校验（platform）兼容
+    environment: "jsdom",
+    include: ["src/**/*.spec.ts"],
   },
 }));

@@ -24,6 +24,7 @@ use crate::infrastructure::notification::dispatcher::NotificationDispatcher;
 use crate::infrastructure::state::app_state::{
     ActiveRecording, RecorderState, RecorderStateInfo, RecordingSummary,
 };
+use crate::tr;
 
 /// 工具（FFmpeg / ffprobe）状态——`get_debug_info.ffmpeg_status` /
 /// `ffprobe_status` 返回，前端运行概览「系统信息」区展示。
@@ -151,15 +152,15 @@ async fn perform_health_checks(config: &GlobalConfig, mock_mode: bool) -> Diagno
             CheckResult {
                 check_name: "FFmpeg".into(),
                 status: CheckStatus::Passed,
-                message: "Mock 模式，忽略".into(),
+                message: tr!("debug.mock_ignored").into(),
                 details: None,
                 suggestion: None,
                 duration_ms: 0,
             },
             CheckResult {
-                check_name: "磁盘空间".into(),
+                check_name: tr!("debug.disk_space").into(),
                 status: CheckStatus::Passed,
-                message: "Mock 模式，忽略".into(),
+                message: tr!("debug.mock_ignored").into(),
                 details: None,
                 suggestion: None,
                 duration_ms: 0,
@@ -213,11 +214,11 @@ async fn run_diagnostic(
         Ok(c) => c,
         Err(e) => {
             let error_results = vec![CheckResult {
-                check_name: "配置加载".into(),
+                check_name: tr!("debug.config_load_check").into(),
                 status: CheckStatus::Failed,
-                message: format!("配置加载失败: {}", e),
+                message: tr!("debug.config_load_failed", err = e),
                 details: None,
-                suggestion: Some("请检查配置文件是否存在，或使用 --mock 模式".into()),
+                suggestion: Some(tr!("debug.config_load_suggestion").into()),
                 duration_ms: 0,
             }];
             let health = DiagnosticReport {
@@ -232,7 +233,7 @@ async fn run_diagnostic(
                 health,
                 config_exists: false,
                 config_valid: false,
-                config_errors: vec![format!("配置加载失败: {}", e)],
+                config_errors: vec![tr!("debug.config_load_failed", err = e)],
             };
         }
     };
@@ -277,8 +278,8 @@ pub async fn run_health_check(
         dispatcher
             .info(
                 "diagnostic_ok",
-                "诊断通过",
-                "所有检查项均正常，系统准备就绪。",
+                tr!("debug.diagnostic_ok"),
+                tr!("debug.diagnostic_ok_body"),
             )
             .await;
     } else {
@@ -291,7 +292,11 @@ pub async fn run_health_check(
                 }
                 // 如果是警告，也记录（可以加个前缀标明是警告）
                 CheckStatus::Warning => {
-                    error_details.push(format!("{}: (警告) {}", r.check_name, r.message));
+                    error_details.push(tr!(
+                        "debug.warning_detail",
+                        name = r.check_name,
+                        message = r.message
+                    ));
                 }
                 // 通过和跳过的情况，忽略，不做任何事
                 CheckStatus::Passed | CheckStatus::Skipped => {}
@@ -301,15 +306,15 @@ pub async fn run_health_check(
             error_details.extend(report.config_errors.clone());
         }
         let detail = if error_details.is_empty() {
-            "未知错误".to_string()
+            tr!("debug.unknown_error").to_string()
         } else {
             error_details.join("; ")
         };
         dispatcher
             .error(
                 "diagnostic_failed",
-                "诊断发现问题",
-                format!("检测到以下问题：{}", detail),
+                tr!("debug.diagnostic_failed"),
+                tr!("debug.diagnostic_failed_body", detail = detail),
             )
             .await;
     }
@@ -532,7 +537,7 @@ pub async fn clear_file_cache(cache: State<'_, FileCacheHandle>) -> Result<(), A
         files_after: 0,
         groups: groups_before,
     });
-    tracing::info!("文件缓存已清除（内存索引）");
+    tracing::info!("{}", tr!("debug.cache_cleared"));
     Ok(())
 }
 
@@ -588,7 +593,7 @@ pub async fn export_diagnostic_report(
     let config_value = config_manager
         .load()
         .map(|c| redact_config(&c))
-        .unwrap_or_else(|e| json!({ "error": format!("配置加载失败: {}", e) }));
+        .unwrap_or_else(|e| json!({ "error": tr!("debug.config_load_failed", err = e) }));
 
     // FFmpeg / ffprobe 状态（探测结果带 60s 缓存，重复导出无额外开销）
     let loaded = config_manager.load().ok();
@@ -639,7 +644,7 @@ pub async fn export_diagnostic_report(
     });
 
     serde_json::to_string_pretty(&report)
-        .map_err(|e| AppError::internal(format!("序列化诊断报告失败: {}", e)))
+        .map_err(|e| AppError::internal(tr!("debug.report_serialize_failed", err = e)))
 }
 
 /// 配置脱敏：`global.proxy_password`、`anchor.cookie` → `***`，
@@ -651,6 +656,11 @@ fn redact_config(config: &crate::domain::config::model::Config) -> serde_json::V
             "proxy_password".to_string(),
             serde_json::Value::String("***".to_string()),
         );
+        if let Some(addr) = global.get_mut("proxy_addr") {
+            if let Some(s) = addr.as_str() {
+                *addr = serde_json::Value::String(redact_proxy_url(s));
+            }
+        }
     }
     if let Some(anchors) = v.get_mut("anchors").and_then(|a| a.as_array_mut()) {
         for anchor in anchors.iter_mut() {
@@ -704,5 +714,17 @@ mod tests {
             redact_proxy_url("http://proxy.example.com:8080"),
             "http://proxy.example.com:8080"
         );
+    }
+
+    /// M2：诊断报告导出的 global.proxy_addr 内嵌凭据同样脱敏。
+    #[test]
+    fn redact_config_redacts_global_proxy_addr_credentials() {
+        let mut config = crate::domain::config::model::Config::default();
+        config.global.proxy_addr = "http://user:pw@proxy.example.com:8080".to_string();
+
+        let v = redact_config(&config);
+        let addr = v["global"]["proxy_addr"].as_str().unwrap();
+        assert!(addr.contains("user:***@"), "proxy_addr 密码未脱敏: {addr}");
+        assert!(!addr.contains("user:pw@"), "内嵌凭据泄漏进诊断报告: {addr}");
     }
 }

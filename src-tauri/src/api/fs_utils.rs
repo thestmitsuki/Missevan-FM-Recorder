@@ -9,6 +9,7 @@ use tauri_plugin_opener::OpenerExt;
 
 use crate::domain::config::manager::ConfigManager;
 use crate::infrastructure::error::types::AppError;
+use crate::tr;
 
 /// 打开输出目录（opener 插件 `open_path`：打开目录本身）
 #[tauri::command]
@@ -22,7 +23,7 @@ pub(crate) async fn open_output_dir(
         std::fs::create_dir_all(dir).map_err(|e| {
             AppError::system(
                 crate::infrastructure::error::types::IO_WRITE_FAIL,
-                "创建输出目录失败",
+                tr!("app.create_output_dir_failed"),
             )
             .with_technical(e.to_string())
         })?;
@@ -33,7 +34,7 @@ pub(crate) async fn open_output_dir(
         .map_err(|e| {
             AppError::system(
                 crate::infrastructure::error::types::INT_UNEXPECTED,
-                "打开输出目录失败",
+                tr!("app.open_output_dir_failed"),
             )
             .with_technical(e.to_string())
         })

@@ -13,8 +13,10 @@ import type { AppearancePrefs, CardOptionKey, Density, FontSize } from "@/stores
 import type { ThemeMode } from "@/stores/themeStore";
 import type { SectionErrors, SettingsForm } from "../validation";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
 const props = defineProps<{
     config: SettingsForm;
@@ -68,94 +70,119 @@ function setAppearance<K extends keyof AppearancePrefs>(key: K, value: Appearanc
 <template>
     <div class="space-y-6">
         <!-- 主题 -->
-        <div class="rounded-lg border p-4">
-            <h3 class="mb-3 text-sm font-semibold">{{ t("settings.appearance.theme") }}</h3>
-            <RadioGroup
-                :model-value="config.theme"
-                class="flex flex-col gap-2"
-                @update:model-value="(v: unknown) => (config.theme = v as ThemeMode)"
-            >
-                <div v-for="o in themeOptions" :key="o.value" class="flex items-center gap-2">
-                    <RadioGroupItem :id="`cfg-theme-${o.value}`" :value="o.value" class="size-4" />
-                    <Label :for="`cfg-theme-${o.value}`">{{ t(o.labelKey) }}</Label>
-                </div>
-            </RadioGroup>
-        </div>
+        <Card class="gap-0 rounded-lg p-4 shadow-none">
+            <CardHeader class="mb-3 gap-0 p-0">
+                <CardTitle class="text-sm font-semibold">{{ t("settings.appearance.theme") }}</CardTitle>
+            </CardHeader>
+            <CardContent class="p-0">
+                <RadioGroup
+                    :model-value="config.theme"
+                    class="flex flex-col gap-2"
+                    @update:model-value="(v: unknown) => (config.theme = v as ThemeMode)"
+                >
+                    <div v-for="o in themeOptions" :key="o.value" class="flex items-center gap-2">
+                        <RadioGroupItem :id="`cfg-theme-${o.value}`" :value="o.value" class="size-4" />
+                        <Label :for="`cfg-theme-${o.value}`">{{ t(o.labelKey) }}</Label>
+                    </div>
+                </RadioGroup>
+            </CardContent>
+        </Card>
 
         <!-- 强调色 -->
-        <div class="rounded-lg border p-4">
-            <h3 class="mb-3 text-sm font-semibold">{{ t("settings.appearance.accent") }}</h3>
-            <div class="flex flex-wrap items-center gap-2.5">
-                <button
-                    v-for="c in ACCENT_SWATCHES"
-                    :key="c"
-                    type="button"
-                    :aria-label="c"
-                    class="size-8 cursor-pointer rounded-full border border-border transition-transform hover:scale-110 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
-                    :class="config.appearance.accent === c ? 'ring-2 ring-ring ring-offset-2' : ''"
-                    :style="{ backgroundColor: c }"
-                    @click="setAppearance('accent', c)"
-                />
-                <label
-                    class="relative ml-1 inline-flex cursor-pointer items-center gap-2 rounded-md border border-dashed px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground"
-                >
-                    <input
-                        type="color"
-                        :value="config.appearance.accent"
-                        class="size-5 cursor-pointer appearance-none border-0 bg-transparent p-0"
-                        @input="(e) => setAppearance('accent', (e.target as HTMLInputElement).value)"
+        <Card class="gap-0 rounded-lg p-4 shadow-none">
+            <CardHeader class="mb-3 gap-0 p-0">
+                <CardTitle class="text-sm font-semibold">{{ t("settings.appearance.accent") }}</CardTitle>
+            </CardHeader>
+            <CardContent class="p-0">
+                <div class="flex flex-wrap items-center gap-2.5">
+                    <Button
+                        v-for="c in ACCENT_SWATCHES"
+                        :key="c"
+                        variant="ghost"
+                        size="icon"
+                        :aria-label="c"
+                        class="size-8 cursor-pointer rounded-full border border-border p-0 transition-transform hover:scale-110"
+                        :class="
+                            config.appearance.accent === c
+                                ? 'ring-2 ring-ring ring-offset-2'
+                                : ''
+                        "
+                        :style="{ backgroundColor: c }"
+                        @click="setAppearance('accent', c)"
                     />
-                    {{ t("settings.appearance.accentCustom") }}
-                </label>
-            </div>
-            <p class="mt-2 text-xs text-muted-foreground">{{ t("settings.appearance.accentHint") }}</p>
-        </div>
+                    <label
+                        class="relative ml-1 inline-flex cursor-pointer items-center gap-2 rounded-md border border-dashed px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground"
+                    >
+                        <input
+                            type="color"
+                            :value="config.appearance.accent"
+                            class="size-5 cursor-pointer appearance-none border-0 bg-transparent p-0"
+                            @input="(e) => setAppearance('accent', (e.target as HTMLInputElement).value)"
+                        />
+                        {{ t("settings.appearance.accentCustom") }}
+                    </label>
+                </div>
+                <p class="mt-2 text-xs text-muted-foreground">{{ t("settings.appearance.accentHint") }}</p>
+            </CardContent>
+        </Card>
 
         <!-- 列表密度 -->
-        <div class="rounded-lg border p-4">
-            <h3 class="mb-3 text-sm font-semibold">{{ t("settings.appearance.density") }}</h3>
-            <RadioGroup
-                :model-value="config.appearance.density"
-                class="flex flex-col gap-2"
-                @update:model-value="(v: unknown) => setAppearance('density', v as Density)"
-            >
-                <div v-for="o in densityOptions" :key="o.value" class="flex items-center gap-2">
-                    <RadioGroupItem :id="`cfg-density-${o.value}`" :value="o.value" class="size-4" />
-                    <Label :for="`cfg-density-${o.value}`">{{ t(o.labelKey) }}</Label>
-                </div>
-            </RadioGroup>
-        </div>
+        <Card class="gap-0 rounded-lg p-4 shadow-none">
+            <CardHeader class="mb-3 gap-0 p-0">
+                <CardTitle class="text-sm font-semibold">{{ t("settings.appearance.density") }}</CardTitle>
+            </CardHeader>
+            <CardContent class="p-0">
+                <RadioGroup
+                    :model-value="config.appearance.density"
+                    class="flex flex-col gap-2"
+                    @update:model-value="(v: unknown) => setAppearance('density', v as Density)"
+                >
+                    <div v-for="o in densityOptions" :key="o.value" class="flex items-center gap-2">
+                        <RadioGroupItem :id="`cfg-density-${o.value}`" :value="o.value" class="size-4" />
+                        <Label :for="`cfg-density-${o.value}`">{{ t(o.labelKey) }}</Label>
+                    </div>
+                </RadioGroup>
+            </CardContent>
+        </Card>
 
         <!-- 字体大小 -->
-        <div class="rounded-lg border p-4">
-            <h3 class="mb-3 text-sm font-semibold">{{ t("settings.appearance.fontSize") }}</h3>
-            <RadioGroup
-                :model-value="config.appearance.fontSize"
-                class="flex flex-col gap-2"
-                @update:model-value="(v: unknown) => setAppearance('fontSize', v as FontSize)"
-            >
-                <div v-for="o in fontSizeOptions" :key="o.value" class="flex items-center gap-2">
-                    <RadioGroupItem :id="`cfg-font-${o.value}`" :value="o.value" class="size-4" />
-                    <Label :for="`cfg-font-${o.value}`">{{ t(o.labelKey) }}</Label>
-                </div>
-            </RadioGroup>
-        </div>
+        <Card class="gap-0 rounded-lg p-4 shadow-none">
+            <CardHeader class="mb-3 gap-0 p-0">
+                <CardTitle class="text-sm font-semibold">{{ t("settings.appearance.fontSize") }}</CardTitle>
+            </CardHeader>
+            <CardContent class="p-0">
+                <RadioGroup
+                    :model-value="config.appearance.fontSize"
+                    class="flex flex-col gap-2"
+                    @update:model-value="(v: unknown) => setAppearance('fontSize', v as FontSize)"
+                >
+                    <div v-for="o in fontSizeOptions" :key="o.value" class="flex items-center gap-2">
+                        <RadioGroupItem :id="`cfg-font-${o.value}`" :value="o.value" class="size-4" />
+                        <Label :for="`cfg-font-${o.value}`">{{ t(o.labelKey) }}</Label>
+                    </div>
+                </RadioGroup>
+            </CardContent>
+        </Card>
 
         <!-- 主播卡片显示选项（直播页生效） -->
-        <div class="rounded-lg border p-4">
-            <h3 class="mb-1 text-sm font-semibold">{{ t("settings.appearance.cardTitle") }}</h3>
-            <p class="mb-3 text-xs text-muted-foreground">{{ t("settings.appearance.cardTitleHint") }}</p>
-            <div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                <div v-for="o in cardOptions" :key="o.key" class="flex items-center gap-2">
-                    <Checkbox
-                        :id="`cfg-card-${o.key}`"
-                        :checked="config.appearance[o.key]"
-                        class="size-4"
-                        @update:checked="(v: boolean | 'indeterminate') => setAppearance(o.key, v === true)"
-                    />
-                    <Label :for="`cfg-card-${o.key}`">{{ t(o.labelKey) }}</Label>
+        <Card class="gap-0 rounded-lg p-4 shadow-none">
+            <CardHeader class="mb-3 gap-1 p-0">
+                <CardTitle class="text-sm font-semibold">{{ t("settings.appearance.cardTitle") }}</CardTitle>
+                <p class="text-xs text-muted-foreground">{{ t("settings.appearance.cardTitleHint") }}</p>
+            </CardHeader>
+            <CardContent class="p-0">
+                <div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                    <div v-for="o in cardOptions" :key="o.key" class="flex items-center gap-2">
+                        <Checkbox
+                            :id="`cfg-card-${o.key}`"
+                            :checked="config.appearance[o.key]"
+                            class="size-4"
+                            @update:checked="(v: boolean | 'indeterminate') => setAppearance(o.key, v === true)"
+                        />
+                        <Label :for="`cfg-card-${o.key}`">{{ t(o.labelKey) }}</Label>
+                    </div>
                 </div>
-            </div>
-        </div>
+            </CardContent>
+        </Card>
     </div>
 </template>

@@ -1,14 +1,50 @@
 use std::sync::Arc;
 use tauri::{Manager, State};
 
-use crate::domain::config::manager::{ConfigManager, ImportSummary};
+use crate::domain::config::manager::{redact_proxy_url, ConfigManager, ImportSummary};
 use crate::domain::config::model::GlobalConfig;
 use crate::domain::services::cleanup::{run_cleanup, CleanupSummary};
 use crate::domain::services::file_cache::FileCacheHandle;
 use crate::infrastructure::error::types::AppError;
+use crate::infrastructure::i18n;
 use crate::infrastructure::logging::setup::LogLevelReload;
 use crate::infrastructure::notification::dispatcher::NotificationDispatcher;
 use crate::infrastructure::state::app_state::RecorderState;
+use crate::infrastructure::tray::TrayManager;
+use crate::tr;
+
+/// 同步前端语言到后端（前端 i18n 初始化/切换时调用；语言存前端 localStorage，
+/// 后端无法直接读取，需显式同步）。此后后端通知/错误提示/日志按当前语言输出。
+#[tauri::command]
+pub fn set_locale(app: tauri::AppHandle, locale: String) {
+    i18n::set_language(&locale);
+    // 托盘菜单文本按语言渲染：语言切换后强制重建（数据未变时 apply 会跳过重建，
+    // 菜单会保持旧语言直到录制数变化——M4 修复）
+    if let Some(manager) = app.try_state::<Arc<TrayManager>>() {
+        manager.refresh_menu_language();
+    }
+    // info 级别：切换语言时终端可见，便于确认后端语言已同步
+    tracing::info!("{}", tr!("config.locale_synced", locale = locale));
+}
+
+/// 日志脱敏：`proxy_password` → `***`、`proxy_addr` 内嵌凭据 → `user:***@`
+/// （避免明文密码进日志文件/调试页；与 debug_cmds::redact_config 同思路，
+/// 此处作用于 GlobalConfig）
+fn redact_global_config(config: &GlobalConfig) -> String {
+    let mut v = serde_json::to_value(config).unwrap_or(serde_json::Value::Null);
+    if let Some(global) = v.as_object_mut() {
+        global.insert(
+            "proxy_password".to_string(),
+            serde_json::Value::String("***".to_string()),
+        );
+        if let Some(addr) = global.get_mut("proxy_addr") {
+            if let Some(s) = addr.as_str() {
+                *addr = serde_json::Value::String(redact_proxy_url(s));
+            }
+        }
+    }
+    serde_json::to_string(&v).unwrap_or_else(|_| "<serialize failed>".to_string())
+}
 
 #[tauri::command]
 pub async fn get_config(
@@ -25,8 +61,8 @@ pub async fn get_config(
                 dispatcher
                     .info(
                         "config_not_found",
-                        "配置初始化",
-                        "未找到配置文件，已使用默认设置。请保存配置以生成文件。",
+                        tr!("config.not_found"),
+                        tr!("config.not_found_body"),
                     )
                     .await;
             }
@@ -37,8 +73,8 @@ pub async fn get_config(
             dispatcher
                 .error(
                     "config_load_error",
-                    "配置加载失败",
-                    format!("无法读取配置文件：{}", e),
+                    tr!("config.load_failed"),
+                    tr!("config.load_failed_body", err = e),
                 )
                 .await;
             Err(e)
@@ -62,11 +98,17 @@ pub async fn save_config(
     // 仅级别实际变化才热更新，避免每次保存都重建 callsite 缓存
     let prev_log_level = config_manager.load().ok().map(|c| c.global.log_level);
 
-    tracing::info!("保存配置");
-    tracing::info!("📥 后端接收到的全局配置: {:?}", config);
+    tracing::info!("{}", tr!("config.saving"));
     tracing::info!(
-        "配置保存路径: {}",
-        config_manager.global_config_path().display()
+        "{}",
+        tr!("config.received_config", config = redact_global_config(&config))
+    );
+    tracing::info!(
+        "{}",
+        tr!(
+            "config.save_path",
+            path = config_manager.global_config_path().display()
+        )
     );
 
     // 尝试保存，捕获错误
@@ -75,8 +117,8 @@ pub async fn save_config(
         dispatcher
             .error(
                 "config_save_failed",
-                "配置保存失败",
-                format!("保存配置文件时出错：{}", e),
+                tr!("config.save_failed"),
+                tr!("config.save_failed_body", err = e),
             )
             .await;
         return Err(e);
@@ -84,7 +126,11 @@ pub async fn save_config(
 
     // 保存成功，发送成功通知
     dispatcher
-        .info("config_save_ok", "配置保存成功", "配置已保存至文件")
+        .info(
+            "config_save_ok",
+            tr!("config.save_ok"),
+            tr!("config.save_ok_body"),
+        )
         .await;
 
     // 托盘图标可见性即时生效（简化后由 close_behavior 派生：tray→显示 / exit→隐藏）
@@ -99,7 +145,7 @@ pub async fn save_config(
     //（递归）。allow_directory 是运行时态（重启后 scope 恢复默认），应用启动时由
     // lib.rs setup 调用同一函数恢复放行（Task 20 Important-2）。
     if let Err(e) = allow_output_dir(&app, config_manager.inner()) {
-        tracing::warn!("保存配置后放行输出目录失败: {}", e);
+        tracing::warn!("{}", tr!("config.allow_dir_after_save_failed", err = e));
     }
 
     // U5：日志级别热更新——配置已成功落盘，运行中即时切换级别（白名单校验
@@ -129,7 +175,7 @@ pub(crate) fn allow_output_dir(
     if !config.global.output_dir.trim().is_empty() {
         app.asset_protocol_scope()
             .allow_directory(std::path::Path::new(&config.global.output_dir), true)
-            .map_err(|e| AppError::internal(format!("放行输出目录失败: {}", e)))?;
+            .map_err(|e| AppError::internal(tr!("config.allow_dir_failed", err = e)))?;
     }
     Ok(())
 }
@@ -174,7 +220,10 @@ pub(crate) async fn import_config(
         crate::infrastructure::tray::should_hide_to_tray(&effective.global.close_behavior),
     );
     if let Err(e) = allow_output_dir(&app, config_manager.inner()) {
-        tracing::warn!("导入配置后放行输出目录失败: {}", e);
+        tracing::warn!(
+            "{}",
+            tr!("config.allow_dir_after_import_failed", err = e)
+        );
     }
     // U5：导入的 log_level 同样热更新即时生效（无需重启）；仅级别实际变化时触发
     if prev_log_level.as_deref() != Some(effective.global.log_level.as_str()) {
@@ -183,16 +232,19 @@ pub(crate) async fn import_config(
     dispatcher
         .info(
             "config_import_ok",
-            "配置导入成功",
-            "配置已导入，日志级别已即时生效",
+            tr!("config.import_ok"),
+            tr!("config.import_ok_body"),
         )
         .await;
     tracing::info!(
-        "配置导入完成: mode={} anchors_added={} anchors_skipped={} anchors_removed={}",
-        summary.mode,
-        summary.anchors_added,
-        summary.anchors_skipped,
-        summary.anchors_removed
+        "{}",
+        tr!(
+            "config.import_done",
+            mode = summary.mode,
+            anchors_added = summary.anchors_added,
+            anchors_skipped = summary.anchors_skipped,
+            anchors_removed = summary.anchors_removed
+        )
     );
     Ok(summary)
 }
@@ -207,7 +259,7 @@ pub(crate) async fn reset_config(
     config_manager: State<'_, Arc<ConfigManager>>,
 ) -> Result<(), AppError> {
     config_manager.delete_all()?;
-    tracing::info!("配置已删除，应用即将重启进入首次运行向导");
+    tracing::info!("{}", tr!("config.reset_done"));
     app.restart();
 }
 
@@ -234,7 +286,7 @@ pub(crate) async fn set_autostart(
     result.map_err(|e| {
         AppError::system(
             crate::infrastructure::error::types::IO_WRITE_FAIL,
-            "设置开机自启失败",
+            tr!("config.autostart_failed"),
         )
         .with_technical(e.to_string())
     })?;
@@ -255,7 +307,7 @@ pub(crate) async fn set_shortcut(
     config_manager: State<'_, Arc<ConfigManager>>,
 ) -> Result<(), AppError> {
     if id.trim().is_empty() {
-        return Err(AppError::config("快捷键 id 不能为空"));
+        return Err(AppError::config(tr!("config.shortcut_id_empty")));
     }
     let mut config = config_manager.load()?;
     if keys.trim().is_empty() {
@@ -286,4 +338,31 @@ pub(crate) async fn run_cleanup_now(
         recorder_state.state.clone(),
     )
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// H1：save_config 日志脱敏——proxy_password 不得出现在日志输出中。
+    /// 用 serde_json 构造（GlobalConfig 实现 serde(default)），不依赖字段 Rust 类型。
+    #[test]
+    fn redact_global_config_blanks_proxy_password() {
+        let config: GlobalConfig = serde_json::from_str(r#"{"proxy_password":"s3cret"}"#).unwrap();
+        let s = redact_global_config(&config);
+        assert!(!s.contains("s3cret"), "明文密码泄漏进日志: {s}");
+        assert!(s.contains("***"), "脱敏占位符缺失: {s}");
+    }
+
+    /// M1：proxy_addr 内嵌凭据（http://user:pass@host）同样脱敏。
+    #[test]
+    fn redact_global_config_redacts_proxy_addr_credentials() {
+        let config: GlobalConfig = serde_json::from_str(
+            r#"{"proxy_password":"s3cret","proxy_addr":"http://user:pw@proxy.example.com:8080"}"#,
+        )
+        .unwrap();
+        let s = redact_global_config(&config);
+        assert!(!s.contains("user:pw@"), "内嵌凭据泄漏进日志: {s}");
+        assert!(s.contains("user:***@"), "代理 URL 密码未脱敏: {s}");
+    }
 }

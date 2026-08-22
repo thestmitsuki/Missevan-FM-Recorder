@@ -8,6 +8,7 @@ use crate::infrastructure::error::types::AppError;
 use crate::infrastructure::notification::dispatcher::NotificationDispatcher;
 use crate::infrastructure::state::app_state::RecorderState;
 pub use crate::infrastructure::state::mock_store::MockLiveData;
+use crate::tr;
 
 /// `mock:status_changed` 事件负载（前端 Mock 面板据此刷新状态）
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -32,14 +33,17 @@ pub async fn set_mock_live_data(
     if !state.mock_store.is_mock_mode() {
         state.mock_store.set_mode(true);
         state.mock_mode.store(true, Ordering::Relaxed);
-        tracing::info!("Mock 模式已启用");
+        tracing::info!("{}", tr!("debug.mock_mode_enabled"));
     }
 
     tracing::info!(
-        "模拟直播数据已更新: name={}, is_live={}, stream_url={}",
-        data.name,
-        data.is_live,
-        data.stream_url
+        "{}",
+        tr!(
+            "debug.mock_data_updated",
+            name = data.name,
+            is_live = data.is_live,
+            stream_url = data.stream_url
+        )
     );
 
     emit_mock_status_changed(&state).await;
@@ -62,17 +66,28 @@ pub async fn set_mock_mode(
 
     state.mock_store.set_mode(enable);
     state.mock_mode.store(enable, Ordering::Relaxed);
-    tracing::info!("模拟模式已{}", if enable { "启用" } else { "禁用" });
+    tracing::info!(
+        "{}",
+        crate::infrastructure::i18n::lookup(if enable {
+            "mock.mode_enabled"
+        } else {
+            "mock.mode_disabled"
+        })
+    );
 
     // 发送系统通知
     dispatcher
         .info(
             "mock_mode_toggle",
-            &format!("模拟模式已{}", if enable { "启用" } else { "禁用" }),
-            if enable {
-                "现在检测循环将使用模拟数据，请通过模拟控制面板调整主播信息。"
+            crate::infrastructure::i18n::lookup(if enable {
+                "mock.mode_enabled"
             } else {
-                "已切回真实直播检测。"
+                "mock.mode_disabled"
+            }),
+            if enable {
+                tr!("debug.mock_mode_body_enabled")
+            } else {
+                tr!("debug.mock_mode_body_disabled")
             },
         )
         .await;
@@ -99,7 +114,7 @@ async fn emit_mock_status_changed(state: &RecorderState) {
 /// 校验模拟主播条目（room_id 必填）
 fn validate_mock_anchor(anchor: &MockLiveData) -> Result<(), AppError> {
     if anchor.room_id.trim().is_empty() {
-        return Err(AppError::config("模拟主播房间号不能为空"));
+        return Err(AppError::config(tr!("debug.mock_room_id_empty")));
     }
     Ok(())
 }
@@ -120,7 +135,7 @@ pub async fn add_mock_anchor(
 ) -> Result<(), AppError> {
     validate_mock_anchor(&anchor)?;
     state.mock_store.upsert(anchor);
-    tracing::info!("[Mock] 已新增模拟主播");
+    tracing::info!("{}", tr!("debug.mock_added"));
     emit_mock_status_changed(&state).await;
     Ok(())
 }
@@ -134,7 +149,7 @@ pub async fn update_mock_anchor(
     let room_id = anchor.room_id.clone();
     validate_mock_anchor(&anchor)?;
     state.mock_store.upsert(anchor);
-    tracing::info!("[Mock] 已更新模拟主播: {}", room_id);
+    tracing::info!("{}", tr!("debug.mock_updated", room_id = room_id));
     emit_mock_status_changed(&state).await;
     Ok(())
 }
@@ -146,7 +161,7 @@ pub async fn remove_mock_anchor(
     room_id: String,
 ) -> Result<(), AppError> {
     state.mock_store.remove(&room_id);
-    tracing::info!("[Mock] 已删除模拟主播: {}", room_id);
+    tracing::info!("{}", tr!("debug.mock_removed", room_id = room_id));
     emit_mock_status_changed(&state).await;
     Ok(())
 }
@@ -159,8 +174,12 @@ pub async fn set_all_mock_live(
 ) -> Result<(), AppError> {
     state.mock_store.set_all_live(live);
     tracing::info!(
-        "[Mock] 全部模拟主播已{}",
-        if live { "开播" } else { "下播" }
+        "{}",
+        crate::infrastructure::i18n::lookup(if live {
+            "debug.mock_all_live"
+        } else {
+            "debug.mock_all_off"
+        })
     );
     emit_mock_status_changed(&state).await;
     Ok(())
@@ -170,7 +189,7 @@ pub async fn set_all_mock_live(
 #[tauri::command]
 pub async fn reset_mock(state: State<'_, RecorderState>) -> Result<(), AppError> {
     state.mock_store.reset();
-    tracing::info!("[Mock] 模拟数据已重置");
+    tracing::info!("{}", tr!("debug.mock_reset"));
     emit_mock_status_changed(&state).await;
     Ok(())
 }

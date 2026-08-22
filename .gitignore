@@ -1,41 +1,53 @@
+# ── 依赖与构建产物（构建时重新生成，不入库）──
 node_modules/
 dist/
 src-tauri/target/
-*.log
-.superpowers/sdd/
-# Claude Code 本机配置（含本机用户路径，不入库）
-.claude/
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-# OS
-.DS_Store
-Thumbs.db
-# Build artifacts
+src-tauri/gen/
 *.tsbuildinfo
-# Generated declaration files (from vue-tsc -b composite mode)
+# vue-tsc -b composite 模式生成的声明文件
 src/**/*.d.ts
 !src/env.d.ts
 !src/types/vue-material-3.d.ts
 vite.config.d.ts
 *.d.ts.map
 
-# 本地参考源与运行时产物（不进版本控制）
-# 注意：gitignore 不支持行内注释，注释必须独占一行
-# shadcn-vue v2.8.1 官方源码参考（磁盘保留，组件拷贝进 src/components/ui）
-shadcn-vue-dev/
-# FFmpeg 便携版二进制（未来由内置下载功能管理）
-ffmpeg/
-备份/
-# 录制输出
+# ── 运行时数据（含用户数据，不入库）──
 src-tauri/recordings/
-# 运行时配置（含用户数据）
 src-tauri/config/
 
-# 抓包/调试 fixture（含过期流签名，不进库）
-live_response.json
-room_info.json
-page.html
-GitHub/
+# ── 环境变量 ──
+.env
+.env.*
+!.env.example
+
+# ── 日志 ──
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# ── 测试产物与缓存 ──
+test-results/
+playwright-report/
+coverage/
+coverage.*
+.eslintcache
+.cache/
+
+# ── 本地化文件 ──
+*.local
+*.local.json
+
+# ── IDE / OS ──
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# ── 本地工具配置（含本机路径，不入库）──
+.claude/
+.superpowers/

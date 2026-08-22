@@ -20,7 +20,6 @@ import {
   CheckCircle,
   CircleX,
   Download,
-  LoaderCircle,
   RotateCw,
   TriangleAlert,
 } from "@lucide/vue";
@@ -31,8 +30,10 @@ import { useWizardStore } from "@/stores/wizardStore";
 import type { CheckResult, CheckStatus } from "@/types/health";
 
 import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Spinner } from "@/components/ui/spinner";
 
 const { t } = useI18n();
 const wizardStore = useWizardStore();
@@ -197,7 +198,7 @@ function statusIcon(status: CheckStatus) {
     case "Failed":
       return CircleX;
     default:
-      return LoaderCircle;
+      return Spinner;
   }
 }
 
@@ -260,22 +261,22 @@ function stageLabel(stage: string): string {
     <!-- 检查列表（加载骨架 / 卡片） -->
     <div class="mt-6 flex-1 space-y-4">
       <template v-if="checking && cards.length === 0">
-        <div
+        <Card
           v-for="i in 4"
           :key="i"
-          class="rounded-lg border p-4"
+          class="gap-0 rounded-lg p-4 shadow-none"
         >
           <Skeleton class="h-5 w-40" />
           <Skeleton class="mt-3 h-4 w-full" />
           <Skeleton class="mt-2 h-4 w-2/3" />
-        </div>
+        </Card>
       </template>
 
       <template v-else>
-        <div
+        <Card
           v-for="card in cards"
           :key="card.key"
-          class="rounded-lg border bg-card p-4"
+          class="gap-0 rounded-lg bg-card p-4 shadow-none"
         >
           <div class="flex items-center justify-between">
             <span class="text-sm font-medium">{{ t(card.labelKey) }}</span>
@@ -299,7 +300,7 @@ function stageLabel(stage: string): string {
               :disabled="download.active"
               @click="startDownload"
             >
-              <LoaderCircle v-if="download.active" class="size-3.5 animate-spin" />
+              <Spinner v-if="download.active" class="size-3.5" />
               <Download v-else class="size-3.5" />
               {{ t("wizard.downloadInstall") }}
             </Button>
@@ -314,13 +315,13 @@ function stageLabel(stage: string): string {
               {{ t("wizard.changeOutputDir") }}
             </Button>
           </div>
-        </div>
+        </Card>
       </template>
 
       <!-- 下载进度条 -->
-      <div
+      <Card
         v-if="download.active"
-        class="rounded-lg border bg-card p-4"
+        class="gap-0 rounded-lg bg-card p-4 shadow-none"
         role="progressbar"
         :aria-valuenow="download.percent"
         aria-valuemin="0"
@@ -331,7 +332,7 @@ function stageLabel(stage: string): string {
           <span>{{ download.percent }}%</span>
         </div>
         <Progress :model-value="download.percent" />
-      </div>
+      </Card>
 
       <!-- 下载失败：错误 + 手动下载链接 -->
       <div

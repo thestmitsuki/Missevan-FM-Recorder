@@ -45,6 +45,8 @@ import {
 import SideNav, { type SideNavItem } from "@/components/common/SideNav.vue";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Label } from "@/components/ui/label";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import {
     AlertDialog,
     AlertDialogCancel,
@@ -699,26 +701,28 @@ onMounted(async () => {
                     {{ t("settings.advanced.importModeDesc") }}
                 </AlertDialogDescription>
             </AlertDialogHeader>
-            <div class="flex flex-col gap-2 px-6">
-                <label class="flex cursor-pointer items-center gap-2 text-sm">
-                    <input
-                        v-model="importMode"
-                        type="radio"
+            <RadioGroup v-model="importMode" class="flex flex-col gap-2 px-6">
+                <div class="flex cursor-pointer items-center gap-2 text-sm">
+                    <RadioGroupItem
+                        id="import-mode-merge"
                         value="merge"
-                        class="size-4 accent-primary"
+                        class="size-4"
                     />
-                    {{ t("settings.advanced.importModeMerge") }}
-                </label>
-                <label class="flex cursor-pointer items-center gap-2 text-sm">
-                    <input
-                        v-model="importMode"
-                        type="radio"
+                    <Label for="import-mode-merge">{{
+                        t("settings.advanced.importModeMerge")
+                    }}</Label>
+                </div>
+                <div class="flex cursor-pointer items-center gap-2 text-sm">
+                    <RadioGroupItem
+                        id="import-mode-replace"
                         value="replace"
-                        class="size-4 accent-primary"
+                        class="size-4"
                     />
-                    {{ t("settings.advanced.importModeReplace") }}
-                </label>
-            </div>
+                    <Label for="import-mode-replace">{{
+                        t("settings.advanced.importModeReplace")
+                    }}</Label>
+                </div>
+            </RadioGroup>
             <AlertDialogFooter>
                 <AlertDialogCancel>{{ t("common.cancel") }}</AlertDialogCancel>
                 <Button @click="applyImport(importMode)">{{
@@ -783,6 +787,8 @@ onMounted(async () => {
     padding: 10px 14px;
     border-radius: 8px;
     font-size: 0.8125rem;
+    /* 所有变体（成功/错误/警告/信息）统一居中 */
+    text-align: center;
 }
 .settings-banner-info {
     background: color-mix(in oklab, var(--primary) 8%, transparent);
@@ -796,9 +802,10 @@ onMounted(async () => {
 }
 /* 部分失败警告（如开机自启设置失败但配置已保存） */
 .settings-banner-warn {
-    background: color-mix(in oklab, #f59e0b 10%, transparent);
-    color: #b45309;
-    border: 1px solid color-mix(in oklab, #f59e0b 25%, transparent);
+    /* 项目无 --warning/--amber 系列：用现有 token 最近似者（--chart-4 即主题的 amber-400） */
+    background: color-mix(in oklab, var(--chart-4) 10%, transparent);
+    color: color-mix(in oklab, var(--chart-4) 58%, black);
+    border: 1px solid color-mix(in oklab, var(--chart-4) 25%, transparent);
 }
 .settings-banner-success {
     background: color-mix(in oklab, var(--primary) 10%, transparent);

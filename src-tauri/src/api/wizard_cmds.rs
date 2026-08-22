@@ -32,16 +32,12 @@ use crate::infrastructure::state::app_state::RecorderState;
 #[cfg(windows)]
 use crate::infrastructure::error::types::IO_WRITE_FAIL;
 use crate::infrastructure::error::types::AppError;
+use crate::tr;
 
 /// FFmpeg 下载源（gyan.dev 官方构建，内含 ffmpeg.exe / ffprobe.exe；仅 Windows：
 /// 该源只有 Windows 构建，Linux 由用户安装系统包）
 #[cfg(windows)]
 const FFMPEG_DOWNLOAD_URL: &str = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip";
-/// 网络失败时提示手动下载（仅 Windows 下载路径使用）
-#[cfg(windows)]
-const MANUAL_DOWNLOAD_HINT: &str =
-    "请前往 https://ffmpeg.org/download.html 手动下载 FFmpeg，并在配置中设置 ffmpeg_path";
-
 /// 需要从 zip 中提取的可执行文件名（不含路径，匹配 zip 内任意子目录层级；
 /// 仅 Windows：gyan.dev zip 只含 .exe 构建）
 #[cfg(windows)]
@@ -60,16 +56,16 @@ const FFMPEG_ZIP_SHA256: Option<&str> = None;
 #[cfg(windows)]
 fn verify_ffmpeg_zip_sha256(zip_path: &std::path::Path) -> Result<(), AppError> {
     let Some(expected) = FFMPEG_ZIP_SHA256 else {
-        tracing::debug!("FFmpeg zip SHA256 校验未配置（占位），跳过校验");
+        tracing::debug!("{}", tr!("wizard.sha256_not_configured"));
         return Ok(());
     };
     use sha2::{Digest, Sha256};
     let mut file = std::fs::File::open(zip_path).map_err(|e| {
-        AppError::system(IO_WRITE_FAIL, "打开下载的 zip 失败").with_technical(e.to_string())
+        AppError::system(IO_WRITE_FAIL, tr!("wizard.open_zip_failed")).with_technical(e.to_string())
     })?;
     let mut hasher = Sha256::new();
     std::io::copy(&mut file, &mut hasher).map_err(|e| {
-        AppError::system(IO_WRITE_FAIL, "计算 zip SHA256 失败").with_technical(e.to_string())
+        AppError::system(IO_WRITE_FAIL, tr!("wizard.compute_sha256_failed")).with_technical(e.to_string())
     })?;
     let actual = hasher
         .finalize()
@@ -77,11 +73,11 @@ fn verify_ffmpeg_zip_sha256(zip_path: &std::path::Path) -> Result<(), AppError> 
         .map(|b| format!("{:02x}", b))
         .collect::<String>();
     if !actual.eq_ignore_ascii_case(expected) {
-        return Err(AppError::system(IO_WRITE_FAIL, "FFmpeg 下载校验失败（SHA256 不匹配）")
+        return Err(AppError::system(IO_WRITE_FAIL, tr!("wizard.sha256_mismatch"))
             .with_technical(format!("期望 {}，实际 {}", expected, actual))
-            .with_suggestion(MANUAL_DOWNLOAD_HINT));
+            .with_suggestion(tr!("wizard.manual_download_hint")));
     }
-    tracing::info!("FFmpeg zip SHA256 校验通过: {}", actual);
+    tracing::info!("{}", tr!("wizard.sha256_passed", actual = actual));
     Ok(())
 }
 
@@ -113,8 +109,8 @@ async fn tool_check(name: &str, candidates: &[std::path::PathBuf]) -> CheckResul
             return CheckResult {
                 check_name: name.to_string(),
                 status: CheckStatus::Passed,
-                message: format!("{} 可用: {}", name, version),
-                details: Some(format!("路径: {}", cand.display())),
+                message: tr!("wizard.tool_available", name = name, version = version),
+                details: Some(tr!("wizard.tool_path", path = cand.display())),
                 suggestion: None,
                 duration_ms: start.elapsed().as_millis() as u64,
             };
@@ -123,13 +119,13 @@ async fn tool_check(name: &str, candidates: &[std::path::PathBuf]) -> CheckResul
     CheckResult {
         check_name: name.to_string(),
         status: CheckStatus::Failed,
-        message: format!("未找到 {}", name),
+        message: tr!("wizard.tool_not_found", name = name),
         details: None,
         // Linux 不自动下载（决策 #3）：提示系统包安装命令；Windows 走「下载并安装」按钮
         suggestion: Some(if cfg!(target_os = "linux") {
-            "请自行安装 FFmpeg（Arch Linux 执行 sudo pacman -S ffmpeg），安装后重新检查".into()
+            tr!("wizard.linux_install_hint").to_string()
         } else {
-            "请点击“下载并安装”按钮自动安装，或手动下载后设置 ffmpeg_path".into()
+            tr!("wizard.download_install_hint").to_string()
         }),
         duration_ms: start.elapsed().as_millis() as u64,
     }
@@ -142,27 +138,27 @@ async fn write_permission_check(output_dir: &str) -> CheckResult {
     let probe = dir.join(format!(".missevan-write-test-{}", std::process::id()));
 
     let result: Result<(), String> = (|| {
-        std::fs::create_dir_all(dir).map_err(|e| format!("创建目录失败: {}", e))?;
-        std::fs::write(&probe, b"ok").map_err(|e| format!("写入测试文件失败: {}", e))?;
-        std::fs::remove_file(&probe).map_err(|e| format!("删除测试文件失败: {}", e))?;
+        std::fs::create_dir_all(dir).map_err(|e| tr!("wizard.create_dir_failed", err = e))?;
+        std::fs::write(&probe, b"ok").map_err(|e| tr!("wizard.write_test_failed", err = e))?;
+        std::fs::remove_file(&probe).map_err(|e| tr!("wizard.delete_test_failed", err = e))?;
         Ok(())
     })();
 
     match result {
         Ok(()) => CheckResult {
-            check_name: "输出目录写入权限".to_string(),
+            check_name: tr!("wizard.output_dir_write_permission").to_string(),
             status: CheckStatus::Passed,
-            message: "输出目录可写".to_string(),
-            details: Some(format!("目录: {}", output_dir)),
+            message: tr!("wizard.output_dir_writable").to_string(),
+            details: Some(tr!("wizard.output_dir_path", path = output_dir)),
             suggestion: None,
             duration_ms: start.elapsed().as_millis() as u64,
         },
         Err(msg) => CheckResult {
-            check_name: "输出目录写入权限".to_string(),
+            check_name: tr!("wizard.output_dir_write_permission").to_string(),
             status: CheckStatus::Failed,
-            message: format!("无写入权限：{}", msg),
+            message: tr!("wizard.no_write_permission", err = msg),
             details: None,
-            suggestion: Some("请更换输出目录，或检查目录权限".to_string()),
+            suggestion: Some(tr!("wizard.change_output_dir_hint").to_string()),
             duration_ms: start.elapsed().as_millis() as u64,
         },
     }
@@ -265,7 +261,7 @@ impl Drop for TempFileGuard {
     fn drop(&mut self) {
         if let Err(e) = std::fs::remove_file(&self.0) {
             if e.kind() != std::io::ErrorKind::NotFound {
-                tracing::warn!("清理临时文件失败 {:?}: {}", self.0, e);
+                tracing::warn!("{}", tr!("wizard.cleanup_temp_failed", path = format!("{:?}", self.0), err = e));
             }
         }
     }
@@ -292,21 +288,21 @@ fn flat_output_name(entry_name: &str) -> Option<&str> {
 #[cfg(windows)]
 fn extract_ffmpeg_zip(zip_path: &Path, target_dir: &Path) -> Result<Vec<PathBuf>, AppError> {
     std::fs::create_dir_all(target_dir).map_err(|e| {
-        AppError::system(IO_WRITE_FAIL, "创建 FFmpeg 目录失败").with_technical(e.to_string())
+        AppError::system(IO_WRITE_FAIL, tr!("wizard.create_ffmpeg_dir_failed")).with_technical(e.to_string())
     })?;
 
     let file = std::fs::File::open(zip_path).map_err(|e| {
-        AppError::system(IO_WRITE_FAIL, "打开下载的 zip 失败").with_technical(e.to_string())
+        AppError::system(IO_WRITE_FAIL, tr!("wizard.open_zip_failed")).with_technical(e.to_string())
     })?;
     let mut archive =
         zip::ZipArchive::new(file).map_err(|e| {
-            AppError::system(IO_WRITE_FAIL, "zip 文件损坏或格式不支持").with_technical(e.to_string())
+            AppError::system(IO_WRITE_FAIL, tr!("wizard.zip_corrupt")).with_technical(e.to_string())
         })?;
 
     let mut extracted = Vec::new();
     for i in 0..archive.len() {
         let mut entry = archive.by_index(i).map_err(|e| {
-            AppError::system(IO_WRITE_FAIL, "读取 zip 条目失败").with_technical(e.to_string())
+            AppError::system(IO_WRITE_FAIL, tr!("wizard.read_zip_entry_failed")).with_technical(e.to_string())
         })?;
         if !entry.is_file() {
             continue;
@@ -322,25 +318,25 @@ fn extract_ffmpeg_zip(zip_path: &Path, target_dir: &Path) -> Result<Vec<PathBuf>
         let _tmp_guard = TempFileGuard::new(tmp_path.clone());
         {
             let mut out = std::fs::File::create(&tmp_path).map_err(|e| {
-                AppError::system(IO_WRITE_FAIL, "创建输出文件失败").with_technical(e.to_string())
+                AppError::system(IO_WRITE_FAIL, tr!("wizard.create_output_file_failed")).with_technical(e.to_string())
             })?;
             std::io::copy(&mut entry, &mut out).map_err(|e| {
-                AppError::system(IO_WRITE_FAIL, "解压写入失败").with_technical(e.to_string())
+                AppError::system(IO_WRITE_FAIL, tr!("wizard.extract_write_failed")).with_technical(e.to_string())
             })?;
         }
         // Windows 的 rename 不覆盖已存在文件：先移除旧文件再替换。
         // 此时 .tmp 已完整写入并关闭句柄，替换窗口极短，不会出现半写状态
         let _ = std::fs::remove_file(&out_path);
         std::fs::rename(&tmp_path, &out_path).map_err(|e| {
-            AppError::system(IO_WRITE_FAIL, "替换输出文件失败").with_technical(e.to_string())
+            AppError::system(IO_WRITE_FAIL, tr!("wizard.replace_output_failed")).with_technical(e.to_string())
         })?;
         extracted.push(out_path);
     }
 
     if extracted.is_empty() {
         return Err(
-            AppError::system(IO_WRITE_FAIL, "zip 中未找到 ffmpeg.exe / ffprobe.exe")
-                .with_suggestion(MANUAL_DOWNLOAD_HINT),
+            AppError::system(IO_WRITE_FAIL, tr!("wizard.zip_no_ffmpeg"))
+                .with_suggestion(tr!("wizard.manual_download_hint")),
         );
     }
     Ok(extracted)
@@ -368,9 +364,9 @@ pub(crate) async fn download_ffmpeg(
         // 非 Windows 不使用参数（消除未使用警告）
         let _ = window;
         let message = if cfg!(target_os = "linux") {
-            "当前系统为 Linux，请自行安装 FFmpeg（Arch Linux 执行 sudo pacman -S ffmpeg），安装后重新检查"
+            tr!("wizard.linux_auto_install_unavailable")
         } else {
-            "当前系统不支持自动下载 FFmpeg，请自行安装后重新检查"
+            tr!("wizard.auto_download_unsupported")
         };
         return Err(AppError::system(
             crate::infrastructure::error::types::INT_UNEXPECTED,
@@ -390,7 +386,7 @@ async fn download_ffmpeg_windows(
 ) -> Result<DownloadFfmpegResult, AppError> {
     use tokio::io::AsyncWriteExt;
 
-    tracing::info!("开始下载 FFmpeg: {}", FFMPEG_DOWNLOAD_URL);
+    tracing::info!("{}", tr!("wizard.download_start", url = FFMPEG_DOWNLOAD_URL));
     DownloadProgress::emit(&window, 0, "connecting");
 
     // G9 例外说明：FFmpeg 下载**不**复用共享 HTTP client（spider.rs
@@ -403,9 +399,9 @@ async fn download_ffmpeg_windows(
         .timeout(std::time::Duration::from_secs(600))
         .build()
         .map_err(|e| {
-            AppError::network("创建下载客户端失败")
+            AppError::network(tr!("wizard.create_client_failed"))
                 .with_technical(e.to_string())
-                .with_suggestion(MANUAL_DOWNLOAD_HINT)
+                .with_suggestion(tr!("wizard.manual_download_hint"))
         })?;
 
     let resp = client
@@ -413,9 +409,9 @@ async fn download_ffmpeg_windows(
         .send()
         .await
         .map_err(|e| {
-            AppError::network("连接 FFmpeg 下载源失败")
+            AppError::network(tr!("wizard.connect_download_source_failed"))
                 .with_technical(e.to_string())
-                .with_suggestion(MANUAL_DOWNLOAD_HINT)
+                .with_suggestion(tr!("wizard.manual_download_hint"))
         })?;
 
     // 1. 流式下载到 {exe_dir}/ffmpeg/ 下的临时 zip。
@@ -425,17 +421,17 @@ async fn download_ffmpeg_windows(
     let zip_path = ffmpeg_dir.join("ffmpeg-release-essentials.zip");
     let _zip_guard = TempFileGuard::new(zip_path.clone());
     if !resp.status().is_success() {
-        return Err(AppError::network(format!("下载源返回异常状态码: {}", resp.status()))
-            .with_suggestion(MANUAL_DOWNLOAD_HINT));
+        return Err(AppError::network(tr!("wizard.download_source_bad_status", status = resp.status()))
+            .with_suggestion(tr!("wizard.manual_download_hint")));
     }
     let total = resp.content_length().unwrap_or(0);
 
     std::fs::create_dir_all(&ffmpeg_dir).map_err(|e| {
-        AppError::system(IO_WRITE_FAIL, "创建 FFmpeg 目录失败").with_technical(e.to_string())
+        AppError::system(IO_WRITE_FAIL, tr!("wizard.create_ffmpeg_dir_failed")).with_technical(e.to_string())
     })?;
 
     let mut file = tokio::fs::File::create(&zip_path).await.map_err(|e| {
-        AppError::system(IO_WRITE_FAIL, "创建下载临时文件失败").with_technical(e.to_string())
+        AppError::system(IO_WRITE_FAIL, tr!("wizard.create_download_temp_failed")).with_technical(e.to_string())
     })?;
 
     let mut stream = resp.bytes_stream();
@@ -443,12 +439,12 @@ async fn download_ffmpeg_windows(
     let mut last_percent: u8 = 0;
     while let Some(chunk) = stream.next().await {
         let chunk = chunk.map_err(|e| {
-            AppError::network("下载中断")
+            AppError::network(tr!("wizard.download_interrupted"))
                 .with_technical(e.to_string())
-                .with_suggestion(MANUAL_DOWNLOAD_HINT)
+                .with_suggestion(tr!("wizard.manual_download_hint"))
         })?;
         file.write_all(&chunk).await.map_err(|e| {
-            AppError::system(IO_WRITE_FAIL, "写入下载文件失败").with_technical(e.to_string())
+            AppError::system(IO_WRITE_FAIL, tr!("wizard.write_download_failed")).with_technical(e.to_string())
         })?;
         downloaded += chunk.len() as u64;
         let percent = if total > 0 {
@@ -462,14 +458,14 @@ async fn download_ffmpeg_windows(
         }
     }
     file.flush().await.map_err(|e| {
-        AppError::system(IO_WRITE_FAIL, "刷新下载文件失败").with_technical(e.to_string())
+        AppError::system(IO_WRITE_FAIL, tr!("wizard.flush_download_failed")).with_technical(e.to_string())
     })?;
     file.sync_all().await.map_err(|e| {
-        AppError::system(IO_WRITE_FAIL, "同步下载文件失败").with_technical(e.to_string())
+        AppError::system(IO_WRITE_FAIL, tr!("wizard.sync_download_failed")).with_technical(e.to_string())
     })?;
     drop(file);
     DownloadProgress::emit(&window, 100, "downloading");
-    tracing::info!("FFmpeg 下载完成: {} bytes", downloaded);
+    tracing::info!("{}", tr!("wizard.download_complete", bytes = downloaded));
 
     // 2. SHA256 完整性校验（占位启用）：期望哈希未配置时跳过，保持原逻辑；
     //    配置后在此拦截损坏/被篡改的 zip（失败时临时文件由 _zip_guard 清理）
@@ -483,10 +479,10 @@ async fn download_ffmpeg_windows(
         move || extract_ffmpeg_zip(&zip_path, &ffmpeg_dir)
     })
     .await
-    .map_err(|e| AppError::internal(format!("解压任务失败: {}", e)))??;
+    .map_err(|e| AppError::internal(tr!("wizard.extract_task_failed", err = e)))??;
     // 成功路径尽早删除临时 zip；失败路径由 _zip_guard 在析构时兜底清理
     let _ = std::fs::remove_file(&zip_path);
-    tracing::info!("FFmpeg 解压完成: {:?}", extracted);
+    tracing::info!("{}", tr!("wizard.extract_complete", paths = format!("{:?}", extracted)));
 
     // 4. 不再写配置（修复子代理 B 根因修复：配置文件的唯一写入点在向导最后一步
     //    「完成」按钮；旧实现在此 save_global 会把 ffmpeg 路径提前落盘，配置在
@@ -503,7 +499,7 @@ async fn download_ffmpeg_windows(
     };
     let result = check.run().await;
     DownloadProgress::emit(&window, 100, "done");
-    tracing::info!("FFmpeg 重检完成: {}", result.message);
+    tracing::info!("{}", tr!("wizard.recheck_complete", message = result.message));
     Ok(DownloadFfmpegResult {
         check: result,
         ffmpeg_path: Some(ffmpeg_exe.to_string_lossy().into_owned()),
@@ -515,7 +511,7 @@ async fn download_ffmpeg_windows(
 /// 停检测循环 → cancel 录制任务 → 等 JoinHandle ≤5s → exit）
 #[tauri::command]
 pub(crate) fn exit_app(app: tauri::AppHandle) {
-    tracing::info!("用户请求退出应用");
+    tracing::info!("{}", tr!("wizard.exit_requested"));
     crate::infrastructure::tray::request_shutdown(&app);
 }
 
@@ -675,7 +671,7 @@ mod tests {
 
         let out_dir = dir.join("out");
         let err = extract_ffmpeg_zip(&zip_path, &out_dir).unwrap_err();
-        assert!(err.message.contains("未找到 ffmpeg.exe"));
+        assert!(err.message.contains(&tr!("wizard.zip_no_ffmpeg")));
 
         let _ = std::fs::remove_dir_all(&dir);
     }

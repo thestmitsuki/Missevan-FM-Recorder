@@ -83,12 +83,12 @@ const statCards = () => {
                 :class="
                     stats?.running
                         ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400'
-                        : 'bg-red-500/15 text-red-600 dark:text-red-400'
+                        : 'bg-destructive/15 text-destructive'
                 "
             >
                 <span
                     class="mr-1.5 inline-block size-1.5 rounded-full"
-                    :class="stats?.running ? 'bg-emerald-500' : 'bg-red-500'"
+                    :class="stats?.running ? 'bg-emerald-500' : 'bg-destructive'"
                 />
                 {{ stats?.running ? t("debug.detector.running") : t("debug.detector.stopped") }}
             </Badge>
@@ -104,7 +104,7 @@ const statCards = () => {
             </span>
         </div>
 
-        <div v-if="errorMsg" class="mb-3 rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2 text-xs text-red-600 dark:text-red-400">
+        <div v-if="errorMsg" class="mb-3 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
             {{ errorMsg }}
         </div>
 

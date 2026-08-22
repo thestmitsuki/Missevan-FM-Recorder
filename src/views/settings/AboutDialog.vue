@@ -420,7 +420,7 @@ watch(open, (v) => {
                         class="ml-auto"
                         @click="openDownloadUrl(checkUrl)"
                     >
-                        <Download class="size-4" aria-hidden="true" />
+                        <Download class="size-6" aria-hidden="true" />
                         {{ t("about.downloadUpdate") }}
                     </Button>
                 </div>

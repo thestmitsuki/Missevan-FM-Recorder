@@ -1,0 +1,465 @@
+# ── 后端 i18n 键值表 ──────────────────────────────────────────────────────
+# 分层命名空间（嵌套 key）：[config] / [recorder] / [anchor] / [error] /
+# [wizard] / [update] / [debug] / [cleanup] / [cache] / [network] / [tray] /
+# [app] / [log] 等，最终 key 为 `namespace.key`（如 `config.save_ok`）。
+#
+# 条目格式：key = { zh = "中文原文", en = "English" }
+#   - zh 必须与代码中被替换的中文原文一致（zh 模式行为零变化）
+#   - 语言缺失回退 zh；key 缺失返回 key 本身并 warn（便于发现漏翻）
+#   - 新增语言：需同时扩展 loader（src/infrastructure/i18n.rs 的 set_language /
+#     lookup 目前只支持 zh/en），仅加字段（如 fr = "..."）不会被解析
+#
+# 命名占位符：{name} {count} {err} {path} 等，两端占位符名一致，翻译可调整
+# 语序（代码侧用 tr!("key", name = value) 传入）。
+#
+# 复数（en）：en = { one = "1 file", other = "{count} files" }，配合
+# tr_plural!("key", count, ...) 使用；zh 无复数，直接字符串。
+# ─────────────────────────────────────────────────────────────────────────
+
+[config]
+save_ok = { zh = "配置保存成功", en = "Configuration saved successfully" }
+save_ok_body = { zh = "配置已保存至文件", en = "Configuration saved to file" }
+save_failed = { zh = "配置保存失败", en = "Failed to save configuration" }
+save_failed_body = { zh = "保存配置文件时出错：{err}", en = "Error saving configuration file: {err}" }
+load_failed = { zh = "配置加载失败", en = "Failed to load configuration" }
+load_failed_body = { zh = "无法读取配置文件：{err}", en = "Failed to read configuration file: {err}" }
+not_found = { zh = "配置初始化", en = "Configuration initialized" }
+not_found_body = { zh = "未找到配置文件，已使用默认设置。请保存配置以生成文件。", en = "Configuration file not found; defaults applied. Save settings to create the file." }
+locale_synced = { zh = "后端语言已同步: {locale}", en = "Backend language synced: {locale}" }
+saving = { zh = "保存配置", en = "Saving configuration" }
+received_config = { zh = "📥 后端接收到的全局配置: {config}", en = "📥 Global configuration received by backend: {config}" }
+save_path = { zh = "配置保存路径: {path}", en = "Configuration save path: {path}" }
+allow_dir_after_save_failed = { zh = "保存配置后放行输出目录失败: {err}", en = "Failed to allow output directory after saving configuration: {err}" }
+allow_dir_failed = { zh = "放行输出目录失败: {err}", en = "Failed to allow output directory: {err}" }
+allow_dir_after_import_failed = { zh = "导入配置后放行输出目录失败: {err}", en = "Failed to allow output directory after importing configuration: {err}" }
+import_ok = { zh = "配置导入成功", en = "Configuration imported successfully" }
+import_ok_body = { zh = "配置已导入，日志级别已即时生效", en = "Configuration imported; log level applied immediately" }
+import_done = { zh = "配置导入完成: mode={mode} anchors_added={anchors_added} anchors_skipped={anchors_skipped} anchors_removed={anchors_removed}", en = "Configuration import complete: mode={mode} anchors_added={anchors_added} anchors_skipped={anchors_skipped} anchors_removed={anchors_removed}" }
+reset_done = { zh = "配置已删除，应用即将重启进入首次运行向导", en = "Configuration deleted; app is restarting into first-run setup" }
+autostart_failed = { zh = "设置开机自启失败", en = "Failed to set auto-start" }
+shortcut_id_empty = { zh = "快捷键 id 不能为空", en = "Shortcut id cannot be empty" }
+# ── 组 3：config/manager.rs + config/model.rs（配置读写 / 导入导出 / 校验）──
+read_failed = { zh = "读取配置失败: {err}", en = "Failed to read configuration: {err}" }
+corrupt_attempt_recover = { zh = "配置文件损坏: {path}（{err}），尝试从备份恢复", en = "Configuration file corrupt: {path} ({err}); attempting backup recovery" }
+recover_writeback_failed = { zh = "配置恢复后写回 config.toml 失败（本次加载不受影响）: {err}", en = "Failed to write recovered config back to config.toml (this load is unaffected): {err}" }
+corrupt_recovered = { zh = "配置文件损坏（{err}），已从备份恢复: {name}", en = "Configuration file corrupt ({err}); recovered from backup: {name}" }
+read_anchors_dir_failed = { zh = "读取主播目录失败: {err}", en = "Failed to read anchors directory: {err}" }
+read_dir_entry_failed = { zh = "读取目录条目失败", en = "Failed to read directory entry" }
+read_anchor_config_failed = { zh = "读取主播配置失败: {err}", en = "Failed to read anchor configuration: {err}" }
+anchor_corrupt_skipped = { zh = "主播配置文件损坏，已跳过加载: {path}（{err}）", en = "Anchor configuration file corrupt; skipped loading: {path} ({err})" }
+recovered_title = { zh = "配置已从备份恢复", en = "Configuration recovered from backup" }
+recovered_body = { zh = "配置文件损坏，已自动恢复备份（{name}）。请检查设置并重新保存。", en = "The configuration file was corrupt; a backup ({name}) was restored automatically. Please review your settings and save again." }
+unsupported_format = { zh = "不支持的录制格式: {format}（仅支持 m4a / mp3）", en = "Unsupported recording format: {format} (only m4a / mp3 are supported)" }
+create_dir_failed = { zh = "创建配置目录失败", en = "Failed to create configuration directory" }
+backup_failed = { zh = "创建配置备份失败（已跳过）: {err}", en = "Failed to create configuration backup (skipped): {err}" }
+serialize_failed = { zh = "序列化配置失败: {err}", en = "Failed to serialize configuration: {err}" }
+write_failed = { zh = "写入配置失败", en = "Failed to write configuration" }
+create_anchors_dir_failed = { zh = "创建主播目录失败", en = "Failed to create anchors directory" }
+serialize_anchor_failed = { zh = "序列化主播配置失败: {err}", en = "Failed to serialize anchor configuration: {err}" }
+read_backup_source_failed = { zh = "读取旧配置（备份源）失败", en = "Failed to read the old configuration (backup source)" }
+write_backup_failed = { zh = "写入配置备份失败", en = "Failed to write configuration backup" }
+corrupt_copy_kept = { zh = "损坏配置副本已保留供诊断: {path} -> {corrupt}", en = "Corrupt configuration copy preserved for diagnostics: {path} -> {corrupt}" }
+corrupt_copy_failed = { zh = "保留损坏配置副本失败（{path}）: {err}", en = "Failed to preserve corrupt configuration copy ({path}): {err}" }
+remove_anchor_failed = { zh = "删除主播配置失败", en = "Failed to delete anchor configuration" }
+delete_dir_failed = { zh = "删除配置目录失败", en = "Failed to delete configuration directory" }
+serialize_export_failed = { zh = "序列化导出配置失败: {err}", en = "Failed to serialize exported configuration: {err}" }
+unsupported_import_mode = { zh = "不支持的导入模式: {mode}（仅支持 replace / merge）", en = "Unsupported import mode: {mode} (only replace / merge are supported)" }
+import_invalid_json = { zh = "导入文件不是有效 JSON: {err}", en = "Import file is not valid JSON: {err}" }
+import_global_must_be_object = { zh = "导入的全局配置必须是 JSON 对象", en = "The imported global configuration must be a JSON object" }
+global_fields_invalid = { zh = "全局配置字段格式无效: {err}", en = "Invalid global configuration field format: {err}" }
+anchors_list_invalid = { zh = "主播列表格式无效: {err}", en = "Invalid anchors list format: {err}" }
+import_invalid_anchor_id = { zh = "主播列表包含非法 id，导入已中止: {err}", en = "Anchors list contains an invalid id; import aborted: {err}" }
+import_validation_failed = { zh = "导入配置校验失败: {errors}", en = "Imported configuration failed validation: {errors}" }
+serialize_local_failed = { zh = "序列化本地配置失败: {err}", en = "Failed to serialize local configuration: {err}" }
+anchor_id_empty = { zh = "主播 id 不能为空", en = "Anchor id cannot be empty" }
+anchor_id_too_long = { zh = "主播 id 长度超限（最大 64 字符）", en = "Anchor id exceeds the length limit (64 characters max)" }
+anchor_id_invalid_chars = { zh = "主播 id 含非法字符（仅允许字母、数字、-、_）", en = "Anchor id contains invalid characters (only letters, digits, - and _ are allowed)" }
+parse_failed = { zh = "解析配置失败: {err}", en = "Failed to parse configuration: {err}" }
+error_output_dir_empty = { zh = "输出目录不能为空", en = "Output directory cannot be empty" }
+error_disk_threshold_zero = { zh = "磁盘阈值必须大于 0", en = "Disk threshold must be greater than 0" }
+error_disk_threshold_max = { zh = "磁盘阈值不能超过 100000 GB", en = "Disk threshold cannot exceed 100000 GB" }
+error_segment_seconds_max = { zh = "分段秒数不能超过 86400", en = "Segment seconds cannot exceed 86400" }
+error_check_interval_min = { zh = "检测间隔不能小于 5 秒", en = "Check interval cannot be less than 5 seconds" }
+error_check_interval_max = { zh = "检测间隔不能超过 86400 秒", en = "Check interval cannot exceed 86400 seconds" }
+error_retention_days_max = { zh = "保留天数不能超过 3650 天", en = "Retention days cannot exceed 3650 days" }
+error_max_total_gb_max = { zh = "总大小上限不能超过 100000 GB", en = "Total size limit cannot exceed 100000 GB" }
+error_max_concurrent_max = { zh = "并发录制数不能超过 32", en = "Concurrent recordings cannot exceed 32" }
+error_pre_record_delay_max = { zh = "录制前延迟不能超过 86400 秒", en = "Pre-record delay cannot exceed 86400 seconds" }
+error_api_timeout_max = { zh = "API 超时不能超过 600 秒", en = "API timeout cannot exceed 600 seconds" }
+error_stream_timeout_max = { zh = "流超时不能超过 3600 秒", en = "Stream timeout cannot exceed 3600 seconds" }
+error_max_retries_max = { zh = "重试次数不能超过 20", en = "Retry count cannot exceed 20" }
+error_retry_delay_max = { zh = "重试间隔不能超过 3600 秒", en = "Retry delay cannot exceed 3600 seconds" }
+error_detector_concurrency_max = { zh = "检测并发数不能超过 64", en = "Detector concurrency cannot exceed 64" }
+error_detector_jitter_max = { zh = "检测抖动上限不能超过 86400 秒", en = "Detector jitter limit cannot exceed 86400 seconds" }
+error_bitrate_max = { zh = "码率不能超过 320 kbps", en = "Bitrate cannot exceed 320 kbps" }
+error_record_format = { zh = "录制格式不支持（仅支持 m4a / mp3）", en = "Recording format not supported (only m4a / mp3 are supported)" }
+
+[update]
+check_disabled = { zh = "检查更新已禁用（设置 > 通用 > 检查更新）", en = "Update check is disabled (Settings > General > Check for updates)" }
+check_failed_network = { zh = "检查更新失败（网络错误）：{err}", en = "Update check failed (network error): {err}" }
+check_failed_http = { zh = "检查更新失败（HTTP {status}）——项目可能尚未发布或网络受限", en = "Update check failed (HTTP {status}) — the project may not be published yet or the network is restricted" }
+check_failed_parse = { zh = "检查更新失败（响应解析错误）：{err}", en = "Update check failed (response parsing error): {err}" }
+check_failed_no_version = { zh = "检查更新失败（响应缺少版本信息）", en = "Update check failed (response missing version information)" }
+app_name = { zh = "Missevan 猫耳录制器", en = "Missevan Recorder" }
+url_not_allowed = { zh = "仅支持 http/https 链接", en = "Only http/https links are supported" }
+open_browser_failed = { zh = "打开浏览器失败：{err}", en = "Failed to open browser: {err}" }
+open_browser_ok = { zh = "已在默认浏览器打开链接: {url}", en = "Opened link in default browser: {url}" }
+
+[recorder]
+start_placeholder = { zh = "start_recording 为占位命令，当前版本未使用；请使用自动录制（检测循环）或 stop_recording 管理录制", en = "start_recording is a placeholder command not used in the current version; use automatic recording (detection loop) or stop_recording to manage recordings" }
+stopped = { zh = "录制已停止: anchor_id={anchor_id}", en = "Recording stopped: anchor_id={anchor_id}" }
+cancelled_pending_start = { zh = "已取消延迟中的录制启动: anchor_id={anchor_id}", en = "Cancelled delayed recording start: anchor_id={anchor_id}" }
+not_recording = { zh = "主播 {anchor_id} 未在录制中", en = "Anchor {anchor_id} is not currently recording" }
+stream_url_empty = { zh = "流地址为空，无法启动录制", en = "Stream URL is empty; cannot start recording" }
+create_output_dir_failed = { zh = "创建输出目录失败: {path}", en = "Failed to create output directory: {path}" }
+file_path = { zh = "[录制] 文件路径: {path}", en = "[Recording] File path: {path}" }
+absolute_path = { zh = "[录制] 绝对路径: {path}", en = "[Recording] Absolute path: {path}" }
+disk_low_pause_title = { zh = "磁盘空间不足，暂停新录制", en = "Low disk space; pausing new recordings" }
+disk_low_reject_body = { zh = "剩余 {available_gb} GB，低于阈值 {threshold_gb} GB，拒绝启动录制: {name}", en = "{available_gb} GB remaining, below the {threshold_gb} GB threshold; refusing to start recording: {name}" }
+disk_low_reject_log = { zh = "[录制] 磁盘空间不足（剩余 {available_gb} GB < 阈值 {threshold_gb} GB），拒绝启动录制: {name}", en = "[Recording] Insufficient disk space ({available_gb} GB < {threshold_gb} GB threshold); refusing to start recording: {name}" }
+disk_low_reject_msg = { zh = "磁盘空间不足（剩余 {available_gb} GB < 阈值 {threshold_gb} GB），拒绝启动录制: {name}", en = "Insufficient disk space ({available_gb} GB < {threshold_gb} GB threshold); refusing to start recording: {name}" }
+disk_low_suggestion = { zh = "请清理磁盘空间，或降低磁盘阈值设置（disk_space_limit_gb）", en = "Please free up disk space, or lower the disk threshold setting (disk_space_limit_gb)" }
+ffmpeg_spawn_failed = { zh = "启动 FFmpeg 进程失败", en = "Failed to start FFmpeg process" }
+duplicate_start_rejected = { zh = "拒绝重复录制启动（进程表已存在同主播）: {err}", en = "Duplicate recording start rejected (process table already has this anchor): {err}" }
+current_file_size = { zh = "[录制] 当前文件大小: {bytes} 字节", en = "[Recording] Current file size: {bytes} bytes" }
+file_not_created = { zh = "[录制] 文件尚未创建: {path}", en = "[Recording] File not created yet: {path}" }
+probe_failed = { zh = "[录制] 探测子进程状态失败（按 Unknown 处理，不误判崩溃）: {err}", en = "[Recording] Failed to probe child process status (treated as Unknown to avoid a false crash detection): {err}" }
+force_terminate_failed = { zh = "[录制] 退出前强制终止失败: {err}", en = "[Recording] Forced termination before exit failed: {err}" }
+ffmpeg_exited = { zh = "[录制] FFmpeg 进程已退出 (pid={pid}, status={status})", en = "[Recording] FFmpeg process exited (pid={pid}, status={status})" }
+wait_exit_failed = { zh = "[录制] 等待 FFmpeg 进程退出失败 (pid={pid}): {err}（不强杀，kill_on_drop 兜底）", en = "[Recording] Failed to wait for FFmpeg process exit (pid={pid}): {err} (no force kill; kill_on_drop fallback)" }
+graceful_timeout = { zh = "[录制] 优雅退出超时（{ms}ms），强制终止 FFmpeg (pid={pid})", en = "[Recording] Graceful exit timed out ({ms}ms); force-terminating FFmpeg (pid={pid})" }
+force_kill_failed = { zh = "[录制] 强制终止 FFmpeg 失败（kill_on_drop 兜底）: {err}", en = "[Recording] Failed to force-terminate FFmpeg (kill_on_drop fallback): {err}" }
+stop_action_mismatch = { zh = "[录制] 停止决策与等待结果不一致（action={action}），忽略", en = "[Recording] Stop decision inconsistent with wait result (action={action}); ignored" }
+stream_url_invalid = { zh = "流地址不是有效 URL", en = "Stream URL is not a valid URL" }
+scheme_unsupported = { zh = "流地址 scheme 不支持: {scheme}（仅允许 http/https）", en = "Stream URL scheme not supported: {scheme} (only http/https allowed)" }
+stream_url_missing_host = { zh = "流地址缺少主机名", en = "Stream URL is missing a host" }
+loopback_private_not_allowed = { zh = "流地址不允许使用回环/私网地址", en = "Stream URL must not use loopback/private addresses" }
+localhost_not_allowed = { zh = "流地址不允许使用 localhost", en = "Stream URL must not use localhost" }
+already_recording = { zh = "主播 {anchor_id} 已在录制中", en = "Anchor {anchor_id} is already recording" }
+concurrency_limit_reached = { zh = "已达并发录制上限（{max_concurrent} 个），拒绝启动新录制: {name}", en = "Concurrent recording limit reached ({max_concurrent}); refusing to start a new recording: {name}" }
+log_prefix = { zh = "[录制]", en = "[Recording]" }
+marker_created = { zh = "[录制] 已创建活动标记: {path}", en = "[Recording] Activity marker created: {path}" }
+marker_create_failed = { zh = "[录制] 创建活动标记失败（启动清理将无法识别本次产物）: {path}: {err}", en = "[Recording] Failed to create activity marker (startup cleanup will not recognize this session's files): {path}: {err}" }
+marker_remove_failed = { zh = "[录制] 移除活动标记失败: {path}: {err}", en = "[Recording] Failed to remove activity marker: {path}: {err}" }
+orphan_skip_symlink = { zh = "[孤儿清理] 跳过符号链接/junction 项（不跟随链接）: {path}", en = "[Orphan cleanup] Skipping symlink/junction entry (links not followed): {path}" }
+orphan_deleted = { zh = "[孤儿清理] 已删除: {path}", en = "[Orphan cleanup] Deleted: {path}" }
+orphan_delete_failed = { zh = "[孤儿清理] 删除失败（跳过）: {path}: {err}", en = "[Orphan cleanup] Delete failed (skipped): {path}: {err}" }
+marker_unreadable = { zh = "[孤儿清理] 发现无法读取的录制标记（跳过，不删除）: {path}", en = "[Orphan cleanup] Found an unreadable recording marker (skipped, not deleted): {path}" }
+marker_unparseable = { zh = "[孤儿清理] 发现无法解析的录制标记（跳过，不删除）: {path}", en = "[Orphan cleanup] Found an unparseable recording marker (skipped, not deleted): {path}" }
+marker_mismatch = { zh = "[孤儿清理] 录制标记内容与所在位置不一致（跳过，不删除）: {path}", en = "[Orphan cleanup] Recording marker content inconsistent with its location (skipped, not deleted): {path}" }
+marker_detected = { zh = "[孤儿清理] 检测到上次异常退出的录制标记: {path}（segmented={segmented}），清理残留产物", en = "[Orphan cleanup] Detected a recording marker from a previous abnormal exit: {path} (segmented={segmented}); cleaning up residual files" }
+orphan_partial_no_marker = { zh = "[孤儿清理] 发现无标记的半成品文件（仅告警，不删除——无规则可循）: {path}", en = "[Orphan cleanup] Found a partial file without marker (warning only, not deleted — no rule to follow): {path}" }
+cleanup_done = { zh = "[孤儿清理] 启动清理完成: 删除 {removed} 个文件 / 清理 {markers} 个录制标记 / 仅告警 {warnings} 个", en = "[Orphan cleanup] Startup cleanup complete: {removed} file(s) deleted / {markers} marker(s) cleaned / {warnings} warning(s) only" }
+cleanup_done_partials_only = { zh = "[孤儿清理] 启动清理完成: 仅发现 {warnings} 个无标记半成品（已告警，未删除）", en = "[Orphan cleanup] Startup cleanup complete: found only {warnings} partial file(s) without markers (warned, not deleted)" }
+crash_partial_renamed = { zh = "[录制] 录制崩溃产物已改名标记（.part，稍后自动清理）: {from} → {to}", en = "[Recording] Crash artifact renamed with a .part marker (auto-cleaned later): {from} → {to}" }
+crash_rename_failed = { zh = "[录制] 崩溃产物改名失败，直接删除: {path}: {err}", en = "[Recording] Failed to rename crash artifact; deleting directly: {path}: {err}" }
+crash_partials_done = { zh = "[录制] 崩溃半成品处置完成：{count} 个文件已改名标记（.part）或删除；auto_cleanup 语义不适用于崩溃残留，用户可手动删除 .part 文件，下次启动将自动清理", en = "[Recording] Crash partial handling complete: {count} file(s) renamed with a .part marker or deleted; auto_cleanup does not apply to crash residue — delete .part files manually and startup cleanup will remove them" }
+start_title = { zh = "开始录制: {name}", en = "Start recording: {name}" }
+start_body = { zh = "主播 {name} 的直播正在录制", en = "Anchor {name}'s live stream is being recorded" }
+cancelled_title = { zh = "录制已取消: {name}", en = "Recording cancelled: {name}" }
+cancelled_body = { zh = "用户取消或直播结束", en = "Cancelled by user or live stream ended" }
+timeout_title = { zh = "录制超时: {name}", en = "Recording timeout: {name}" }
+timeout_body = { zh = "超过 24 小时安全阀", en = "Exceeded the 24-hour safety limit" }
+crash_title = { zh = "录制进程异常退出: {name}", en = "Recording process exited abnormally: {name}" }
+crash_body = { zh = "FFmpeg 进程意外结束（exit={exit}），录制已停止", en = "FFmpeg process ended unexpectedly (exit={exit}); recording stopped" }
+crash_recorded = { zh = "[录制] 录制崩溃已记录（连续第 {count} 次；连续 {threshold} 次后暂停自动重启并指数退避）: {name}", en = "[Recording] Crash recorded (consecutive #{count}; auto-restart paused with exponential backoff after {threshold} consecutive crashes): {name}" }
+ended_title = { zh = "录制结束: {name}", en = "Recording ended: {name}" }
+ended_body = { zh = "FFmpeg 正常结束（流 EOF），录音已保存", en = "FFmpeg ended normally (stream EOF); recording saved" }
+check_disabled_title = { zh = "已停止录制: {name}", en = "Recording stopped: {name}" }
+check_disabled_body = { zh = "主播的「启用检测与自动录制」已关闭", en = "The anchor's “Enable detection & auto recording” is turned off" }
+config_load_failed_skip = { zh = "[录制] 读取配置失败（跳过检测开关兜底检查）: {err}", en = "[Recording] Failed to read configuration (skipping the check-toggle fallback): {err}" }
+disk_low_warn_title = { zh = "磁盘空间不足", en = "Low disk space" }
+disk_low_warn_body = { zh = "剩余 {available_gb} GB，低于阈值 {threshold_gb} GB；空间恢复前暂停新录制", en = "{available_gb} GB remaining, below the {threshold_gb} GB threshold; new recordings paused until space recovers" }
+disk_low_cleanup_warn = { zh = "[录制] 磁盘空间不足（剩余 {available_gb} GB < 阈值 {threshold_gb} GB），请及时清理", en = "[Recording] Low disk space ({available_gb} GB < {threshold_gb} GB threshold); please clean up in time" }
+live_ended_title = { zh = "直播结束: {name}", en = "Live stream ended: {name}" }
+live_ended_body = { zh = "API 返回未直播状态", en = "API reports the anchor is offline" }
+api_transient_error = { zh = "[录制] API 瞬时错误（不影响录制，保持直播判定）: {name}: {err}", en = "[Recording] Transient API error (recording unaffected; keeping live status): {name}: {err}" }
+api_check_failed_title = { zh = "API 检测失败 ({count}/{max}): {name}", en = "API check failed ({count}/{max}): {name}" }
+api_failed_stop_title = { zh = "API 连续失败，停止录制: {name}", en = "Repeated API failures; stopping recording: {name}" }
+api_failed_stop_body = { zh = "连续 3 次 API 调用失败", en = "3 consecutive API call failures" }
+task_removed = { zh = "录制任务已从状态中移除: {anchor_id}", en = "Recording task removed from state: {anchor_id}" }
+cache_refresh_failed = { zh = "文件缓存刷新失败: {err}", en = "Failed to refresh file cache: {err}" }
+post_open_folder_failed = { zh = "[录制后] 打开文件夹失败: {err}", en = "[Post-recording] Failed to open folder: {err}" }
+post_folder_opened = { zh = "[录制后] 已打开文件所在文件夹: {path}", en = "[Post-recording] Opened the folder containing the file: {path}" }
+post_open_folder_no_handle = { zh = "[录制后] open_folder 未提供 AppHandle，跳过", en = "[Post-recording] open_folder: AppHandle not provided; skipped" }
+post_executing_command = { zh = "[录制后] 执行自定义命令: {cmd}", en = "[Post-recording] Executing custom command: {cmd}" }
+post_command_started = { zh = "[录制后] 自定义命令已启动", en = "[Post-recording] Custom command started" }
+post_command_spawn_failed = { zh = "[录制后] 启动自定义命令失败: {err}", en = "[Post-recording] Failed to start custom command: {err}" }
+
+[debug]
+mock_ignored = { zh = "Mock 模式，忽略", en = "Mock mode, ignored" }
+disk_space = { zh = "磁盘空间", en = "Disk space" }
+config_load_check = { zh = "配置加载", en = "Configuration load" }
+config_load_failed = { zh = "配置加载失败: {err}", en = "Configuration load failed: {err}" }
+config_load_suggestion = { zh = "请检查配置文件是否存在，或使用 --mock 模式", en = "Check whether the configuration file exists, or use --mock mode" }
+diagnostic_ok = { zh = "诊断通过", en = "Diagnostics passed" }
+diagnostic_ok_body = { zh = "所有检查项均正常，系统准备就绪。", en = "All checks passed; the system is ready." }
+warning_detail = { zh = "{name}: (警告) {message}", en = "{name}: (warning) {message}" }
+unknown_error = { zh = "未知错误", en = "Unknown error" }
+diagnostic_failed = { zh = "诊断发现问题", en = "Diagnostics found issues" }
+diagnostic_failed_body = { zh = "检测到以下问题：{detail}", en = "The following issues were detected: {detail}" }
+cache_cleared = { zh = "文件缓存已清除（内存索引）", en = "File cache cleared (in-memory index)" }
+report_serialize_failed = { zh = "序列化诊断报告失败: {err}", en = "Failed to serialize diagnostic report: {err}" }
+ffmpeg_check_name = { zh = "FFmpeg 存在性", en = "FFmpeg availability" }
+ffmpeg_exec_failed = { zh = "{path} 执行失败（退出码: {code}）", en = "{path} execution failed (exit code: {code})" }
+ffmpeg_not_executable = { zh = "{path} 无法执行: {err}", en = "{path} could not be executed: {err}" }
+ffmpeg_probe_timeout = { zh = "{path} 试运行超时（>5s）", en = "{path} probe timed out (>5s)" }
+candidates_checked_failed = { zh = "已检查候选：{candidates}；最后失败：{failure}", en = "Checked candidates: {candidates}; last failure: {failure}" }
+candidates_checked = { zh = "已检查候选：{candidates}", en = "Checked candidates: {candidates}" }
+ffmpeg_not_found = { zh = "未找到 FFmpeg 可执行文件", en = "FFmpeg executable not found" }
+ffmpeg_not_found_suggestion = { zh = "请在设置中指定 ffmpeg_path，或在首次启动向导中点击「下载并安装」", en = "Set ffmpeg_path in settings, or click “Download & Install” in the first-run wizard" }
+disk_low = { zh = "磁盘空间不足: 剩余 {available} GB，阈值 {threshold} GB", en = "Insufficient disk space: {available} GB remaining, {threshold} GB threshold" }
+disk_low_suggestion = { zh = "请清理磁盘空间，或降低磁盘阈值设置", en = "Please free up disk space, or lower the disk threshold setting" }
+disk_ok = { zh = "磁盘空间充足: 剩余 {available} GB", en = "Sufficient disk space: {available} GB remaining" }
+disk_check_failed = { zh = "无法检测磁盘空间: {err}", en = "Failed to check disk space: {err}" }
+mock_mode_enabled = { zh = "Mock 模式已启用", en = "Mock mode enabled" }
+mock_mode_body_enabled = { zh = "现在检测循环将使用模拟数据，请通过模拟控制面板调整主播信息。", en = "The detection loop will now use mock data; adjust anchor info via the mock control panel." }
+mock_mode_body_disabled = { zh = "已切回真实直播检测。", en = "Switched back to real live detection." }
+mock_data_updated = { zh = "模拟直播数据已更新: name={name}, is_live={is_live}, stream_url={stream_url}", en = "Mock live data updated: name={name}, is_live={is_live}, stream_url={stream_url}" }
+mock_added = { zh = "[Mock] 已新增模拟主播", en = "[Mock] Mock anchor added" }
+mock_updated = { zh = "[Mock] 已更新模拟主播: {room_id}", en = "[Mock] Mock anchor updated: {room_id}" }
+mock_removed = { zh = "[Mock] 已删除模拟主播: {room_id}", en = "[Mock] Mock anchor removed: {room_id}" }
+mock_all_live = { zh = "[Mock] 全部模拟主播已开播", en = "[Mock] All mock anchors set live" }
+mock_all_off = { zh = "[Mock] 全部模拟主播已下播", en = "[Mock] All mock anchors set offline" }
+mock_reset = { zh = "[Mock] 模拟数据已重置", en = "[Mock] Mock data reset" }
+mock_room_id_empty = { zh = "模拟主播房间号不能为空", en = "Mock anchor room ID cannot be empty" }
+
+[wizard]
+sha256_not_configured = { zh = "FFmpeg zip SHA256 校验未配置（占位），跳过校验", en = "FFmpeg zip SHA256 verification not configured (placeholder); skipping" }
+open_zip_failed = { zh = "打开下载的 zip 失败", en = "Failed to open the downloaded zip" }
+compute_sha256_failed = { zh = "计算 zip SHA256 失败", en = "Failed to compute zip SHA256" }
+sha256_mismatch = { zh = "FFmpeg 下载校验失败（SHA256 不匹配）", en = "FFmpeg download verification failed (SHA256 mismatch)" }
+sha256_passed = { zh = "FFmpeg zip SHA256 校验通过: {actual}", en = "FFmpeg zip SHA256 verification passed: {actual}" }
+tool_available = { zh = "{name} 可用: {version}", en = "{name} available: {version}" }
+tool_path = { zh = "路径: {path}", en = "Path: {path}" }
+tool_not_found = { zh = "未找到 {name}", en = "{name} not found" }
+linux_install_hint = { zh = "请自行安装 FFmpeg（Arch Linux 执行 sudo pacman -S ffmpeg），安装后重新检查", en = "Please install FFmpeg manually (Arch Linux: run sudo pacman -S ffmpeg), then re-check" }
+download_install_hint = { zh = "请点击“下载并安装”按钮自动安装，或手动下载后设置 ffmpeg_path", en = "Click the “Download & Install” button to install automatically, or download manually and set ffmpeg_path" }
+create_dir_failed = { zh = "创建目录失败: {err}", en = "Failed to create directory: {err}" }
+write_test_failed = { zh = "写入测试文件失败: {err}", en = "Failed to write test file: {err}" }
+delete_test_failed = { zh = "删除测试文件失败: {err}", en = "Failed to delete test file: {err}" }
+output_dir_write_permission = { zh = "输出目录写入权限", en = "Output directory write permission" }
+output_dir_writable = { zh = "输出目录可写", en = "Output directory is writable" }
+output_dir_path = { zh = "目录: {path}", en = "Directory: {path}" }
+no_write_permission = { zh = "无写入权限：{err}", en = "No write permission: {err}" }
+change_output_dir_hint = { zh = "请更换输出目录，或检查目录权限", en = "Please change the output directory, or check directory permissions" }
+cleanup_temp_failed = { zh = "清理临时文件失败 {path}: {err}", en = "Failed to clean up temporary file {path}: {err}" }
+create_ffmpeg_dir_failed = { zh = "创建 FFmpeg 目录失败", en = "Failed to create FFmpeg directory" }
+zip_corrupt = { zh = "zip 文件损坏或格式不支持", en = "Zip file is corrupt or the format is not supported" }
+read_zip_entry_failed = { zh = "读取 zip 条目失败", en = "Failed to read zip entry" }
+create_output_file_failed = { zh = "创建输出文件失败", en = "Failed to create output file" }
+extract_write_failed = { zh = "解压写入失败", en = "Failed to write extracted data" }
+replace_output_failed = { zh = "替换输出文件失败", en = "Failed to replace output file" }
+zip_no_ffmpeg = { zh = "zip 中未找到 ffmpeg.exe / ffprobe.exe", en = "No ffmpeg.exe / ffprobe.exe found in the zip" }
+manual_download_hint = { zh = "请前往 https://ffmpeg.org/download.html 手动下载 FFmpeg，并在配置中设置 ffmpeg_path", en = "Please download FFmpeg manually from https://ffmpeg.org/download.html and set ffmpeg_path in the configuration" }
+linux_auto_install_unavailable = { zh = "当前系统为 Linux，请自行安装 FFmpeg（Arch Linux 执行 sudo pacman -S ffmpeg），安装后重新检查", en = "This system is Linux; please install FFmpeg manually (Arch Linux: run sudo pacman -S ffmpeg), then re-check" }
+auto_download_unsupported = { zh = "当前系统不支持自动下载 FFmpeg，请自行安装后重新检查", en = "Automatic FFmpeg download is not supported on this system; please install it manually and re-check" }
+download_start = { zh = "开始下载 FFmpeg: {url}", en = "Start downloading FFmpeg: {url}" }
+create_client_failed = { zh = "创建下载客户端失败", en = "Failed to create download client" }
+connect_download_source_failed = { zh = "连接 FFmpeg 下载源失败", en = "Failed to connect to FFmpeg download source" }
+download_source_bad_status = { zh = "下载源返回异常状态码: {status}", en = "Download source returned unexpected status code: {status}" }
+create_download_temp_failed = { zh = "创建下载临时文件失败", en = "Failed to create download temp file" }
+download_interrupted = { zh = "下载中断", en = "Download interrupted" }
+write_download_failed = { zh = "写入下载文件失败", en = "Failed to write download file" }
+flush_download_failed = { zh = "刷新下载文件失败", en = "Failed to flush download file" }
+sync_download_failed = { zh = "同步下载文件失败", en = "Failed to sync download file" }
+download_complete = { zh = "FFmpeg 下载完成: {bytes} bytes", en = "FFmpeg download complete: {bytes} bytes" }
+extract_task_failed = { zh = "解压任务失败: {err}", en = "Extraction task failed: {err}" }
+extract_complete = { zh = "FFmpeg 解压完成: {paths}", en = "FFmpeg extraction complete: {paths}" }
+recheck_complete = { zh = "FFmpeg 重检完成: {message}", en = "FFmpeg re-check complete: {message}" }
+exit_requested = { zh = "用户请求退出应用", en = "User requested to exit the application" }
+
+[anchor]
+cookie_too_long = { zh = "Cookie 过长（{len} 字节，上限 {max} 字节）", en = "Cookie too long ({len} bytes, limit {max} bytes)" }
+cookie_too_long_title = { zh = "Cookie 过长", en = "Cookie too long" }
+avatar_fetch_failed = { zh = "获取主播 {anchor_id} 头像失败: {err}", en = "Failed to fetch avatar for anchor {anchor_id}: {err}" }
+status_start = { zh = "[get_recording_status] 开始执行", en = "[get_recording_status] start" }
+status_config_load_failed = { zh = "[get_recording_status] 加载配置失败: {err}", en = "[get_recording_status] failed to load configuration: {err}" }
+status_anchor_count = { zh = "[get_recording_status] 配置中主播数: {count}", en = "[get_recording_status] anchors in configuration: {count}" }
+status_returning = { zh = "[get_recording_status] 即将返回 {count} 条状态", en = "[get_recording_status] about to return {count} statuses" }
+stopped_recording = { zh = "已停止录制: {anchor_id}", en = "Recording stopped: {anchor_id}" }
+cancelled_pending_start = { zh = "已取消延迟中的录制启动: {anchor_id}", en = "Cancelled delayed recording start: {anchor_id}" }
+recording_not_found = { zh = "未找到录制任务: {anchor_id}", en = "Recording task not found: {anchor_id}" }
+recording_not_found_suggestion = { zh = "请确认主播ID是否正确，或任务是否已结束。", en = "Please confirm that the anchor ID is correct, or whether the task has ended." }
+cannot_extract_room_id = { zh = "无法从主页地址提取房间号", en = "Failed to extract room ID from the profile URL" }
+url_format_hint = { zh = "请确保URL格式为 https://fm.missevan.com/live/数字", en = "Please ensure the URL format is https://fm.missevan.com/live/<number>" }
+url_parse_failed = { zh = "URL解析失败", en = "URL parsing failed" }
+room_id_digits_only = { zh = "房间号必须是纯数字", en = "Room ID must contain only digits" }
+room_id_digits_hint = { zh = "请填写 https://fm.missevan.com/live/数字 中的数字部分", en = "Please fill in the numeric part of https://fm.missevan.com/live/<number>" }
+room_id_invalid = { zh = "房间号无效", en = "Invalid room ID" }
+fetch_profile_failed = { zh = "获取主播信息失败", en = "Failed to fetch anchor information" }
+room_exists = { zh = "该主播已添加（房间号 {room_id} 已存在）", en = "This anchor has already been added (room ID {room_id} already exists)" }
+room_exists_suggestion = { zh = "请检查主播列表，避免为同一直播间添加多个条目", en = "Please check the anchor list and avoid adding multiple entries for the same live room" }
+add_failed = { zh = "添加主播失败", en = "Failed to add anchor" }
+id_exists = { zh = "主播ID '{id}' 已存在", en = "Anchor ID '{id}' already exists" }
+id_exists_suggestion = { zh = "请刷新列表或使用不同的ID", en = "Please refresh the list or use a different ID" }
+url_in_use = { zh = "主播URL '{url}' 已被占用", en = "Anchor URL '{url}' is already in use" }
+url_check_hint = { zh = "请检查URL是否正确", en = "Please check whether the URL is correct" }
+add_ok = { zh = "添加成功", en = "Anchor added" }
+add_ok_body = { zh = "主播 “{name}” 已添加", en = "Anchor “{name}” has been added" }
+added_log = { zh = "添加主播: {name}", en = "Anchor added: {name}" }
+not_found = { zh = "主播 {anchor_id} 不存在", en = "Anchor {anchor_id} does not exist" }
+remove_failed = { zh = "删除失败", en = "Failed to delete" }
+stopped_recording_task = { zh = "已停止录制任务: {anchor_id}", en = "Stopped recording task: {anchor_id}" }
+remove_config_failed = { zh = "删除主播配置失败", en = "Failed to delete anchor configuration" }
+remove_ok = { zh = "删除成功", en = "Anchor deleted" }
+remove_ok_body = { zh = "主播 “{name}” 已移除", en = "Anchor “{name}” has been removed" }
+removed_log = { zh = "删除主播: {anchor_id} ({name})", en = "Anchor deleted: {anchor_id} ({name})" }
+id_not_found = { zh = "未找到主播ID: {anchor_id}", en = "Anchor ID not found: {anchor_id}" }
+cannot_extract_room_id_from_url = { zh = "无法从 URL 提取房间号", en = "Failed to extract room ID from URL" }
+refresh_ok = { zh = "刷新成功", en = "Anchor refreshed" }
+refresh_ok_body = { zh = "主播 “{name}” 信息已更新", en = "Anchor “{name}” information has been updated" }
+update_failed = { zh = "更新失败", en = "Failed to update" }
+check_disabled_stopped = { zh = "关闭检测开关，已停止录制: {anchor_id}", en = "Check toggle disabled; recording stopped: {anchor_id}" }
+recording_stopped_title = { zh = "录制已停止", en = "Recording stopped" }
+recording_stopped_body = { zh = "已关闭「启用检测与自动录制」，主播“{name}”的录制已停止", en = "“Enable detection & auto recording” was turned off; recording for anchor “{name}” has been stopped" }
+update_ok = { zh = "更新成功", en = "Anchor updated" }
+update_ok_body = { zh = "主播“{name}”已更新", en = "Anchor “{name}” has been updated" }
+partial_saved_title = { zh = "已保存，但网络校验失败", en = "Saved, but network check failed" }
+partial_saved_body = { zh = "主播“{name}”的配置已保存到本地；无法联网获取最新名称/头像，可在网络恢复后点击「刷新信息」", en = "Anchor “{name}”'s configuration was saved locally; the latest name/avatar could not be fetched online. Click “Refresh Info” after the network recovers" }
+updated_log = { zh = "更新主播: {anchor_id} -> {name}", en = "Anchor updated: {anchor_id} -> {name}" }
+rollback_failed = { zh = "回滚主播配置失败: {err}", en = "Failed to roll back anchor configuration: {err}" }
+network_fetch_failed = { zh = "[update_anchor] 网络获取主播 {anchor_id} 信息失败（本地保存不受影响，名称/头像未自动更新）: {err}", en = "[update_anchor] Failed to fetch anchor {anchor_id} info over the network (local save unaffected; name/avatar not auto-updated): {err}" }
+
+[detector]
+shutdown_signal = { zh = "收到退出信号，检测循环停止", en = "Shutdown signal received; detection loop stopped" }
+disk_low_pause_auto = { zh = "[检测] 磁盘空间不足（剩余 {available_gb} GB < 阈值 {threshold_gb} GB），本轮暂停自动录制启动", en = "[Detection] Insufficient disk space ({available_gb} GB < {threshold_gb} GB threshold); pausing auto-record start this round" }
+rate_limited_skip = { zh = "[检测] 429 冷却中，本轮跳过（保持上一状态）: {name} (room_id={room_id})", en = "[Detection] 429 cooldown active; skipping this round (keeping previous state): {name} (room_id={room_id})" }
+mock_check = { zh = "[Mock] 检测主播 {name} (room_id={room_id})", en = "[Mock] Checking anchor {name} (room_id={room_id})" }
+rate_limit_cooldown = { zh = "[检测] 429 限流，冷却 {seconds}s: {name} (room_id={room_id})", en = "[Detection] 429 rate limited; cooling for {seconds}s: {name} (room_id={room_id})" }
+check_failed_retry = { zh = "[检测] 检测失败({kind})，{seconds}s 后重试 {attempt}/{max}: {name} (room_id={room_id})", en = "[Detection] Check failed ({kind}); retrying in {seconds}s ({attempt}/{max}): {name} (room_id={room_id})" }
+check_result = { zh = "[检测] anchor={name} room_id={room_id} is_live={is_live} enable_check={enable_check} has_stream={has_stream}", en = "[Detection] anchor={name} room_id={room_id} is_live={is_live} enable_check={enable_check} has_stream={has_stream}" }
+crash_blocked_skip = { zh = "[检测] 录制崩溃熔断中，本轮跳过自动重启: {name} (room_id={room_id})", en = "[Detection] Crash circuit breaker active; skipping auto-restart this round: {name} (room_id={room_id})" }
+disk_low_skip_start = { zh = "[检测] 磁盘空间不足，跳过自动录制启动: {name} (room_id={room_id})", en = "[Detection] Insufficient disk space; skipping auto-record start: {name} (room_id={room_id})" }
+trigger_auto_record = { zh = "[检测] 触发自动录制: {name} (room_id={room_id})", en = "[Detection] Auto-record triggered: {name} (room_id={room_id})" }
+already_recording_skip = { zh = "[检测] 已在录制中，跳过: {name}", en = "[Detection] Already recording; skipping: {name}" }
+status_unknown = { zh = "[检测] 状态未知（保持上一状态）: {name} (room_id={room_id}): {err}", en = "[Detection] Status unknown (keeping previous state): {name} (room_id={room_id}): {err}" }
+api_definite_failure = { zh = "[检测] API 明确失败，视为离线: {err}", en = "[Detection] API reported a definite failure; treating as offline: {err}" }
+
+[cleanup]
+read_dir_failed = { zh = "读取目录失败: {path}", en = "Failed to read directory: {path}" }
+meta_read_failed = { zh = "清理前读取元数据失败，跳过 {path}", en = "Failed to read metadata before cleanup; skipping {path}" }
+skip_symlink = { zh = "跳过删除符号链接/junction 项 {path}（S1 兜底）", en = "Skipping symlink/junction entry {path} (S1 fallback)" }
+delete_failed_keep = { zh = "清理失败 {path}: {err}（文件保留在磁盘与缓存中，下次清理可重试）", en = "Cleanup failed {path}: {err} (file kept on disk and in cache; retry on next cleanup)" }
+files_removed = { zh = "录制文件清理完成: 删除 {count} 个文件 / 释放 {bytes} 字节", en = { one = "Recording file cleanup complete: removed {count} file / freed {bytes} bytes", other = "Recording file cleanup complete: removed {count} files / freed {bytes} bytes" } }
+delete_failed_count = { zh = "{count} 个文件删除失败（已保留在缓存中，下次清理可重试）: {paths}", en = { one = "{count} file failed to delete (kept in cache; retry on next cleanup): {paths}", other = "{count} files failed to delete (kept in cache; retry on next cleanup): {paths}" } }
+task_failed = { zh = "清理任务异常: {err}", en = "Cleanup task error: {err}" }
+end_config_load_failed = { zh = "[录制结束] 读取配置失败，跳过自动清理: {err}", en = "[Recording end] Failed to read configuration; skipping auto cleanup: {err}" }
+end_auto_done = { zh = "[录制结束] 自动清理完成: 删除 {count} 个文件 / 释放 {bytes} 字节", en = { one = "[Recording end] Auto cleanup complete: removed {count} file / freed {bytes} bytes", other = "[Recording end] Auto cleanup complete: removed {count} files / freed {bytes} bytes" } }
+end_auto_failed = { zh = "[录制结束] 自动清理失败: {err}", en = "[Recording end] Auto cleanup failed: {err}" }
+
+[network]
+api_request_failed = { zh = "API 请求失败: {err}", en = "API request failed: {err}" }
+check_network_suggestion = { zh = "请检查网络连接和代理设置", en = "Please check your network connection and proxy settings" }
+read_response_failed = { zh = "读取响应失败: {err}", en = "Failed to read response: {err}" }
+json_parse_failed = { zh = "JSON 解析失败: {err}", en = "JSON parsing failed: {err}" }
+anchor_name_missing = { zh = "未找到主播名", en = "Anchor name not found" }
+verify_room_id_suggestion = { zh = "请确认房间号是否正确", en = "Please verify that the room ID is correct" }
+avatar_url_missing = { zh = "未找到头像URL", en = "Avatar URL not found" }
+unknown_proxy_type = { zh = "未知代理类型（降级为直连）: {kind}", en = "Unknown proxy type (falling back to direct connection): {kind}" }
+invalid_proxy_config = { zh = "代理配置无效（降级为直连）: {err}", en = "Invalid proxy configuration (falling back to direct connection): {err}" }
+create_http_client_failed = { zh = "创建 HTTP 客户端失败: {err}", en = "Failed to create HTTP client: {err}" }
+api_error_status = { zh = "API 返回错误状态: {status}", en = "API returned an error status: {status}" }
+
+[tray]
+icon_load_failed = { zh = "加载托盘图标失败: {err}", en = "Failed to load tray icon: {err}" }
+create_failed = { zh = "创建托盘失败: {err}", en = "Failed to create tray: {err}" }
+set_visible_failed = { zh = "设置托盘图标可见性失败: {err}", en = "Failed to set tray icon visibility: {err}" }
+visibility_changed = { zh = "托盘图标可见性: {visible}", en = "Tray icon visibility: {visible}" }
+polling_started = { zh = "托盘菜单轮询已启动（2s 间隔）", en = "Tray menu polling started (2s interval)" }
+menu_update_failed = { zh = "更新托盘菜单失败: {err}", en = "Failed to update tray menu: {err}" }
+menu_rebuild_failed = { zh = "重建托盘菜单失败: {err}", en = "Failed to rebuild tray menu: {err}" }
+clean_exit_marker_found = { zh = "检测到上次异常退出（标记文件 {path} 存在）：若托盘中残留旧图标，可鼠标悬停通知区清除", en = "Abnormal exit detected earlier (marker file {path} exists): if an old tray icon remains, hover over the notification area to clear it" }
+marker_write_failed = { zh = "写入退出标记失败（异常退出检测将不可用）: {err}", en = "Failed to write exit marker (abnormal exit detection unavailable): {err}" }
+marker_remove_failed = { zh = "移除退出标记失败: {err}", en = "Failed to remove exit marker: {err}" }
+shutdown_start = { zh = "开始优雅退出", en = "Starting graceful shutdown" }
+shutdown_no_config = { zh = "配置不存在（首次运行向导未完成），退出不保存配置", en = "Configuration does not exist (first-run wizard not completed); not saving on exit" }
+shutdown_save_failed = { zh = "退出前保存配置失败: {err}", en = "Failed to save configuration before exit: {err}" }
+shutdown_load_failed = { zh = "退出前读取配置失败: {err}", en = "Failed to read configuration before exit: {err}" }
+wait_tasks = { zh = "等待 {count} 个录制任务结束（≤5s）", en = "Waiting for {count} recording task(s) to finish (≤5s)" }
+force_terminate_count = { zh = "退出前强制终止 {count} 个剩余录制进程", en = "Force-terminating {count} remaining recording process(es) before exit" }
+shutdown_complete = { zh = "优雅退出完成", en = "Graceful shutdown complete" }
+menu_show_main = { zh = "显示主窗口", en = "Show Main Window" }
+menu_recording_count = { zh = "录制中：{count}", en = "Recording: {count}" }
+menu_exit = { zh = "退出应用", en = "Exit App" }
+menu_recent_empty = { zh = "暂无最近录制", en = "No recent recordings" }
+menu_recent = { zh = "最近录制", en = "Recent Recordings" }
+open_folder_failed = { zh = "打开最近录制所在文件夹失败（{path}）: {err}", en = "Failed to open folder of recent recording ({path}): {err}" }
+
+[app]
+unknown_location = { zh = "<未知位置>", en = "<unknown location>" }
+non_string_panic_payload = { zh = "<非字符串 panic 载荷>", en = "<non-string panic payload>" }
+main_window_not_found = { zh = "未找到主窗口", en = "Main window not found" }
+tray_ghost_title = { zh = "检测到上次异常退出 (Abnormal exit detected)", en = "Abnormal exit detected" }
+tray_ghost_body = { zh = "若托盘中残留旧图标，可将鼠标悬停通知区清除。If an old tray icon remains, hover over the notification area to clear it.", en = "If an old tray icon remains, hover over the notification area to clear it." }
+exe_path_failed = { zh = "获取当前可执行文件路径失败: {err}", en = "Failed to get the current executable path: {err}" }
+exe_dir_failed = { zh = "无法获取可执行文件所在目录", en = "Failed to determine the executable directory" }
+start_menu_dir_failed = { zh = "无法定位用户“开始菜单”目录（%APPDATA% 缺失）", en = "Failed to locate the user's Start Menu directory (%APPDATA% missing)" }
+shortcut_create_failed = { zh = "创建通知注册快捷方式失败: {err}", en = "Failed to create notification registration shortcut: {err}" }
+shortcut_description = { zh = "missevan-recorder 通知注册快捷方式", en = "missevan-recorder notification registration shortcut" }
+single_instance_busy = { zh = "单实例锁被占用（另一实例已在运行）: {path}", en = "Single-instance lock is held (another instance is running): {path}" }
+single_instance_failed = { zh = "获取单实例锁失败（{path}）: {err}", en = "Failed to acquire single-instance lock ({path}): {err}" }
+create_output_dir_failed = { zh = "创建输出目录失败", en = "Failed to create output directory" }
+open_output_dir_failed = { zh = "打开输出目录失败", en = "Failed to open output directory" }
+file_rename_active = { zh = "录制中的文件不能重命名", en = "Cannot rename a file that is being recorded" }
+file_no_extension = { zh = "文件没有扩展名", en = "File has no extension" }
+file_parent_missing = { zh = "无法获取文件所在目录", en = "Failed to determine the file's directory" }
+file_duplicate_name = { zh = "同名文件已存在: {path}（拒绝覆盖，请换一个名字）", en = "A file with the same name already exists: {path} (overwrite refused; please choose another name)" }
+file_delete_active = { zh = "录制中的文件不能删除", en = "Cannot delete a file that is being recorded" }
+path_convert_failed = { zh = "路径转换失败", en = "Failed to convert path" }
+file_not_found = { zh = "文件不存在", en = "File does not exist" }
+output_dir_not_found = { zh = "输出目录不存在", en = "Output directory does not exist" }
+path_outside_output_dir = { zh = "路径不在输出目录内", en = "Path is outside the output directory" }
+file_name_empty = { zh = "文件名不能为空", en = "File name cannot be empty" }
+file_name_invalid_path = { zh = "文件名含非法字符（不允许路径或 ..）", en = "File name contains invalid characters (path separators or .. are not allowed)" }
+file_name_invalid = { zh = "文件名含非法字符", en = "File name contains invalid characters" }
+pick_folder_failed = { zh = "目录选择对话框失败: {err}", en = "Directory picker dialog failed: {err}" }
+
+[log]
+panic_hook = { zh = "[panic] {msg}\n{location}", en = "[panic] {msg}\n{location}" }
+single_instance_exit = { zh = "检测到应用已在运行（单实例锁被占用），本实例退出", en = "Application already running (single-instance lock held); this instance exits" }
+close_hidden_to_tray = { zh = "关闭请求已拦截：最小化到系统托盘（close_behavior={close_behavior}）", en = "Close request intercepted: minimized to system tray (close_behavior={close_behavior})" }
+close_exit = { zh = "关闭请求：执行优雅退出（close_behavior={close_behavior}, 托盘可用={tray_available}）", en = "Close request: performing graceful exit (close_behavior={close_behavior}, tray available={tray_available})" }
+allow_dir_startup_failed = { zh = "启动时放行输出目录失败: {err}", en = "Failed to allow output directory at startup: {err}" }
+aumid_registered_skip = { zh = "通知 AUMID 已注册（安装器），跳过注册", en = "Notification AUMID already registered (installer); skipping registration" }
+aumid_register_failed = { zh = "通知 AUMID 注册失败，Windows toast 可能不可用: {err}", en = "Notification AUMID registration failed; Windows toast may be unavailable: {err}" }
+first_run_wizard = { zh = "首次运行：显示设置向导窗口（wizard），隐藏主窗口（main）", en = "First run: showing setup wizard window (wizard), hiding main window (main)" }
+not_first_run_wizard = { zh = "非首次运行：关闭设置向导窗口（wizard）", en = "Not first run: closing setup wizard window (wizard)" }
+tray_create_failed = { zh = "创建系统托盘失败: {err}", en = "Failed to create system tray: {err}" }
+minimized_keep_hidden = { zh = "--minimized：主窗口保持隐藏（驻留托盘）", en = "--minimized: main window kept hidden (residing in tray)" }
+minimized_ignored = { zh = "--minimized 已忽略：托盘创建失败，回退为显示主窗口", en = "--minimized ignored: tray creation failed, falling back to showing the main window" }
+client_create_failed = { zh = "创建 MissevanClient 失败: {err}", en = "Failed to create MissevanClient: {err}" }
+initial_cache_refresh_failed = { zh = "初始文件缓存刷新失败: {err}", en = "Initial file cache refresh failed: {err}" }
+stream_url_empty_abort = { zh = "流地址为空，放弃录制: {name}", en = "Stream URL is empty; aborting recording: {name}" }
+app_exiting_cancel_start = { zh = "应用正在退出，取消自动录制启动: {name}", en = "Application is exiting; cancelling auto-record start: {name}" }
+config_load_failed = { zh = "加载全局配置失败: {err}", en = "Failed to load global configuration: {err}" }
+auto_record_check_disabled = { zh = "[录制] 主播 {name} 已关闭自动检测，取消录制启动", en = "[Recording] Anchor {name} has disabled auto detection; cancelling recording start" }
+delayed_start_seconds = { zh = "[录制] {seconds} 秒后开始录制: {name}", en = "[Recording] Starting recording in {seconds} seconds: {name}" }
+pending_start_duplicate = { zh = "[录制] 已有延迟中的录制启动，跳过重复触发: {name}", en = "[Recording] A delayed recording start already exists; skipping duplicate trigger: {name}" }
+app_exiting_during_delay = { zh = "[录制] 应用正在退出（延迟期间），取消录制启动: {name}", en = "[Recording] Application is exiting (during delay); cancelling recording start: {name}" }
+recording_cancelled_during_delay = { zh = "[录制] 录制已取消（延迟期间），放弃录制: {name}", en = "[Recording] Recording cancelled (during delay); aborting: {name}" }
+config_recheck_failed = { zh = "加载全局配置失败（延迟结束复检）: {err}", en = "Failed to load global configuration (delay-end re-check): {err}" }
+auto_record_check_disabled_recheck = { zh = "[录制] 主播 {name} 已关闭自动检测（延迟结束复检），取消录制启动", en = "[Recording] Anchor {name} has disabled auto detection (delay-end re-check); cancelling recording start" }
+auto_record_start_failed = { zh = "自动录制启动失败: {err}", en = "Failed to start auto recording: {err}" }
+orphan_cleanup_done = { zh = "[孤儿清理] 启动清理完成: 删除 {removed} 个残留文件 / 清理 {markers} 个异常标记 / 仅告警 {warned} 个（输出目录: {path}）", en = "[Orphan cleanup] Startup cleanup complete: {removed} residual file(s) deleted / {markers} abnormal marker(s) cleaned / {warned} warning(s) (output directory: {path})" }
+config_load_failed_loop = { zh = "加载配置失败: {err}", en = "Failed to load configuration: {err}" }
+startup_complete = { zh = "应用启动完成", en = "Application startup complete" }
+reload_failed = { zh = "日志级别热更新失败（保持原级别）: {err}", en = "Failed to hot-reload log level (keeping current level): {err}" }
+level_reloaded = { zh = "日志级别已热更新为 {level}", en = "Log level hot-reloaded to {level}" }
+daily_cleanup = { zh = "[日志] 周期清理过期日志文件 {count} 个（保留 {days} 天）", en = "[Log] Periodically cleaned up {count} expired log file(s) (retaining {days} days)" }
+write_failed = { zh = "[日志] 日志文件写入失败（磁盘满或权限不足），错误日志不再落盘（已失败 {count} 次）", en = "[Log] Failed to write to log file (disk full or permission denied); error logs no longer written to disk (failed {count} times)" }
+file_unwritable_warn = { zh = "[日志] 警告：日志文件不可写（磁盘满或权限不足），本次运行日志不会落盘", en = "[Log] Warning: log file not writable (disk full or permission denied); logs for this run will not be written to disk" }
+file_unwritable = { zh = "[日志] 日志文件不可写（磁盘满或权限不足），本次运行日志不会落盘", en = "[Log] Log file not writable (disk full or permission denied); logs for this run will not be written to disk" }
+system_notify_failed = { zh = "发送系统通知失败 ({code}): {err} —— Windows toast 需已注册 AUMID {aumid}（启动时已注册，见日志）", en = "Failed to send system notification ({code}): {err} — Windows toast requires the registered AUMID {aumid} (registered at startup, see logs)" }
+system_notify_failed_short = { zh = "发送系统通知失败 ({code}): {err}", en = "Failed to send system notification ({code}): {err}" }
+shortcut_aumid_mismatch = { zh = "开始菜单快捷方式 {path} 的 AUMID 不匹配，将重新注册", en = "AUMID of Start Menu shortcut {path} does not match; re-registering" }
+shortcut_aumid_read_failed = { zh = "读取快捷方式 AUMID 失败（{path}），将重新注册: {err}", en = "Failed to read shortcut AUMID ({path}); re-registering: {err}" }
+aumid_registered = { zh = "已注册通知 AUMID（{aumid}）——toast 将以本应用身份显示", en = "Notification AUMID registered ({aumid}) — toast will be shown as this application" }
+crypto_decrypt_failed = { zh = "解密失败: {msg}", en = "Decryption failed: {msg}" }
+crypto_missing_prefix = { zh = "缺少密文前缀", en = "Missing ciphertext prefix" }
+crypto_base64_failed = { zh = "Base64 解码失败: {err}", en = "Base64 decoding failed: {err}" }
+crypto_utf8_failed = { zh = "解码结果不是有效 UTF-8", en = "Decoded result is not valid UTF-8" }
+
+[mock]
+mode_enabled = { zh = "模拟模式已启用", en = "Mock mode enabled" }
+mode_disabled = { zh = "模拟模式已禁用", en = "Mock mode disabled" }

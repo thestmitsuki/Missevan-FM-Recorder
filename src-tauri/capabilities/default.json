@@ -18,6 +18,7 @@
     "allow-get-recording-status",
     "allow-get-config",
     "allow-save-config",
+    "allow-set-locale",
     "allow-export-config",
     "allow-import-config",
     "allow-reset-config",

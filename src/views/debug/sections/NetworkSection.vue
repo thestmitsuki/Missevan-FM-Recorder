@@ -14,6 +14,11 @@ import type { NetworkLog } from "@/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+} from "@/components/ui/empty";
+import {
     Table,
     TableBody,
     TableCell,
@@ -60,7 +65,7 @@ function statusBadgeClass(status: number): string {
     if (status === 429)
         return "bg-amber-500/15 text-amber-600 dark:text-amber-400";
     if (status >= 500 || status === 0)
-        return "bg-red-500/15 text-red-600 dark:text-red-400";
+        return "bg-destructive/15 text-destructive";
     return "bg-muted text-muted-foreground";
 }
 
@@ -96,17 +101,21 @@ const totalCount = computed(() => logs.value.length);
 
         <div
             v-if="errorMsg"
-            class="mb-2 rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2 text-xs text-red-600 dark:text-red-400"
+            class="mb-2 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive"
         >
             {{ errorMsg }}
         </div>
 
-        <div
+        <Empty
             v-if="logs.length === 0"
-            class="rounded-md border border-dashed p-8 text-center text-sm text-muted-foreground"
+            class="rounded-md p-8 md:p-8"
         >
-            {{ t("debug.network.empty") }}
-        </div>
+            <EmptyContent>
+                <EmptyDescription>
+                    {{ t("debug.network.empty") }}
+                </EmptyDescription>
+            </EmptyContent>
+        </Empty>
 
         <div v-else class="overflow-x-auto rounded-md border max-w-full">
             <Table class="table-fixed w-full">
@@ -150,7 +159,7 @@ const totalCount = computed(() => logs.value.length);
                             }}</span>
                             <span
                                 v-if="log.error"
-                                class="block text-xs text-red-500"
+                                class="block text-xs text-destructive"
                                 :title="log.error"
                             >
                                 {{ log.error }}

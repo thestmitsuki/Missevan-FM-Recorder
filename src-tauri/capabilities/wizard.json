@@ -8,6 +8,7 @@
     "core:window:allow-set-theme",
     "allow-get-config",
     "allow-save-config",
+    "allow-set-locale",
     "allow-set-autostart",
     "allow-pick-output-dir",
     "allow-download-ffmpeg",

@@ -18,6 +18,7 @@ import { useWizardStore } from "@/stores/wizardStore";
 import { useThemeStore, type ThemeMode } from "@/stores/themeStore";
 
 import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
@@ -140,22 +141,20 @@ function handleNext() {
       <!-- 1. 语言 -->
       <div>
         <Label>{{ t("wizard.language") }}</Label>
-        <div class="mt-2 inline-flex rounded-md border bg-muted/40 p-0.5">
-          <button
+        <RadioGroup
+          :model-value="staged.language"
+          class="mt-2 flex gap-5"
+          @update:model-value="(v: unknown) => selectLanguage(v as AppLocale)"
+        >
+          <div
             v-for="opt in languageOptions"
             :key="opt.value"
-            type="button"
-            class="rounded px-3 py-1.5 text-sm transition-colors"
-            :class="
-              staged.language === opt.value
-                ? 'bg-primary text-primary-foreground shadow-sm'
-                : 'text-muted-foreground hover:text-foreground'
-            "
-            @click="selectLanguage(opt.value)"
+            class="flex items-center gap-2"
           >
-            {{ t(opt.labelKey) }}
-          </button>
-        </div>
+            <RadioGroupItem :id="`wizard-lang-${opt.value}`" :value="opt.value" />
+            <Label :for="`wizard-lang-${opt.value}`">{{ t(opt.labelKey) }}</Label>
+          </div>
+        </RadioGroup>
       </div>
 
       <!-- 2. 音频输出路径 -->
@@ -252,13 +251,13 @@ function handleNext() {
       </div>
 
       <!-- 6. 开机启动 -->
-      <div class="flex items-center justify-between rounded-lg border px-4 py-3">
+      <Card class="flex-row items-center justify-between gap-0 rounded-lg px-4 py-3 shadow-none">
         <Label for="wizard-autostart">{{ t("wizard.autostart") }}</Label>
         <Switch id="wizard-autostart" v-model:checked="staged.autostart" />
-      </div>
+      </Card>
 
       <!-- 7. 关闭窗口时最小化到系统托盘（Linux 未集成托盘：禁用 + 提示） -->
-      <div class="rounded-lg border px-4 py-3">
+      <Card class="gap-0 rounded-lg px-4 py-3 shadow-none">
         <div class="flex items-center justify-between">
           <Label for="wizard-tray">{{ t("wizard.trayMinimize") }}</Label>
           <Switch
@@ -274,27 +273,25 @@ function handleNext() {
         >
           {{ t("wizard.trayUnavailable") }}
         </p>
-      </div>
+      </Card>
 
       <!-- 8. 主题颜色 -->
       <div>
         <Label>{{ t("wizard.theme") }}</Label>
-        <div class="mt-2 inline-flex rounded-md border bg-muted/40 p-0.5">
-          <button
+        <RadioGroup
+          :model-value="staged.theme"
+          class="mt-2 flex gap-5"
+          @update:model-value="(v: unknown) => selectTheme(v as ThemeMode)"
+        >
+          <div
             v-for="opt in themeOptions"
             :key="opt.value"
-            type="button"
-            class="rounded px-3 py-1.5 text-sm transition-colors"
-            :class="
-              staged.theme === opt.value
-                ? 'bg-primary text-primary-foreground shadow-sm'
-                : 'text-muted-foreground hover:text-foreground'
-            "
-            @click="selectTheme(opt.value)"
+            class="flex items-center gap-2"
           >
-            {{ t(opt.labelKey) }}
-          </button>
-        </div>
+            <RadioGroupItem :id="`wizard-theme-${opt.value}`" :value="opt.value" />
+            <Label :for="`wizard-theme-${opt.value}`">{{ t(opt.labelKey) }}</Label>
+          </div>
+        </RadioGroup>
       </div>
     </div>
 

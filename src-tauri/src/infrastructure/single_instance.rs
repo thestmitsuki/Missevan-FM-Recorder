@@ -23,6 +23,8 @@
 //! fd 加锁同样被拒（LockFileEx / flock 均非重入），与旧命名互斥体语义相同，
 //! 可在单测中验证（同进程第二次 acquire 返回 None——与真实双开同一语义）。
 
+use crate::tr;
+
 /// 单实例守卫：持有已加锁的文件句柄，进程存活期间保持打开
 /// （Drop 时句柄关闭 → flock/LockFileEx 自动解锁；进程崩溃同样由内核
 /// 释放，无「死锁」残留）。
@@ -79,9 +81,12 @@ pub fn acquire(name: &str) -> Option<InstanceGuard> {
         Ok(()) => Some(InstanceGuard { _file: file }),
         Err(e) => {
             if e.kind() == std::io::ErrorKind::WouldBlock {
-                tracing::info!("单实例锁被占用（另一实例已在运行）: {}", path.display());
+                tracing::info!("{}", tr!("app.single_instance_busy", path = path.display()));
             } else {
-                tracing::warn!("获取单实例锁失败（{}）: {}", path.display(), e);
+                tracing::warn!(
+                    "{}",
+                    tr!("app.single_instance_failed", path = path.display(), err = e)
+                );
             }
             None
         }

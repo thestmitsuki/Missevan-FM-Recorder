@@ -12,6 +12,11 @@ import { Eraser } from "@lucide/vue";
 import { useNotificationStore } from "@/stores/notificationStore";
 import type { NotificationLevel } from "@/types";
 import { Button } from "@/components/ui/button";
+import {
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+} from "@/components/ui/empty";
 import { Input } from "@/components/ui/input";
 import { formatTime } from "./shared";
 import SectionCard from "./SectionCard.vue";
@@ -38,7 +43,7 @@ const levelChipClass = (level: NotificationLevel, active: boolean) => {
     case "Warning":
       return "border-amber-500 bg-amber-500/15 text-amber-600 dark:text-amber-400";
     case "Error":
-      return "border-red-500 bg-red-500/15 text-red-600 dark:text-red-400";
+      return "border-destructive bg-destructive/15 text-destructive";
     case "Critical":
       return "border-purple-500 bg-purple-500/15 text-purple-600 dark:text-purple-400";
   }
@@ -51,7 +56,7 @@ const levelTextClass = (level: NotificationLevel) => {
     case "Warning":
       return "text-amber-500";
     case "Error":
-      return "text-red-500";
+      return "text-destructive";
     case "Critical":
       return "text-purple-500";
   }
@@ -90,16 +95,16 @@ function clearAll() {
     >
         <div class="mb-3 flex flex-wrap items-center gap-2">
             <div class="flex flex-wrap items-center gap-1.5">
-                <button
+                <Button
                     v-for="lvl in LEVELS"
                     :key="lvl"
-                    type="button"
-                    class="rounded-full border px-2.5 py-0.5 text-xs font-medium transition-colors"
+                    variant="outline"
+                    class="h-auto rounded-full px-2.5 py-0.5 text-xs font-medium transition-colors"
                     :class="levelChipClass(lvl, levelFilter.has(lvl))"
                     @click="toggleLevel(lvl)"
                 >
                     {{ lvl }}
-                </button>
+                </Button>
             </div>
             <Input
                 v-model="search"
@@ -114,12 +119,16 @@ function clearAll() {
             </span>
         </div>
 
-        <div
+        <Empty
             v-if="filtered.length === 0"
-            class="rounded-md border border-dashed p-8 text-center text-sm text-muted-foreground"
+            class="rounded-md p-8 md:p-8"
         >
-            {{ t("debug.notifications.empty") }}
-        </div>
+            <EmptyContent>
+                <EmptyDescription>
+                    {{ t("debug.notifications.empty") }}
+                </EmptyDescription>
+            </EmptyContent>
+        </Empty>
 
         <div class="space-y-2">
             <div

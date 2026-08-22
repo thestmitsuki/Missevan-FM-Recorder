@@ -41,8 +41,8 @@ fn install_panic_hook() {
         let location = info
             .location()
             .map(|l| l.to_string())
-            .unwrap_or_else(|| "<未知位置>".to_string());
-        tracing::error!("[panic] {msg}\n{location}");
+            .unwrap_or_else(|| tr!("app.unknown_location").to_string());
+        tracing::error!("{}", tr!("log.panic_hook", msg = msg, location = location));
         default_hook(info);
     }));
 }
@@ -55,7 +55,7 @@ fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> String {
     } else if let Some(s) = payload.downcast_ref::<String>() {
         s.clone()
     } else {
-        "<非字符串 panic 载荷>".to_string()
+        tr!("app.non_string_panic_payload").to_string()
     }
 }
 
@@ -118,7 +118,7 @@ mod tests {
         assert_eq!(panic_payload_message(payload), "录制引擎失败");
         // 非字符串载荷（如 panic_any(42)）→ 固定占位，不 panic、不格式化
         let payload: &(dyn std::any::Any + Send) = &42i32;
-        assert_eq!(panic_payload_message(payload), "<非字符串 panic 载荷>");
+        assert_eq!(panic_payload_message(payload), tr!("app.non_string_panic_payload"));
     }
 }
 
@@ -174,7 +174,7 @@ pub fn run() {
     let Some(_single_instance_guard) = infrastructure::single_instance::acquire(
         "missevan-recorder-single-instance",
     ) else {
-        tracing::warn!("检测到应用已在运行（单实例锁被占用），本实例退出");
+        tracing::warn!("{}", tr!("log.single_instance_exit"));
         return;
     };
 
@@ -255,16 +255,19 @@ pub fn run() {
                         api.prevent_close();
                         let _ = window.hide();
                         tracing::info!(
-                            "关闭请求已拦截：最小化到系统托盘（close_behavior={}）",
-                            close_behavior
+                            "{}",
+                            tr!("log.close_hidden_to_tray", close_behavior = close_behavior)
                         );
                     }
                     tray::CloseAction::Exit => {
                         // 不 prevent_close：窗口正常关闭，随后统一优雅退出
                         tracing::info!(
-                            "关闭请求：执行优雅退出（close_behavior={}, 托盘可用={}）",
-                            close_behavior,
-                            tray_enabled.is_some_and(|e| e)
+                            "{}",
+                            tr!(
+                                "log.close_exit",
+                                close_behavior = close_behavior,
+                                tray_available = tray_enabled.is_some_and(|e| e)
+                            )
                         );
                         tray::request_shutdown(app);
                     }
@@ -281,6 +284,7 @@ pub fn run() {
             crate::api::anchor_cmds::get_recording_status,
             crate::api::config_cmds::get_config,
             crate::api::config_cmds::save_config,
+            crate::api::config_cmds::set_locale,
             crate::api::config_cmds::export_config,
             crate::api::config_cmds::import_config,
             crate::api::config_cmds::reset_config,
@@ -333,7 +337,9 @@ pub fn run() {
             // 注入 AppHandle 到调试日志层（此后日志事件才 emit `debug:log`）
             *log_handle_slot.lock().unwrap() = Some(handle.clone());
 
-            let window = handle.get_webview_window("main").expect("未找到主窗口");
+            let window = handle
+                .get_webview_window("main")
+                .expect(tr!("app.main_window_not_found"));
             let window_for_recording = window.clone();
 
             {
@@ -364,7 +370,7 @@ pub fn run() {
                 if let Err(e) =
                     crate::api::config_cmds::allow_output_dir(&handle, config_manager.inner())
                 {
-                    tracing::warn!("启动时放行输出目录失败: {}", e);
+                    tracing::warn!("{}", tr!("log.allow_dir_startup_failed", err = e));
                 }
             }
             // Task 18：启动时同步通知设置（系统通知开关/事件勾选立即生效）
@@ -381,10 +387,10 @@ pub fn run() {
                 match windows_toast::ensure_aumid_registered() {
                     Ok(true) => {}
                     Ok(false) => {
-                        tracing::debug!("通知 AUMID 已注册（安装器），跳过注册");
+                        tracing::debug!("{}", tr!("log.aumid_registered_skip"));
                     }
                     Err(e) => {
-                        tracing::warn!("通知 AUMID 注册失败，Windows toast 可能不可用: {}", e);
+                        tracing::warn!("{}", tr!("log.aumid_register_failed", err = e));
                     }
                 }
             }
@@ -407,7 +413,7 @@ pub fn run() {
             //（见下方「主窗口可见性」段——Task 17 修复：实现顺序调整）
             let is_first_run = app.state::<Arc<ConfigManager>>().is_first_run();
             if is_first_run {
-                tracing::info!("首次运行：显示设置向导窗口（wizard），隐藏主窗口（main）");
+                tracing::info!("{}", tr!("log.first_run_wizard"));
                 if let Some(wizard) = app.get_webview_window("wizard") {
                     let _ = wizard.show();
                 }
@@ -415,7 +421,7 @@ pub fn run() {
                     let _ = main_win.hide();
                 }
             } else {
-                tracing::info!("非首次运行：关闭设置向导窗口（wizard）");
+                tracing::info!("{}", tr!("log.not_first_run_wizard"));
                 if let Some(wizard) = app.get_webview_window("wizard") {
                     // 与 finish_wizard 同理：wizard 前端注册了 onCloseRequested 且 prevent_default()，
                     // close() 会被无条件取消；setup 期 JS 尚未挂载也会产生竞态。destroy() 直接销毁，
@@ -451,8 +457,8 @@ pub fn run() {
                         notifier
                             .warning(
                                 "TRAY_GHOST_HINT",
-                                "检测到上次异常退出 (Abnormal exit detected)",
-                                "若托盘中残留旧图标，可将鼠标悬停通知区清除。If an old tray icon remains, hover over the notification area to clear it.",
+                                tr!("app.tray_ghost_title"),
+                                tr!("app.tray_ghost_body"),
                             )
                             .await;
                     });
@@ -472,7 +478,7 @@ pub fn run() {
                     true
                 }
                 Err(e) => {
-                    tracing::error!("创建系统托盘失败: {}", e);
+                    tracing::error!("{}", tr!("log.tray_create_failed", err = e));
                     false
                 }
             };
@@ -486,9 +492,9 @@ pub fn run() {
                 if let Some(main_win) = app.get_webview_window("main") {
                     if start_minimized {
                         if tray_ok {
-                            tracing::info!("--minimized：主窗口保持隐藏（驻留托盘）");
+                            tracing::info!("{}", tr!("log.minimized_keep_hidden"));
                         } else {
-                            tracing::warn!("--minimized 已忽略：托盘创建失败，回退为显示主窗口");
+                            tracing::warn!("{}", tr!("log.minimized_ignored"));
                             let _ = main_win.show();
                         }
                     } else {
@@ -502,7 +508,7 @@ pub fn run() {
             let client_for_detector = match MissevanClient::from_config(&startup_config.global) {
                 Ok(c) => c,
                 Err(e) => {
-                    tracing::error!("创建 MissevanClient 失败: {}", e);
+                    tracing::error!("{}", tr!("log.client_create_failed", err = e));
                     return Ok(());
                 }
             };
@@ -536,7 +542,7 @@ pub fn run() {
             tauri::async_runtime::spawn(async move {
                 let manager = FileCacheManager::new(window_for_init, file_cache_for_init);
                 if let Err(e) = manager.refresh(&config_for_cache, &app_state_for_cache).await {
-                    tracing::error!("初始文件缓存刷新失败: {}", e);
+                    tracing::error!("{}", tr!("log.initial_cache_refresh_failed", err = e));
                 }
             });
 
@@ -545,7 +551,7 @@ pub fn run() {
             let start_recording = Arc::new(
                 move |anchor: AnchorConfig, stream_url: String, cancel: CancellationToken| {
                     if stream_url.is_empty() {
-                        tracing::warn!("流地址为空，放弃录制: {}", anchor.name);
+                        tracing::warn!("{}", tr!("log.stream_url_empty_abort", name = anchor.name));
                         return;
                     }
                     // 退出保护（Task 17）：优雅退出已开始（global_cancel 已 cancel）则不再启动新录制。
@@ -566,13 +572,13 @@ pub fn run() {
                     tauri::async_runtime::spawn(async move {
                         // 双保险（Task 17）：spawn 到执行的间隙再查一次，关闭竞态窗口
                         if app_state.lock().await.global_cancel.is_cancelled() {
-                            tracing::info!("应用正在退出，取消自动录制启动: {}", anchor.name);
+                            tracing::info!("{}", tr!("log.app_exiting_cancel_start", name = anchor.name));
                             return;
                         }
                         let config_full = match config_manager.load() {
                             Ok(c) => c,
                             Err(e) => {
-                                tracing::error!("加载全局配置失败: {}", e);
+                                tracing::error!("{}", tr!("log.config_load_failed", err = e));
                                 return;
                             }
                         };
@@ -583,8 +589,8 @@ pub fn run() {
                         // 杜绝"保存后仍启动录制、延迟才被 monitor 兜底停止"。
                         if !anchor_check_enabled(&config_full, &anchor.id) {
                             tracing::info!(
-                                "[录制] 主播 {} 已关闭自动检测，取消录制启动",
-                                anchor.name
+                                "{}",
+                                tr!("log.auto_record_check_disabled", name = anchor.name)
                             );
                             return;
                         }
@@ -593,9 +599,12 @@ pub fn run() {
                         // 录制/关闭检测/应用退出则放弃本次录制启动。
                         let config = if config_full.global.pre_record_delay_secs > 0 {
                             tracing::info!(
-                                "[录制] {} 秒后开始录制: {}",
-                                config_full.global.pre_record_delay_secs,
-                                anchor.name
+                                "{}",
+                                tr!(
+                                    "log.delayed_start_seconds",
+                                    seconds = config_full.global.pre_record_delay_secs,
+                                    name = anchor.name
+                                )
                             );
                             // 延迟窗口可取消（实装审查回归修复）：任务尚未注册进
                             // tasks 表，stop_recording/remove_anchor 找不到任务会
@@ -608,8 +617,8 @@ pub fn run() {
                                 .register_pending_start(&anchor.id, cancel.clone())
                             {
                                 tracing::info!(
-                                    "[录制] 已有延迟中的录制启动，跳过重复触发: {}",
-                                    anchor.name
+                                    "{}",
+                                    tr!("log.pending_start_duplicate", name = anchor.name)
                                 );
                                 return;
                             }
@@ -630,15 +639,18 @@ pub fn run() {
                             app_state.lock().await.remove_pending_start(&anchor.id);
                             if app_state.lock().await.global_cancel.is_cancelled() {
                                 tracing::info!(
-                                    "[录制] 应用正在退出（延迟期间），取消录制启动: {}",
-                                    anchor.name
+                                    "{}",
+                                    tr!("log.app_exiting_during_delay", name = anchor.name)
                                 );
                                 return;
                             }
                             if cancel.is_cancelled() {
                                 tracing::info!(
-                                    "[录制] 录制已取消（延迟期间），放弃录制: {}",
-                                    anchor.name
+                                    "{}",
+                                    tr!(
+                                        "log.recording_cancelled_during_delay",
+                                        name = anchor.name
+                                    )
                                 );
                                 return;
                             }
@@ -649,17 +661,17 @@ pub fn run() {
                             let config_recheck = match config_manager.load() {
                                 Ok(c) => c,
                                 Err(e) => {
-                                    tracing::error!(
-                                        "加载全局配置失败（延迟结束复检）: {}",
-                                        e
-                                    );
+                                    tracing::error!("{}", tr!("log.config_recheck_failed", err = e));
                                     return;
                                 }
                             };
                             if !anchor_check_enabled(&config_recheck, &anchor.id) {
                                 tracing::info!(
-                                    "[录制] 主播 {} 已关闭自动检测（延迟结束复检），取消录制启动",
-                                    anchor.name
+                                    "{}",
+                                    tr!(
+                                        "log.auto_record_check_disabled_recheck",
+                                        name = anchor.name
+                                    )
                                 );
                                 return;
                             }
@@ -672,7 +684,7 @@ pub fn run() {
                         let client = match MissevanClient::from_config(&config) {
                             Ok(c) => c,
                             Err(e) => {
-                                tracing::error!("创建 MissevanClient 失败: {}", e);
+                                tracing::error!("{}", tr!("log.client_create_failed", err = e));
                                 return;
                             }
                         };
@@ -691,7 +703,7 @@ pub fn run() {
                         )
                         .await
                         {
-                            tracing::error!("自动录制启动失败: {}", e);
+                            tracing::error!("{}", tr!("log.auto_record_start_failed", err = e));
                         }
                     });
                 },
@@ -711,11 +723,14 @@ pub fn run() {
                 let (removed, markers, warned) = crate::domain::recorder::engine::
                     cleanup_orphan_recordings(&orphan_output_dir, std::path::Path::new(&orphan_output_dir));
                 tracing::info!(
-                    "[孤儿清理] 启动清理完成: 删除 {} 个残留文件 / 清理 {} 个异常标记 / 仅告警 {} 个（输出目录: {}）",
-                    removed,
-                    markers,
-                    warned,
-                    orphan_output_dir
+                    "{}",
+                    tr!(
+                        "log.orphan_cleanup_done",
+                        removed = removed,
+                        markers = markers,
+                        warned = warned,
+                        path = orphan_output_dir
+                    )
                 );
                 // R4：孤儿 ffmpeg **进程**终止（当前占位：不做事）。位于产物清理
                 // 之后、检测循环启动之前——单实例锁已持有、无并发录制，实装后
@@ -730,14 +745,14 @@ pub fn run() {
                 let get_config = move || match config_manager_for_get_config.load() {
                     Ok(config) => config,
                     Err(e) => {
-                        tracing::error!("加载配置失败: {}", e);
+                        tracing::error!("{}", tr!("log.config_load_failed_loop", err = e));
                         Config::default()
                     }
                 };
                 detection_loop.start(get_config, start_recording).await;
             });
 
-            tracing::info!("应用启动完成");
+            tracing::info!("{}", tr!("log.startup_complete"));
             Ok(())
         })
         .run(tauri::generate_context!())

@@ -18,6 +18,7 @@ use tauri::State;
 use crate::domain::config::manager::ConfigManager;
 use crate::domain::spider::MissevanClient;
 use crate::infrastructure::error::types::AppError;
+use crate::tr;
 
 /// GitHub 发布仓库（Missevan-FM-Recorder）：发布版 tag 命名 `v{version}`。
 /// 仓库尚未发布（404）或网络失败时 GitHub API 返回错误 → 前端「检查更新失败」，应用不崩溃。
@@ -153,9 +154,7 @@ pub async fn check_update(
     // 配置加载失败按默认（开启）处理，与旧逻辑一致
     let config = config_manager.load().unwrap_or_default();
     if !config.global.check_updates {
-        return Err(AppError::config(
-            "检查更新已禁用（设置 > 通用 > 检查更新）".to_string(),
-        ));
+        return Err(AppError::config(tr!("update.check_disabled")));
     }
 
     let url = format!(
@@ -178,22 +177,22 @@ pub async fn check_update(
         .timeout(Duration::from_secs(UPDATE_TIMEOUT_SECS))
         .send()
         .await
-        .map_err(|e| AppError::internal(format!("检查更新失败（网络错误）：{}", e)))?;
+        .map_err(|e| AppError::internal(tr!("update.check_failed_network", err = e)))?;
 
     if !resp.status().is_success() {
-        return Err(AppError::internal(format!(
-            "检查更新失败（HTTP {}）——项目可能尚未发布或网络受限",
-            resp.status()
+        return Err(AppError::internal(tr!(
+            "update.check_failed_http",
+            status = resp.status()
         )));
     }
 
     let json: serde_json::Value = resp
         .json()
         .await
-        .map_err(|e| AppError::internal(format!("检查更新失败（响应解析错误）：{}", e)))?;
+        .map_err(|e| AppError::internal(tr!("update.check_failed_parse", err = e)))?;
 
     parse_release(&json, &current, AssetPlatform::current()).ok_or_else(|| {
-        AppError::internal("检查更新失败（响应缺少版本信息）".to_string())
+        AppError::internal(tr!("update.check_failed_no_version"))
     })
 }
 
@@ -221,7 +220,7 @@ pub fn get_app_info() -> AppInfo {
         .unwrap_or_else(|| "unknown".to_string());
 
     AppInfo {
-        name: "Missevan 猫耳录制器".to_string(),
+        name: tr!("update.app_name").to_string(),
         version: env!("CARGO_PKG_VERSION").to_string(),
         build_date,
         os: format!("{} {}", std::env::consts::OS, std::env::consts::ARCH),
@@ -268,7 +267,7 @@ fn is_browsable_url(url: &str) -> bool {
 pub fn open_browser(url: String) -> Result<(), AppError> {
     let url = url.trim().to_string();
     if !is_browsable_url(&url) {
-        return Err(AppError::config("仅支持 http/https 链接".to_string()));
+        return Err(AppError::config(tr!("update.url_not_allowed")));
     }
     #[cfg(target_os = "windows")]
     {
@@ -279,7 +278,7 @@ pub fn open_browser(url: String) -> Result<(), AppError> {
             .arg("url.dll,FileProtocolHandler")
             .arg(&url)
             .spawn()
-            .map_err(|e| AppError::internal(format!("打开浏览器失败：{}", e)))?;
+            .map_err(|e| AppError::internal(tr!("update.open_browser_failed", err = e)))?;
         crate::domain::tools::reap_in_background(child);
     }
     #[cfg(target_os = "macos")]
@@ -287,7 +286,7 @@ pub fn open_browser(url: String) -> Result<(), AppError> {
         let child = std::process::Command::new("open")
             .arg(&url)
             .spawn()
-            .map_err(|e| AppError::internal(format!("打开浏览器失败：{}", e)))?;
+            .map_err(|e| AppError::internal(tr!("update.open_browser_failed", err = e)))?;
         crate::domain::tools::reap_in_background(child);
     }
     #[cfg(target_os = "linux")]
@@ -295,10 +294,10 @@ pub fn open_browser(url: String) -> Result<(), AppError> {
         let child = std::process::Command::new("xdg-open")
             .arg(&url)
             .spawn()
-            .map_err(|e| AppError::internal(format!("打开浏览器失败：{}", e)))?;
+            .map_err(|e| AppError::internal(tr!("update.open_browser_failed", err = e)))?;
         crate::domain::tools::reap_in_background(child);
     }
-    tracing::info!("已在默认浏览器打开链接: {}", url);
+    tracing::info!("{}", tr!("update.open_browser_ok", url = url));
     Ok(())
 }
 

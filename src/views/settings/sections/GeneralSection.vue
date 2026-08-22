@@ -15,6 +15,7 @@ import type { AppLocale } from "@/locales";
 import type { SectionErrors, SettingsForm } from "../validation";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
     Select,
     SelectContent,
@@ -44,27 +45,31 @@ function onLocaleChange(value: unknown) {
 <template>
     <div class="space-y-6">
         <!-- 语言：暂存于表单，保存更改后生效 -->
-        <div class="rounded-lg border p-4">
-            <h3 class="mb-3 text-sm font-semibold">{{ t("settings.general.language") }}</h3>
-            <p class="mb-2 text-xs text-muted-foreground">
-                {{ t("settings.general.languageHint") }}
-            </p>
-            <Select
-                :model-value="config.locale"
-                @update:model-value="onLocaleChange"
-            >
-                <SelectTrigger class="w-52">
-                    <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                    <SelectItem value="zh-CN">{{ t("settings.general.languageZh") }}</SelectItem>
-                    <SelectItem value="en">{{ t("settings.general.languageEn") }}</SelectItem>
-                </SelectContent>
-            </Select>
-        </div>
+        <Card class="gap-0 rounded-lg p-4 shadow-none">
+            <CardHeader class="mb-3 gap-0 p-0">
+                <CardTitle class="text-sm font-semibold">{{ t("settings.general.language") }}</CardTitle>
+            </CardHeader>
+            <CardContent class="p-0">
+                <p class="mb-2 text-xs text-muted-foreground">
+                    {{ t("settings.general.languageHint") }}
+                </p>
+                <Select
+                    :model-value="config.locale"
+                    @update:model-value="onLocaleChange"
+                >
+                    <SelectTrigger class="w-52">
+                        <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                        <SelectItem value="zh-CN">{{ t("settings.general.languageZh") }}</SelectItem>
+                        <SelectItem value="en">{{ t("settings.general.languageEn") }}</SelectItem>
+                    </SelectContent>
+                </Select>
+            </CardContent>
+        </Card>
 
         <!-- 开机自动启动 -->
-        <div class="flex items-center justify-between gap-4 rounded-lg border p-4">
+        <Card class="flex-row items-center justify-between gap-4 rounded-lg p-4 shadow-none">
             <div>
                 <Label for="cfg-autostart">{{ t("settings.general.autostart") }}</Label>
                 <p class="mt-0.5 text-xs text-muted-foreground">
@@ -72,38 +77,42 @@ function onLocaleChange(value: unknown) {
                 </p>
             </div>
             <Switch id="cfg-autostart" v-model:checked="config.autostart" />
-        </div>
+        </Card>
 
         <!-- 关闭主窗口时（Linux 托盘不可用：tray 选项禁用 + 提示） -->
-        <div class="rounded-lg border p-4">
-            <h3 class="mb-3 text-sm font-semibold">{{ t("settings.general.closeBehavior") }}</h3>
-            <RadioGroup v-model="config.close_behavior" class="flex flex-col gap-2">
-                <div class="flex items-center gap-2">
-                    <RadioGroupItem
-                        id="cfg-close-tray"
-                        value="tray"
-                        class="size-4"
-                        :disabled="trayDisabled"
-                    />
-                    <Label
-                        for="cfg-close-tray"
-                        :class="trayDisabled ? 'text-muted-foreground' : ''"
-                    >
-                        {{ t("settings.general.closeTray") }}
-                    </Label>
-                </div>
-                <div class="flex items-center gap-2">
-                    <RadioGroupItem id="cfg-close-exit" value="exit" class="size-4" />
-                    <Label for="cfg-close-exit">{{ t("settings.general.closeExit") }}</Label>
-                </div>
-            </RadioGroup>
-            <p v-if="trayDisabled" class="mt-1.5 text-xs text-muted-foreground">
-                {{ t("settings.general.trayUnavailable") }}
-            </p>
-        </div>
+        <Card class="gap-0 rounded-lg p-4 shadow-none">
+            <CardHeader class="mb-3 gap-0 p-0">
+                <CardTitle class="text-sm font-semibold">{{ t("settings.general.closeBehavior") }}</CardTitle>
+            </CardHeader>
+            <CardContent class="p-0">
+                <RadioGroup v-model="config.close_behavior" class="flex flex-col gap-2">
+                    <div class="flex items-center gap-2">
+                        <RadioGroupItem
+                            id="cfg-close-tray"
+                            value="tray"
+                            class="size-4"
+                            :disabled="trayDisabled"
+                        />
+                        <Label
+                            for="cfg-close-tray"
+                            :class="trayDisabled ? 'text-muted-foreground' : ''"
+                        >
+                            {{ t("settings.general.closeTray") }}
+                        </Label>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <RadioGroupItem id="cfg-close-exit" value="exit" class="size-4" />
+                        <Label for="cfg-close-exit">{{ t("settings.general.closeExit") }}</Label>
+                    </div>
+                </RadioGroup>
+                <p v-if="trayDisabled" class="mt-1.5 text-xs text-muted-foreground">
+                    {{ t("settings.general.trayUnavailable") }}
+                </p>
+            </CardContent>
+        </Card>
 
         <!-- 检查更新 -->
-        <div class="flex items-center justify-between gap-4 rounded-lg border p-4">
+        <Card class="flex-row items-center justify-between gap-4 rounded-lg p-4 shadow-none">
             <div>
                 <Label for="cfg-check-updates">{{ t("settings.general.checkUpdates") }}</Label>
                 <p class="mt-0.5 text-xs text-muted-foreground">
@@ -111,6 +120,6 @@ function onLocaleChange(value: unknown) {
                 </p>
             </div>
             <Switch id="cfg-check-updates" v-model:checked="config.check_updates" />
-        </div>
+        </Card>
     </div>
 </template>

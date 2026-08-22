@@ -16,6 +16,8 @@ use crate::domain::services::file_cache::{
 };
 use crate::infrastructure::error::types::AppError;
 use crate::infrastructure::state::app_state::AppStateHandle;
+use crate::tr;
+use crate::tr_plural;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -116,7 +118,7 @@ pub async fn run_cleanup(
         let scan = FileCacheManager::scan_output_once(&output_dir).map_err(|e| {
             AppError::system(
                 crate::infrastructure::error::types::IO_WRITE_FAIL,
-                format!("读取目录失败: {}", output_dir.display()),
+                tr!("cleanup.read_dir_failed", path = output_dir.display()),
             )
             .with_technical(e.to_string())
         })?;
@@ -159,11 +161,17 @@ pub async fn run_cleanup(
             // 已拒绝链接项，此处兜底（如扫描与删除之间条目被替换成链接），
             // 链接项一律跳过不删，杜绝触碰输出目录外的任何文件
             let Ok(meta) = std::fs::symlink_metadata(path) else {
-                tracing::warn!("清理前读取元数据失败，跳过 {:?}", path);
+                tracing::warn!(
+                    "{}",
+                    tr!("cleanup.meta_read_failed", path = format!("{:?}", path))
+                );
                 continue;
             };
             if meta.file_type().is_symlink() {
-                tracing::warn!("跳过删除符号链接/junction 项 {:?}（S1 兜底）", path);
+                tracing::warn!(
+                    "{}",
+                    tr!("cleanup.skip_symlink", path = format!("{:?}", path))
+                );
                 continue;
             }
             match std::fs::remove_file(path) {
@@ -176,9 +184,12 @@ pub async fn run_cleanup(
                     // 磁盘。记 warn 并把文件保留在缓存中（partition_cleanup_remainder），
                     // 下次 refresh 或手动清理可再次尝试
                     tracing::warn!(
-                        "清理失败 {:?}: {}（文件保留在磁盘与缓存中，下次清理可重试）",
-                        path,
-                        e
+                        "{}",
+                        tr!(
+                            "cleanup.delete_failed_keep",
+                            path = format!("{:?}", path),
+                            err = e
+                        )
                     );
                     delete_failed.insert((*path).clone());
                 }
@@ -189,15 +200,21 @@ pub async fn run_cleanup(
         let (remaining_files, files_remaining, bytes_remaining) =
             partition_cleanup_remainder(scan, &candidates, &to_delete, &delete_failed);
         tracing::info!(
-            "录制文件清理完成: 删除 {} 个文件 / 释放 {} 字节",
-            files_deleted,
-            bytes_freed
+            "{}",
+            tr_plural!(
+                "cleanup.files_removed",
+                files_deleted as u64,
+                bytes = bytes_freed
+            )
         );
         if !delete_failed.is_empty() {
             tracing::warn!(
-                "{} 个文件删除失败（已保留在缓存中，下次清理可重试）: {:?}",
-                delete_failed.len(),
-                delete_failed
+                "{}",
+                tr_plural!(
+                    "cleanup.delete_failed_count",
+                    delete_failed.len() as u64,
+                    paths = format!("{:?}", delete_failed)
+                )
             );
         }
 
@@ -212,7 +229,7 @@ pub async fn run_cleanup(
         ))
     })
     .await
-    .map_err(|e| AppError::internal(format!("清理任务异常: {}", e)))??;
+    .map_err(|e| AppError::internal(tr!("cleanup.task_failed", err = e)))??;
 
     // 基于同一扫描结果刷新文件缓存（内部 emit recording_files_changed）
     let manager = FileCacheManager::new(window, cache);
@@ -274,7 +291,7 @@ pub async fn cleanup_on_recording_end(
     let config = match config_manager.load() {
         Ok(c) => c,
         Err(e) => {
-            tracing::warn!("[录制结束] 读取配置失败，跳过自动清理: {}", e);
+            tracing::warn!("{}", tr!("cleanup.end_config_load_failed", err = e));
             return;
         }
     };
@@ -283,11 +300,14 @@ pub async fn cleanup_on_recording_end(
     }
     match run_cleanup(window, cache, config_manager, app_state).await {
         Ok(summary) => tracing::info!(
-            "[录制结束] 自动清理完成: 删除 {} 个文件 / 释放 {} 字节",
-            summary.files_deleted,
-            summary.bytes_freed
+            "{}",
+            tr_plural!(
+                "cleanup.end_auto_done",
+                summary.files_deleted as u64,
+                bytes = summary.bytes_freed
+            )
         ),
-        Err(e) => tracing::warn!("[录制结束] 自动清理失败: {}", e),
+        Err(e) => tracing::warn!("{}", tr!("cleanup.end_auto_failed", err = e)),
     }
 }
 
@@ -310,7 +330,7 @@ pub fn scan_recording_files(root: &Path) -> Result<Vec<CleanupCandidate>, AppErr
     let scan = FileCacheManager::scan_output_once(root).map_err(|e| {
         AppError::system(
             crate::infrastructure::error::types::IO_WRITE_FAIL,
-            format!("读取目录失败: {}", root.display()),
+            tr!("cleanup.read_dir_failed", path = root.display()),
         )
         .with_technical(e.to_string())
     })?;

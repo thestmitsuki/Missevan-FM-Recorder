@@ -1,6 +1,11 @@
 # 权限定义：全局配置命令（api/config_cmds.rs）
 
 [[permission]]
+identifier = "allow-set-locale"
+description = "启用 set_locale 命令（同步前端语言到后端：通知/错误提示/日志按此语言输出）"
+commands = { allow = ["set_locale"], deny = [] }
+
+[[permission]]
 identifier = "allow-get-config"
 description = "启用 get_config 命令（读取全局配置）"
 commands = { allow = ["get_config"], deny = [] }

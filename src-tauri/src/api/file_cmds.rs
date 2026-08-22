@@ -8,6 +8,7 @@ use crate::domain::services::file_cache::{
 };
 use crate::infrastructure::error::types::AppError;
 use crate::infrastructure::state::app_state::RecorderState;
+use crate::tr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -76,7 +77,7 @@ pub async fn rename_recording_file(
     {
         let active = recorder_state.state.lock().await.active_output_paths();
         if crate::domain::services::file_cache::is_active_path(&old_path, &active) {
-            return Err(AppError::config("录制中的文件不能重命名"));
+            return Err(AppError::config(tr!("app.file_rename_active")));
         }
     }
     // H4：路径必须位于输出目录内（canonicalize 前缀匹配）；new_name 服务端消毒
@@ -85,10 +86,10 @@ pub async fn rename_recording_file(
     let ext = old
         .extension()
         .and_then(|e| e.to_str())
-        .ok_or_else(|| AppError::config("文件没有扩展名"))?;
+        .ok_or_else(|| AppError::config(tr!("app.file_no_extension")))?;
     let parent = old
         .parent()
-        .ok_or_else(|| AppError::config("无法获取文件所在目录"))?;
+        .ok_or_else(|| AppError::config(tr!("app.file_parent_missing")))?;
     validate_new_name(&new_name)?;
     let new_path = parent.join(format!("{}.{}", new_name.trim(), ext));
     // 目标重名检查（风险 1 修复）：std::fs::rename 在 Windows 上经
@@ -96,9 +97,9 @@ pub async fn rename_recording_file(
     // 旧录音将永久丢失（与 ffmpeg `-y` 覆盖同类风险）。改名目标已存在时
     // 明确拒绝，由用户换名，绝不覆盖。
     if new_path.exists() {
-        return Err(AppError::config(format!(
-            "同名文件已存在: {}（拒绝覆盖，请换一个名字）",
-            new_path.display()
+        return Err(AppError::config(tr!(
+            "app.file_duplicate_name",
+            path = new_path.display()
         )));
     }
     std::fs::rename(&old, &new_path)?;
@@ -121,7 +122,7 @@ pub async fn delete_recording_file(
     {
         let active = recorder_state.state.lock().await.active_output_paths();
         if crate::domain::services::file_cache::is_active_path(&path, &active) {
-            return Err(AppError::config("录制中的文件不能删除"));
+            return Err(AppError::config(tr!("app.file_delete_active")));
         }
     }
     // H4：路径必须位于输出目录内（canonicalize 前缀匹配）——杜绝任意文件删除
@@ -136,7 +137,8 @@ pub async fn delete_recording_file(
 
 #[tauri::command]
 pub async fn play_recording_file(path: String) -> Result<String, AppError> {
-    let url = tauri::Url::from_file_path(&path).map_err(|_| AppError::internal("路径转换失败"))?;
+    let url = tauri::Url::from_file_path(&path)
+        .map_err(|_| AppError::internal(tr!("app.path_convert_failed")))?;
     Ok(url.to_string())
 }
 
@@ -145,14 +147,16 @@ pub async fn play_recording_file(path: String) -> Result<String, AppError> {
 /// 两侧都 canonicalize 后做前缀匹配（跟随符号链接/junction 的真实路径判定，
 /// 目录外的链接目标同样被拒绝）。文件/目录不存在时返回错误。
 fn ensure_within_output_dir(path: &Path, output_dir: &str) -> Result<PathBuf, AppError> {
-    let canonical = path.canonicalize().map_err(|_| AppError::config("文件不存在"))?;
+    let canonical = path
+        .canonicalize()
+        .map_err(|_| AppError::config(tr!("app.file_not_found")))?;
     let base = Path::new(output_dir)
         .canonicalize()
-        .map_err(|_| AppError::config("输出目录不存在"))?;
+        .map_err(|_| AppError::config(tr!("app.output_dir_not_found")))?;
     if canonical.starts_with(&base) {
         Ok(canonical)
     } else {
-        Err(AppError::config("路径不在输出目录内"))
+        Err(AppError::config(tr!("app.path_outside_output_dir")))
     }
 }
 
@@ -160,16 +164,16 @@ fn ensure_within_output_dir(path: &Path, output_dir: &str) -> Result<PathBuf, Ap
 /// 与控制字符（服务端强制——前端 INVALID_NAME_CHARS 仅客户端校验可被绕过）
 fn validate_new_name(name: &str) -> Result<(), AppError> {
     if name.trim().is_empty() {
-        return Err(AppError::config("文件名不能为空"));
+        return Err(AppError::config(tr!("app.file_name_empty")));
     }
     if name.contains('/') || name.contains('\\') || name.contains("..") {
-        return Err(AppError::config("文件名含非法字符（不允许路径或 ..）"));
+        return Err(AppError::config(tr!("app.file_name_invalid_path")));
     }
     if name
         .chars()
         .any(|c| c.is_control() || matches!(c, '<' | '>' | ':' | '"' | '|' | '?' | '*'))
     {
-        return Err(AppError::config("文件名含非法字符"));
+        return Err(AppError::config(tr!("app.file_name_invalid")));
     }
     Ok(())
 }
@@ -187,7 +191,7 @@ pub async fn pick_output_dir(app_handle: AppHandle) -> Result<Option<String>, Ap
     });
 
     rx.await
-        .map_err(|e| AppError::internal(format!("目录选择对话框失败: {}", e)))
+        .map_err(|e| AppError::internal(tr!("app.pick_folder_failed", err = e)))
 }
 
 #[cfg(test)]

@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+use crate::tr;
+
 /// 全局配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -208,58 +210,58 @@ impl Config {
     pub fn is_valid(&self) -> Result<(), Vec<String>> {
         let mut errors = Vec::new();
         if self.global.output_dir.is_empty() {
-            errors.push("输出目录不能为空".to_string());
+            errors.push(tr!("config.error_output_dir_empty").to_string());
         }
         if self.global.disk_space_limit_gb == 0 {
-            errors.push("磁盘阈值必须大于 0".to_string());
+            errors.push(tr!("config.error_disk_threshold_zero").to_string());
         }
         if self.global.disk_space_limit_gb > 100_000 {
-            errors.push("磁盘阈值不能超过 100000 GB".to_string());
+            errors.push(tr!("config.error_disk_threshold_max").to_string());
         }
         if self.global.segment_seconds > 86400 {
-            errors.push("分段秒数不能超过 86400".to_string());
+            errors.push(tr!("config.error_segment_seconds_max").to_string());
         }
         if self.global.check_interval_secs < 5 {
-            errors.push("检测间隔不能小于 5 秒".to_string());
+            errors.push(tr!("config.error_check_interval_min").to_string());
         }
         if self.global.check_interval_secs > 86400 {
-            errors.push("检测间隔不能超过 86400 秒".to_string());
+            errors.push(tr!("config.error_check_interval_max").to_string());
         }
         if self.global.retention_days > 3650 {
-            errors.push("保留天数不能超过 3650 天".to_string());
+            errors.push(tr!("config.error_retention_days_max").to_string());
         }
         if self.global.max_total_gb > 100_000 {
-            errors.push("总大小上限不能超过 100000 GB".to_string());
+            errors.push(tr!("config.error_max_total_gb_max").to_string());
         }
         if self.global.max_concurrent_recordings > 32 {
-            errors.push("并发录制数不能超过 32".to_string());
+            errors.push(tr!("config.error_max_concurrent_max").to_string());
         }
         if self.global.pre_record_delay_secs > 86400 {
-            errors.push("录制前延迟不能超过 86400 秒".to_string());
+            errors.push(tr!("config.error_pre_record_delay_max").to_string());
         }
         if self.global.api_timeout_secs > 600 {
-            errors.push("API 超时不能超过 600 秒".to_string());
+            errors.push(tr!("config.error_api_timeout_max").to_string());
         }
         if self.global.stream_timeout_secs > 3600 {
-            errors.push("流超时不能超过 3600 秒".to_string());
+            errors.push(tr!("config.error_stream_timeout_max").to_string());
         }
         if self.global.max_retries > 20 {
-            errors.push("重试次数不能超过 20".to_string());
+            errors.push(tr!("config.error_max_retries_max").to_string());
         }
         if self.global.retry_delay_secs > 3600 {
-            errors.push("重试间隔不能超过 3600 秒".to_string());
+            errors.push(tr!("config.error_retry_delay_max").to_string());
         }
         if self.global.detector_concurrency > 64 {
-            errors.push("检测并发数不能超过 64".to_string());
+            errors.push(tr!("config.error_detector_concurrency_max").to_string());
         }
         if self.global.detector_jitter_secs > 86400 {
-            errors.push("检测抖动上限不能超过 86400 秒".to_string());
+            errors.push(tr!("config.error_detector_jitter_max").to_string());
         }
         if self.global.bitrate_kbps > 320 {
-            errors.push("码率不能超过 320 kbps".to_string());
+            errors.push(tr!("config.error_bitrate_max").to_string());
         }
         if !is_valid_record_format(&self.global.record_format) {
-            errors.push("录制格式不支持（仅支持 m4a / mp3）".to_string());
+            errors.push(tr!("config.error_record_format").to_string());
         }
         if errors.is_empty() {
             Ok(())
@@ -464,7 +466,11 @@ enable_check = true
         assert!(cfg.is_valid().is_ok());
         cfg.global.record_format = "../../pwn".to_string();
         let errs = cfg.is_valid().unwrap_err();
-        assert!(errs.iter().any(|e| e.contains("录制格式")), "错误: {:?}", errs);
+        assert!(
+            errs.iter().any(|e| e == tr!("config.error_record_format")),
+            "错误: {:?}",
+            errs
+        );
     }
 
     // ── L7 跟进：数值上限校验（与设置页 validation.ts inRange 对齐）──
@@ -503,28 +509,28 @@ enable_check = true
     #[test]
     fn config_is_valid_rejects_upper_bound_violations() {
         // 超上限值逐一拒绝，错误消息包含对应字段说明
-        let cases: Vec<(fn(&mut GlobalConfig), &str)> = vec![
-            (|g| g.disk_space_limit_gb = 100_001, "磁盘阈值"),
-            (|g| g.segment_seconds = 86_401, "分段秒数"),
-            (|g| g.check_interval_secs = 86_401, "检测间隔"),
-            (|g| g.retention_days = 3_651, "保留天数"),
-            (|g| g.max_total_gb = 100_001, "总大小上限"),
-            (|g| g.max_concurrent_recordings = 33, "并发录制数"),
-            (|g| g.pre_record_delay_secs = 86_401, "录制前延迟"),
-            (|g| g.api_timeout_secs = 601, "API 超时"),
-            (|g| g.stream_timeout_secs = 3_601, "流超时"),
-            (|g| g.max_retries = 21, "重试次数"),
-            (|g| g.retry_delay_secs = 3_601, "重试间隔"),
-            (|g| g.detector_concurrency = 65, "检测并发数"),
-            (|g| g.detector_jitter_secs = 86_401, "检测抖动上限"),
-            (|g| g.bitrate_kbps = 321, "码率"),
+        let cases: Vec<(fn(&mut GlobalConfig), &'static str)> = vec![
+            (|g| g.disk_space_limit_gb = 100_001, tr!("config.error_disk_threshold_max")),
+            (|g| g.segment_seconds = 86_401, tr!("config.error_segment_seconds_max")),
+            (|g| g.check_interval_secs = 86_401, tr!("config.error_check_interval_max")),
+            (|g| g.retention_days = 3_651, tr!("config.error_retention_days_max")),
+            (|g| g.max_total_gb = 100_001, tr!("config.error_max_total_gb_max")),
+            (|g| g.max_concurrent_recordings = 33, tr!("config.error_max_concurrent_max")),
+            (|g| g.pre_record_delay_secs = 86_401, tr!("config.error_pre_record_delay_max")),
+            (|g| g.api_timeout_secs = 601, tr!("config.error_api_timeout_max")),
+            (|g| g.stream_timeout_secs = 3_601, tr!("config.error_stream_timeout_max")),
+            (|g| g.max_retries = 21, tr!("config.error_max_retries_max")),
+            (|g| g.retry_delay_secs = 3_601, tr!("config.error_retry_delay_max")),
+            (|g| g.detector_concurrency = 65, tr!("config.error_detector_concurrency_max")),
+            (|g| g.detector_jitter_secs = 86_401, tr!("config.error_detector_jitter_max")),
+            (|g| g.bitrate_kbps = 321, tr!("config.error_bitrate_max")),
         ];
         for (mutate, expected) in cases {
             let mut cfg = Config::default();
             mutate(&mut cfg.global);
             let errs = cfg.is_valid().unwrap_err();
             assert!(
-                errs.iter().any(|e| e.contains(expected)),
+                errs.iter().any(|e| e == expected),
                 "字段 {} 超上限必须报错: {:?}",
                 expected,
                 errs

@@ -315,7 +315,7 @@ function toggleTag(value: string, checked: boolean) {
                                 {{ t("live.recordingDuration") }}
                             </span>
                             <span
-                                class="font-mono text-base font-semibold text-blue-600 dark:text-blue-400"
+                                class="font-mono text-base font-semibold text-primary"
                             >
                                 {{ recordingElapsed ?? "--:--" }}
                             </span>
@@ -327,7 +327,7 @@ function toggleTag(value: string, checked: boolean) {
                                 {{ t("live.liveDuration") }}
                             </span>
                             <span
-                                class="font-mono text-base font-semibold text-red-600 dark:text-red-400"
+                                class="font-mono text-base font-semibold text-destructive"
                             >
                                 {{ liveElapsed ?? "--:--" }}
                             </span>

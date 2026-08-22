@@ -15,6 +15,16 @@ import type { RecorderStateInfo } from "@/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
+import {
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+} from "@/components/ui/empty";
+import {
   Table,
   TableBody,
   TableCell,
@@ -68,7 +78,7 @@ const statusBadgeClass = (status: string) =>
         refreshable
         @refresh="refresh"
     >
-        <div v-if="errorMsg" class="mb-3 rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2 text-xs text-red-600 dark:text-red-400">
+        <div v-if="errorMsg" class="mb-3 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
             {{ errorMsg }}
         </div>
 
@@ -79,12 +89,16 @@ const statusBadgeClass = (status: string) =>
             </span>
         </h4>
 
-        <div
+        <Empty
             v-if="!state || state.active.length === 0"
-            class="rounded-md border border-dashed p-6 text-center text-sm text-muted-foreground"
+            class="rounded-md p-6 md:p-6"
         >
-            {{ t("debug.recorder.noActiveTasks") }}
-        </div>
+            <EmptyContent>
+                <EmptyDescription>
+                    {{ t("debug.recorder.noActiveTasks") }}
+                </EmptyDescription>
+            </EmptyContent>
+        </Empty>
 
         <div v-else class="overflow-x-auto rounded-md border">
             <Table>
@@ -132,27 +146,33 @@ const statusBadgeClass = (status: string) =>
         </div>
 
         <!-- 录制历史（可折叠） -->
-        <div class="mt-5">
-            <button
-                type="button"
-                class="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground hover:bg-accent"
-                @click="historyOpen = !historyOpen"
-            >
-                <span>
-                    {{ t("debug.recorder.history") }}
-                    <span v-if="state" class="ml-1 normal-case">({{ state.history.length }})</span>
-                </span>
-                <ChevronUp v-if="historyOpen" class="size-3.5" />
-                <ChevronDown v-else class="size-3.5" />
-            </button>
-
-            <div v-if="historyOpen" class="mt-2 space-y-1.5">
-                <div
-                    v-if="!state || state.history.length === 0"
-                    class="rounded-md border border-dashed p-4 text-center text-xs text-muted-foreground"
+        <Collapsible v-model:open="historyOpen" class="mt-5">
+            <CollapsibleTrigger as-child>
+                <Button
+                    variant="ghost"
+                    class="h-auto w-full justify-between rounded-md px-2 py-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground"
                 >
-                    {{ t("debug.recorder.emptyHistory") }}
-                </div>
+                    <span>
+                        {{ t("debug.recorder.history") }}
+                        <span v-if="state" class="ml-1 normal-case">({{ state.history.length }})</span>
+                    </span>
+                    <ChevronUp v-if="historyOpen" class="size-3.5" />
+                    <ChevronDown v-else class="size-3.5" />
+                </Button>
+            </CollapsibleTrigger>
+
+            <CollapsibleContent>
+                <div class="mt-2 space-y-1.5">
+                <Empty
+                    v-if="!state || state.history.length === 0"
+                    class="rounded-md p-4 md:p-4"
+                >
+                    <EmptyContent>
+                        <EmptyDescription class="text-xs">
+                            {{ t("debug.recorder.emptyHistory") }}
+                        </EmptyDescription>
+                    </EmptyContent>
+                </Empty>
                 <div
                     v-for="h in state?.history ?? []"
                     :key="h.anchor_id + h.ended_at"
@@ -173,6 +193,7 @@ const statusBadgeClass = (status: string) =>
                     </span>
                 </div>
             </div>
-        </div>
+            </CollapsibleContent>
+        </Collapsible>
     </SectionCard>
 </template>

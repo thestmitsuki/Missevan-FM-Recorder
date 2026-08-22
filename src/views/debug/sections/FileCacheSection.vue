@@ -13,6 +13,11 @@ import type { FileCacheState } from "@/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+} from "@/components/ui/empty";
+import {
   Table,
   TableBody,
   TableCell,
@@ -95,7 +100,7 @@ const kindBadge = (kind: string) =>
         refreshable
         @refresh="refresh"
     >
-        <div v-if="errorMsg" class="mb-3 rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2 text-xs text-red-600 dark:text-red-400">
+        <div v-if="errorMsg" class="mb-3 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
             {{ errorMsg }}
         </div>
 
@@ -127,12 +132,16 @@ const kindBadge = (kind: string) =>
         <h4 class="mb-2 mt-5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
             {{ t("debug.filecache.scanLog") }}
         </h4>
-        <div
+        <Empty
             v-if="!state || state.scan_log.length === 0"
-            class="rounded-md border border-dashed p-6 text-center text-sm text-muted-foreground"
+            class="rounded-md p-6 md:p-6"
         >
-            {{ t("debug.filecache.emptyLog") }}
-        </div>
+            <EmptyContent>
+                <EmptyDescription>
+                    {{ t("debug.filecache.emptyLog") }}
+                </EmptyDescription>
+            </EmptyContent>
+        </Empty>
         <div v-else class="overflow-x-auto rounded-md border">
             <Table>
                 <TableHeader>

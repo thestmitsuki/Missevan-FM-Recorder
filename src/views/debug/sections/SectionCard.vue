@@ -6,6 +6,7 @@
 import { ref } from "vue";
 import { ChevronDown, ChevronUp, RefreshCw } from "@lucide/vue";
 import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
 const props = withDefaults(
   defineProps<{
@@ -41,10 +42,10 @@ async function doRefresh() {
 </script>
 
 <template>
-    <section class="rounded-xl border bg-card">
-        <header class="flex items-center gap-2 border-b px-4 py-3">
+    <Card class="gap-0 rounded-xl p-0 shadow-none">
+        <CardHeader class="flex items-center gap-2 border-b px-4 py-3">
             <div class="min-w-0 flex-1">
-                <h3 class="truncate text-sm font-semibold">{{ title }}</h3>
+                <CardTitle class="truncate text-sm">{{ title }}</CardTitle>
                 <p v-if="subtitle" class="truncate text-xs text-muted-foreground">
                     {{ subtitle }}
                 </p>
@@ -69,9 +70,9 @@ async function doRefresh() {
                 <ChevronUp v-if="!collapsed" class="size-3.5" />
                 <ChevronDown v-else class="size-3.5" />
             </Button>
-        </header>
-        <div v-show="!collapsed" class="p-4">
+        </CardHeader>
+        <CardContent v-show="!collapsed" class="p-4">
             <slot />
-        </div>
-    </section>
+        </CardContent>
+    </Card>
 </template>

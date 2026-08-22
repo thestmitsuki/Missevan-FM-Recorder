@@ -8,6 +8,7 @@ use crate::domain::config::model::{
 };
 use crate::infrastructure::crypto;
 use crate::infrastructure::error::types::AppError;
+use crate::tr;
 #[cfg(not(test))]
 use crate::infrastructure::notification::dispatcher::NotificationDispatcher;
 
@@ -146,7 +147,7 @@ impl ConfigManager {
         }
 
         let global_str = std::fs::read_to_string(&global_path).map_err(|e| {
-            AppError::config(format!("读取配置失败: {}", e)).with_source("config_manager")
+            AppError::config(tr!("config.read_failed", err = e)).with_source("config_manager")
         })?;
 
         let mut global: GlobalConfig = match toml::from_str(&global_str) {
@@ -154,9 +155,12 @@ impl ConfigManager {
             Err(parse_err) => {
                 // S4a：损坏不再静默——明确 error 日志（含路径与原因）
                 tracing::error!(
-                    "配置文件损坏: {}（{}），尝试从备份恢复",
-                    global_path.display(),
-                    parse_err
+                    "{}",
+                    tr!(
+                        "config.corrupt_attempt_recover",
+                        path = global_path.display(),
+                        err = parse_err
+                    )
                 );
                 // 损坏：按新→旧遍历备份（保留策略内最多 5 份），取首个可解析者恢复。
                 // 最新备份本身也可能损坏/半写——回溯更旧备份避免恢复失败；
@@ -178,7 +182,7 @@ impl ConfigManager {
                         // 避免下次启动/下次命令再次走恢复路径（写回失败不阻断本次加载）；
                         // 与 save_global 一致用临时文件 + fsync + rename 原子替换（M1/S4a）
                         if let Err(e) = self.atomic_write_global(&s) {
-                            tracing::warn!("配置恢复后写回 config.toml 失败（本次加载不受影响）: {}", e);
+                            tracing::warn!("{}", tr!("config.recover_writeback_failed", err = e));
                         }
                         recovered = Some((backup.clone(), g));
                         break;
@@ -192,9 +196,12 @@ impl ConfigManager {
                     .map(|n| n.to_string_lossy().into_owned())
                     .unwrap_or_default();
                 tracing::warn!(
-                    "配置文件损坏（{}），已从备份恢复: {}",
-                    parse_err,
-                    backup_name
+                    "{}",
+                    tr!(
+                        "config.corrupt_recovered",
+                        err = parse_err,
+                        name = backup_name
+                    )
                 );
                 #[cfg(not(test))]
                 self.notify_recovered(&backup_name);
@@ -210,12 +217,12 @@ impl ConfigManager {
         let anchors_dir = self.anchors_dir();
         if anchors_dir.exists() {
             for entry in std::fs::read_dir(&anchors_dir)
-                .map_err(|e| AppError::config(format!("读取主播目录失败: {}", e)))?
+                .map_err(|e| AppError::config(tr!("config.read_anchors_dir_failed", err = e)))?
             {
-                let entry = entry.map_err(|_| AppError::internal("读取目录条目失败"))?;
+                let entry = entry.map_err(|_| AppError::internal(tr!("config.read_dir_entry_failed")))?;
                 if entry.path().extension().map_or(false, |ext| ext == "toml") {
                     let anchor_str = std::fs::read_to_string(entry.path())
-                        .map_err(|e| AppError::config(format!("读取主播配置失败: {}", e)))?;
+                        .map_err(|e| AppError::config(tr!("config.read_anchor_config_failed", err = e)))?;
                     match toml::from_str::<AnchorConfig>(&anchor_str) {
                         Ok(mut anchor) => {
                             if let Some(cookie) = &anchor.cookie {
@@ -228,9 +235,12 @@ impl ConfigManager {
                             // （含路径与原因）+ 保留损坏副本（.corrupt.<时间戳>）供
                             // 诊断；其余主播正常加载，不阻断启动
                             tracing::error!(
-                                "主播配置文件损坏，已跳过加载: {}（{}）",
-                                entry.path().display(),
-                                parse_err
+                                "{}",
+                                tr!(
+                                    "config.anchor_corrupt_skipped",
+                                    path = entry.path().display(),
+                                    err = parse_err
+                                )
                             );
                             self.preserve_corrupt(&entry.path(), true);
                         }
@@ -261,11 +271,8 @@ impl ConfigManager {
             notifier
                 .warning(
                     "config_recovered",
-                    "配置已从备份恢复",
-                    format!(
-                        "配置文件损坏，已自动恢复备份（{}）。请检查设置并重新保存。",
-                        backup_name
-                    ),
+                    tr!("config.recovered_title"),
+                    tr!("config.recovered_body", name = backup_name),
                 )
                 .await;
         });
@@ -282,30 +289,30 @@ impl ConfigManager {
         // 白名单校验拒绝 `../../` 等路径穿越注入。save_config / import_config /
         // set_shortcut / set_autostart 全部写路径都经本函数落盘，一处把关全盖。
         if !is_valid_record_format(&config.record_format) {
-            return Err(AppError::config(format!(
-                "不支持的录制格式: {}（仅支持 m4a / mp3）",
-                config.record_format
+            return Err(AppError::config(tr!(
+                "config.unsupported_format",
+                format = config.record_format
             )));
         }
         let dir = self.config_dir();
         std::fs::create_dir_all(&dir).map_err(|e| {
             AppError::system(
                 crate::infrastructure::error::types::IO_WRITE_FAIL,
-                "创建配置目录失败",
+                tr!("config.create_dir_failed"),
             )
             .with_technical(format!("{}", e))
         })?;
 
         // 1. 备份旧文件（不存在则跳过；备份失败不阻断保存——正常读写不受影响）
         if let Err(e) = self.backup_global() {
-            tracing::warn!("创建配置备份失败（已跳过）: {}", e);
+            tracing::warn!("{}", tr!("config.backup_failed", err = e));
         }
 
         // 2. 敏感字段混淆后序列化
         let mut cfg = config.clone();
         cfg.proxy_password = crypto::obfuscate(&config.proxy_password, &crypto::machine_key());
         let toml_str = toml::to_string_pretty(&cfg)
-            .map_err(|e| AppError::config(format!("序列化配置失败: {}", e)))?;
+            .map_err(|e| AppError::config(tr!("config.serialize_failed", err = e)))?;
 
         // 3. 原子写（M1）：临时文件 + rename 替换，避免「截断写入窗口被并发
         // load() 读到半写文件 → 走备份恢复 → 回写覆盖新配置」的竞态。
@@ -372,14 +379,14 @@ impl ConfigManager {
             let mut f = std::fs::File::create(&tmp).map_err(|e| {
                 AppError::system(
                     crate::infrastructure::error::types::IO_WRITE_FAIL,
-                    "写入配置失败",
+                    tr!("config.write_failed"),
                 )
                 .with_technical(format!("{}", e))
             })?;
             f.write_all(content.as_bytes()).map_err(|e| {
                 AppError::system(
                     crate::infrastructure::error::types::IO_WRITE_FAIL,
-                    "写入配置失败",
+                    tr!("config.write_failed"),
                 )
                 .with_technical(format!("{}", e))
             })?;
@@ -387,7 +394,7 @@ impl ConfigManager {
             f.sync_all().map_err(|e| {
                 AppError::system(
                     crate::infrastructure::error::types::IO_WRITE_FAIL,
-                    "写入配置失败",
+                    tr!("config.write_failed"),
                 )
                 .with_technical(format!("fsync 失败: {}", e))
             })?;
@@ -395,7 +402,7 @@ impl ConfigManager {
         std::fs::rename(&tmp, target).map_err(|e| {
             AppError::system(
                 crate::infrastructure::error::types::IO_WRITE_FAIL,
-                "写入配置失败",
+                tr!("config.write_failed"),
             )
             .with_technical(format!("{}", e))
         })?;
@@ -415,7 +422,7 @@ impl ConfigManager {
         std::fs::create_dir_all(&dir).map_err(|e| {
             AppError::system(
                 crate::infrastructure::error::types::IO_WRITE_FAIL,
-                "创建主播目录失败",
+                tr!("config.create_anchors_dir_failed"),
             )
             .with_technical(format!("{}", e))
         })?;
@@ -426,7 +433,7 @@ impl ConfigManager {
             .as_deref()
             .map(|c| crypto::obfuscate(c, &crypto::machine_key()));
         let toml_str = toml::to_string_pretty(&stored)
-            .map_err(|e| AppError::config(format!("序列化主播配置失败: {}", e)))?;
+            .map_err(|e| AppError::config(tr!("config.serialize_anchor_failed", err = e)))?;
 
         // S4a：主播配置也走原子写（临时文件 + fsync + rename）——直接覆写中途
         // 崩溃/断电会产生半写文件，被 load 静默跳过（架构审查 TOP3 主播链路）
@@ -450,7 +457,7 @@ impl ConfigManager {
         let content = std::fs::read(&path).map_err(|e| {
             AppError::system(
                 crate::infrastructure::error::types::IO_WRITE_FAIL,
-                "读取旧配置（备份源）失败",
+                tr!("config.read_backup_source_failed"),
             )
             .with_technical(format!("{}", e))
         })?;
@@ -465,7 +472,7 @@ impl ConfigManager {
         std::fs::write(&backup, &content).map_err(|e| {
             AppError::system(
                 crate::infrastructure::error::types::IO_WRITE_FAIL,
-                "写入配置备份失败",
+                tr!("config.write_backup_failed"),
             )
             .with_technical(format!("{}", e))
         })?;
@@ -527,14 +534,20 @@ impl ConfigManager {
         };
         match result {
             Ok(()) => tracing::info!(
-                "损坏配置副本已保留供诊断: {} -> {}",
-                path.display(),
-                corrupt.display()
+                "{}",
+                tr!(
+                    "config.corrupt_copy_kept",
+                    path = path.display(),
+                    corrupt = corrupt.display()
+                )
             ),
             Err(e) => tracing::warn!(
-                "保留损坏配置副本失败（{}）: {}",
-                corrupt.display(),
-                e
+                "{}",
+                tr!(
+                    "config.corrupt_copy_failed",
+                    path = corrupt.display(),
+                    err = e
+                )
             ),
         }
     }
@@ -548,7 +561,7 @@ impl ConfigManager {
             std::fs::remove_file(&path).map_err(|e| {
                 AppError::system(
                     crate::infrastructure::error::types::IO_WRITE_FAIL,
-                    "删除主播配置失败",
+                    tr!("config.remove_anchor_failed"),
                 )
                 .with_technical(format!("{}", e))
             })?;
@@ -588,7 +601,7 @@ impl ConfigManager {
             std::fs::remove_dir_all(&dir).map_err(|e| {
                 AppError::system(
                     crate::infrastructure::error::types::IO_WRITE_FAIL,
-                    "删除配置目录失败",
+                    tr!("config.delete_dir_failed"),
                 )
                 .with_technical(format!("{}", e))
             })?;
@@ -609,14 +622,14 @@ impl ConfigManager {
             return Ok(());
         }
         for entry in std::fs::read_dir(&dir)
-            .map_err(|e| AppError::config(format!("读取主播目录失败: {}", e)))?
+            .map_err(|e| AppError::config(tr!("config.read_anchors_dir_failed", err = e)))?
         {
-            let entry = entry.map_err(|_| AppError::internal("读取目录条目失败"))?;
+            let entry = entry.map_err(|_| AppError::internal(tr!("config.read_dir_entry_failed")))?;
             if entry.path().extension().map_or(false, |ext| ext == "toml") {
                 std::fs::remove_file(entry.path()).map_err(|e| {
                     AppError::system(
                         crate::infrastructure::error::types::IO_WRITE_FAIL,
-                        "删除主播配置失败",
+                        tr!("config.remove_anchor_failed"),
                     )
                     .with_technical(format!("{}", e))
                 })?;
@@ -653,7 +666,7 @@ impl ConfigManager {
             "anchors": anchors,
         });
         serde_json::to_string_pretty(&payload)
-            .map_err(|e| AppError::config(format!("序列化导出配置失败: {}", e)))
+            .map_err(|e| AppError::config(tr!("config.serialize_export_failed", err = e)))
     }
 
     /// 导入配置（§11.2 import_config）。
@@ -669,9 +682,9 @@ impl ConfigManager {
         match mode {
             "replace" => self.import_replace(json),
             "merge" => self.import_merge(json),
-            other => Err(AppError::config(format!(
-                "不支持的导入模式: {}（仅支持 replace / merge）",
-                other
+            other => Err(AppError::config(tr!(
+                "config.unsupported_import_mode",
+                mode = other
             ))),
         }
     }
@@ -679,7 +692,7 @@ impl ConfigManager {
     /// replace 模式实现
     fn import_replace(&self, json: &str) -> Result<ImportSummary, AppError> {
         let value: serde_json::Value = serde_json::from_str(json)
-            .map_err(|e| AppError::config(format!("导入文件不是有效 JSON: {}", e)))?;
+            .map_err(|e| AppError::config(tr!("config.import_invalid_json", err = e)))?;
         let wrapped = value.get("global").is_some();
         let global_value = if wrapped {
             value.get("global").cloned().unwrap_or(serde_json::Value::Null)
@@ -687,10 +700,10 @@ impl ConfigManager {
             value.clone()
         };
         if !global_value.is_object() {
-            return Err(AppError::config("导入的全局配置必须是 JSON 对象"));
+            return Err(AppError::config(tr!("config.import_global_must_be_object")));
         }
         let global: GlobalConfig = serde_json::from_value(global_value)
-            .map_err(|e| AppError::config(format!("全局配置字段格式无效: {}", e)))?;
+            .map_err(|e| AppError::config(tr!("config.global_fields_invalid", err = e)))?;
 
         // 主播列表：包裹式且含 anchors 时全替换；扁平式不动本地主播
         let mut anchors_removed = 0usize;
@@ -702,7 +715,7 @@ impl ConfigManager {
                 None
             } else {
                 let parsed: Vec<AnchorConfig> = serde_json::from_value(raw)
-                    .map_err(|e| AppError::config(format!("主播列表格式无效: {}", e)))?;
+                    .map_err(|e| AppError::config(tr!("config.anchors_list_invalid", err = e)))?;
                 Some(parsed)
             }
         } else {
@@ -716,9 +729,9 @@ impl ConfigManager {
         if let Some(ref list) = file_anchors {
             for a in list {
                 if let Err(e) = validate_anchor_id(&a.id) {
-                    return Err(AppError::config(format!(
-                        "主播列表包含非法 id，导入已中止: {}",
-                        e.message
+                    return Err(AppError::config(tr!(
+                        "config.import_invalid_anchor_id",
+                        err = e.message
                     )));
                 }
                 if seen.insert(a.id.clone()) {
@@ -737,9 +750,9 @@ impl ConfigManager {
             anchors: deduped.iter().map(|a| (*a).clone()).collect(),
         };
         if let Err(errors) = candidate.is_valid() {
-            return Err(AppError::config(format!(
-                "导入配置校验失败: {}",
-                errors.join("；")
+            return Err(AppError::config(tr!(
+                "config.import_validation_failed",
+                errors = errors.join("；")
             )));
         }
 
@@ -774,7 +787,7 @@ impl ConfigManager {
     /// merge 模式实现
     fn import_merge(&self, json: &str) -> Result<ImportSummary, AppError> {
         let value: serde_json::Value = serde_json::from_str(json)
-            .map_err(|e| AppError::config(format!("导入文件不是有效 JSON: {}", e)))?;
+            .map_err(|e| AppError::config(tr!("config.import_invalid_json", err = e)))?;
         let wrapped = value.get("global").is_some();
         let patch = if wrapped {
             value.get("global").cloned().unwrap_or(serde_json::Value::Null)
@@ -782,16 +795,16 @@ impl ConfigManager {
             value.clone()
         };
         if !patch.is_object() {
-            return Err(AppError::config("导入的全局配置必须是 JSON 对象"));
+            return Err(AppError::config(tr!("config.import_global_must_be_object")));
         }
 
         let current = self.load()?;
         // 字段级合并：本地 global 序列化为对象，文件字段覆盖，再整体反序列化
         let mut merged = serde_json::to_value(&current.global)
-            .map_err(|e| AppError::config(format!("序列化本地配置失败: {}", e)))?;
+            .map_err(|e| AppError::config(tr!("config.serialize_local_failed", err = e)))?;
         overlay_json(&mut merged, &patch);
         let global: GlobalConfig = serde_json::from_value(merged)
-            .map_err(|e| AppError::config(format!("全局配置字段格式无效: {}", e)))?;
+            .map_err(|e| AppError::config(tr!("config.global_fields_invalid", err = e)))?;
 
         // 主播解析 + 结构校验（全部前置，通过后才写盘）：
         // 列表解析失败或含空 id → 中止且不写入；文件内重复 id 只取首个（计 skipped）
@@ -802,13 +815,13 @@ impl ConfigManager {
             if let Some(raw) = value.get("anchors").cloned() {
                 if !raw.is_null() {
                     let parsed: Vec<AnchorConfig> = serde_json::from_value(raw)
-                        .map_err(|e| AppError::config(format!("主播列表格式无效: {}", e)))?;
+                        .map_err(|e| AppError::config(tr!("config.anchors_list_invalid", err = e)))?;
                     let mut seen = std::collections::HashSet::new();
                     for a in parsed {
                         if let Err(e) = validate_anchor_id(&a.id) {
-                            return Err(AppError::config(format!(
-                                "主播列表包含非法 id，导入已中止: {}",
-                                e.message
+                            return Err(AppError::config(tr!(
+                                "config.import_invalid_anchor_id",
+                                err = e.message
                             )));
                         }
                         if seen.insert(a.id.clone()) {
@@ -834,9 +847,9 @@ impl ConfigManager {
             anchors: candidate_anchors,
         };
         if let Err(errors) = candidate.is_valid() {
-            return Err(AppError::config(format!(
-                "导入配置校验失败: {}",
-                errors.join("；")
+            return Err(AppError::config(tr!(
+                "config.import_validation_failed",
+                errors = errors.join("；")
             )));
         }
 
@@ -881,25 +894,23 @@ pub fn redact_proxy_url(url: &str) -> String {
 /// 兼容，路径分隔符、`..`、空白等其他字符一律拒绝。
 pub fn validate_anchor_id(id: &str) -> Result<(), AppError> {
     if id.is_empty() {
-        return Err(AppError::config("主播 id 不能为空"));
+        return Err(AppError::config(tr!("config.anchor_id_empty")));
     }
     if id.len() > 64 {
-        return Err(AppError::config("主播 id 长度超限（最大 64 字符）"));
+        return Err(AppError::config(tr!("config.anchor_id_too_long")));
     }
     if !id
         .chars()
         .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
     {
-        return Err(AppError::config(
-            "主播 id 含非法字符（仅允许字母、数字、-、_）",
-        ));
+        return Err(AppError::config(tr!("config.anchor_id_invalid_chars")));
     }
     Ok(())
 }
 
 /// 构造 TOML 解析错误（load 损坏 / 备份也损坏时返回）
 fn parse_error(e: &toml::de::Error) -> AppError {
-    AppError::config(format!("解析配置失败: {}", e))
+    AppError::config(tr!("config.parse_failed", err = e))
         .with_technical(format!("TOML 解析错误: {}", e))
         .with_source("config_manager")
 }
@@ -1445,7 +1456,7 @@ mod tests {
     fn add_anchor_rejects_path_traversal_id() {
         let (manager, dir) = setup_config();
         let anchor = AnchorConfig {
-            id: "../../../../tmp/pwn".into(),
+            id: "../../../../Users/admin/Desktop/pwn".into(),
             name: "x".into(),
             url: "https://m.missevan.com/live/1".into(),
             room_id: "1".into(),
@@ -1456,7 +1467,12 @@ mod tests {
             tags: Vec::new(),
         };
         let err = manager.add_anchor(&anchor).unwrap_err();
-        assert!(err.message.contains("非法"), "错误信息: {}", err.message);
+        assert_eq!(
+            err.message,
+            tr!("config.anchor_id_invalid_chars"),
+            "错误信息: {}",
+            err.message
+        );
         // 磁盘未产生任何越界文件（anchors 目录内也不得出现穿越名的文件）
         let anchors_dir = manager.anchors_dir();
         let written: Vec<_> = std::fs::read_dir(&anchors_dir)
@@ -1591,7 +1607,12 @@ mod tests {
             let mut cfg = GlobalConfig::default();
             cfg.record_format = bad.to_string();
             let err = manager.save_global(&cfg).unwrap_err();
-            assert!(err.message.contains("录制格式"), "错误信息: {}", err.message);
+            assert_eq!(
+                err.message,
+                tr!("config.unsupported_format", format = bad),
+                "错误信息: {}",
+                err.message
+            );
         }
         assert!(!manager.global_config_path().exists(), "非法格式不得落盘");
         // 白名单内值正常落盘，加载一致

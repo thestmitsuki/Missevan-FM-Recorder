@@ -13,6 +13,7 @@ use crate::infrastructure::state::app_state::AppStateHandle;
 use crate::infrastructure::state::app_state::AvatarCache;
 use crate::infrastructure::state::app_state::AvatarNegativeCache;
 use crate::infrastructure::state::app_state::RecorderState;
+use crate::tr;
 use futures_util::StreamExt;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -34,10 +35,10 @@ const COOKIE_MAX_LEN: usize = 4096;
 fn validate_cookie_len(cookie: Option<&str>) -> Result<(), AppError> {
     if let Some(c) = cookie {
         if c.len() > COOKIE_MAX_LEN {
-            return Err(AppError::config(format!(
-                "Cookie 过长（{} 字节，上限 {} 字节）",
-                c.len(),
-                COOKIE_MAX_LEN
+            return Err(AppError::config(tr!(
+                "anchor.cookie_too_long",
+                len = c.len(),
+                max = COOKIE_MAX_LEN
             )));
         }
     }
@@ -157,7 +158,7 @@ fn apply_avatar_result(
             avatar_cache.insert(anchor.id.clone(), url.clone());
         }
         Err(e) => {
-            tracing::warn!("获取主播 {} 头像失败: {}", anchor.id, e);
+            tracing::warn!("{}", tr!("anchor.avatar_fetch_failed", anchor_id = anchor.id, err = e));
             negative_cache.insert(anchor.id.clone(), now + AVATAR_NEGATIVE_CACHE_TTL);
         }
     }
@@ -169,19 +170,19 @@ pub async fn get_recording_status(
     live_cache: tauri::State<'_, Arc<Mutex<HashMap<String, bool>>>>,
     config_manager: tauri::State<'_, Arc<ConfigManager>>, // 新增
 ) -> Result<Vec<RecordingStatus>, AppError> {
-    info!("[get_recording_status] 开始执行");
+    info!("{}", tr!("anchor.status_start"));
 
     // 1. 获取配置中的所有主播
     let config = match config_manager.load() {
         Ok(c) => c,
         Err(e) => {
-            info!("[get_recording_status] 加载配置失败: {}", e);
+            info!("{}", tr!("anchor.status_config_load_failed", err = e));
             return Ok(vec![]); // 配置失败时返回空
         }
     };
     info!(
-        "[get_recording_status] 配置中主播数: {}",
-        config.anchors.len()
+        "{}",
+        tr!("anchor.status_anchor_count", count = config.anchors.len())
     );
 
     // 2. 快照任务表与直播缓存（M5 修复：消除双层嵌套锁 + 长持锁）——
@@ -200,7 +201,7 @@ pub async fn get_recording_status(
     // 3. 锁外遍历配置中的主播组装状态（结构不变：anchor_id / is_recording / is_live）
     let statuses = build_statuses(&config.anchors, &recording_ids, &live_snapshot);
 
-    info!("[get_recording_status] 即将返回 {} 条状态", statuses.len());
+    info!("{}", tr!("anchor.status_returning", count = statuses.len()));
     Ok(statuses)
 }
 
@@ -241,20 +242,20 @@ pub async fn stop_anchors_recording(
         // 取消任务并等待结束（可选）
         task.cancel_token.cancel();
         // 如果想等待任务结束，可以 task.handle.await，但这里避免阻塞，仅取消
-        tracing::info!("已停止录制: {}", anchor_id);
+        tracing::info!("{}", tr!("anchor.stopped_recording", anchor_id = anchor_id));
         Ok(())
     } else if guard.cancel_pending_start(&anchor_id) {
         // pre_record_delay 窗口内的启动尚未注册进 tasks——从 pending_starts 取消
-        tracing::info!("已取消延迟中的录制启动: {}", anchor_id);
+        tracing::info!("{}", tr!("anchor.cancelled_pending_start", anchor_id = anchor_id));
         Ok(())
     } else {
         Err(AppError {
             code: "RECORDING_NOT_FOUND",
             category: ErrorCategory::Recording, // 使用 Recording 类别
             severity: ErrorSeverity::Warning,   // 假定 Warning 存在（如果不存在，可用 Error）
-            message: format!("未找到录制任务: {}", anchor_id),
+            message: tr!("anchor.recording_not_found", anchor_id = anchor_id),
             technical: None,
-            suggestion: Some("请确认主播ID是否正确，或任务是否已结束。".to_string()),
+            suggestion: Some(tr!("anchor.recording_not_found_suggestion").to_string()),
             source: Some("stop_recording".to_string()),
         })
     }
@@ -270,7 +271,7 @@ pub async fn add_anchor(
     // 校验失败直接拒绝，不进入后续网络调用与写盘
     if let Err(err) = validate_cookie_len(anchor.cookie.as_deref()) {
         dispatcher
-            .error("anchor_add_failed", "Cookie 过长", err.message.clone())
+            .error("anchor_add_failed", tr!("anchor.cookie_too_long_title"), err.message.clone())
             .await;
         return Err(err);
     }
@@ -284,13 +285,13 @@ pub async fn add_anchor(
                 code: "INVALID_URL",
                 category: ErrorCategory::Config,
                 severity: ErrorSeverity::Error,
-                message: "无法从主页地址提取房间号".to_string(),
+                message: tr!("anchor.cannot_extract_room_id").to_string(),
                 technical: None,
-                suggestion: Some("请确保URL格式为 https://fm.missevan.com/live/数字".to_string()),
+                suggestion: Some(tr!("anchor.url_format_hint").to_string()),
                 source: Some("add_anchor".to_string()),
             };
             dispatcher
-                .error("anchor_add_failed", "URL解析失败", err.message.clone())
+                .error("anchor_add_failed", tr!("anchor.url_parse_failed"), err.message.clone())
                 .await;
             return Err(err);
         }
@@ -301,13 +302,13 @@ pub async fn add_anchor(
             code: "INVALID_ROOM_ID",
             category: ErrorCategory::Config,
             severity: ErrorSeverity::Error,
-            message: "房间号必须是纯数字".to_string(),
+            message: tr!("anchor.room_id_digits_only").to_string(),
             technical: None,
-            suggestion: Some("请填写 https://fm.missevan.com/live/数字 中的数字部分".to_string()),
+            suggestion: Some(tr!("anchor.room_id_digits_hint").to_string()),
             source: Some("add_anchor".to_string()),
         };
         dispatcher
-            .error("anchor_add_failed", "房间号无效", err.message.clone())
+            .error("anchor_add_failed", tr!("anchor.room_id_invalid"), err.message.clone())
             .await;
         return Err(err);
     }
@@ -320,7 +321,7 @@ pub async fn add_anchor(
         Ok(p) => p,
         Err(e) => {
             dispatcher
-                .error("anchor_fetch_failed", "获取主播信息失败", e.to_string())
+                .error("anchor_fetch_failed", tr!("anchor.fetch_profile_failed"), e.to_string())
                 .await;
             return Err(e);
         }
@@ -340,13 +341,13 @@ pub async fn add_anchor(
             code: "ANCHOR_ROOM_EXISTS",
             category: ErrorCategory::Config,
             severity: ErrorSeverity::Warning,
-            message: format!("该主播已添加（房间号 {} 已存在）", anchor.room_id.trim()),
+            message: tr!("anchor.room_exists", room_id = anchor.room_id.trim()),
             technical: None,
-            suggestion: Some("请检查主播列表，避免为同一直播间添加多个条目".to_string()),
+            suggestion: Some(tr!("anchor.room_exists_suggestion").to_string()),
             source: Some("add_anchor".to_string()),
         };
         dispatcher
-            .error("anchor_add_failed", "添加主播失败", err.message.clone())
+            .error("anchor_add_failed", tr!("anchor.add_failed"), err.message.clone())
             .await;
         return Err(err);
     }
@@ -355,13 +356,13 @@ pub async fn add_anchor(
             code: "ANCHOR_EXISTS",
             category: ErrorCategory::Config,
             severity: ErrorSeverity::Warning,
-            message: format!("主播ID '{}' 已存在", anchor.id),
+            message: tr!("anchor.id_exists", id = anchor.id),
             technical: None,
-            suggestion: Some("请刷新列表或使用不同的ID".to_string()),
+            suggestion: Some(tr!("anchor.id_exists_suggestion").to_string()),
             source: Some("add_anchor".to_string()),
         };
         dispatcher
-            .error("anchor_add_failed", "添加主播失败", err.message.clone())
+            .error("anchor_add_failed", tr!("anchor.add_failed"), err.message.clone())
             .await;
         return Err(err);
     }
@@ -370,13 +371,13 @@ pub async fn add_anchor(
             code: "ANCHOR_URL_EXISTS",
             category: ErrorCategory::Config,
             severity: ErrorSeverity::Warning,
-            message: format!("主播URL '{}' 已被占用", anchor.url),
+            message: tr!("anchor.url_in_use", url = anchor.url),
             technical: None,
-            suggestion: Some("请检查URL是否正确".to_string()),
+            suggestion: Some(tr!("anchor.url_check_hint").to_string()),
             source: Some("add_anchor".to_string()),
         };
         dispatcher
-            .error("anchor_add_failed", "添加主播失败", err.message.clone())
+            .error("anchor_add_failed", tr!("anchor.add_failed"), err.message.clone())
             .await;
         return Err(err);
     }
@@ -391,12 +392,12 @@ pub async fn add_anchor(
     dispatcher
         .info(
             "anchor_add_ok",
-            "添加成功",
-            format!("主播 “{}” 已添加", anchor.name),
+            tr!("anchor.add_ok"),
+            tr!("anchor.add_ok_body", name = anchor.name),
         )
         .await;
 
-    tracing::info!("添加主播: {}", anchor.name);
+    tracing::info!("{}", tr!("anchor.added_log", name = anchor.name));
     Ok(())
 }
 
@@ -418,9 +419,9 @@ pub async fn remove_anchor(
     let config = config_manager.load()?;
     let anchor = config.anchors.iter().find(|a| a.id == id);
     if anchor.is_none() {
-        let err = AppError::config(format!("主播 {} 不存在", id));
+        let err = AppError::config(tr!("anchor.not_found", anchor_id = id));
         dispatcher
-            .error("anchor_remove_failed", "删除失败", err.message.clone())
+            .error("anchor_remove_failed", tr!("anchor.remove_failed"), err.message.clone())
             .await;
         return Err(err);
     }
@@ -430,12 +431,12 @@ pub async fn remove_anchor(
     let mut app_state = state.state.lock().await;
     if let Some(task) = app_state.remove_task(&id) {
         task.cancel_token.cancel();
-        tracing::info!("已停止录制任务: {}", id);
+        tracing::info!("{}", tr!("anchor.stopped_recording_task", anchor_id = id));
         // 释放锁（因为 remove_task 可能已修改状态，我们继续持有锁）
     }
     // 2b. pre_record_delay 窗口内的启动尚未注册进 tasks——同样取消
     if app_state.cancel_pending_start(&id) {
-        tracing::info!("已取消延迟中的录制启动: {}", id);
+        tracing::info!("{}", tr!("anchor.cancelled_pending_start", anchor_id = id));
     }
     // 2c. R3/L10：清理该主播其余按主播维度的运行时状态（崩溃熔断条目/
     // 录制序号/延迟启动注册兜底）——此前仅复位熔断计数，条目随删除回收
@@ -462,7 +463,7 @@ pub async fn remove_anchor(
         dispatcher
             .error(
                 "anchor_remove_failed",
-                "删除主播配置失败",
+                tr!("anchor.remove_config_failed"),
                 e.message.clone(),
             )
             .await;
@@ -473,12 +474,12 @@ pub async fn remove_anchor(
     dispatcher
         .info(
             "anchor_remove_ok",
-            "删除成功",
-            format!("主播 “{}” 已移除", anchor.name),
+            tr!("anchor.remove_ok"),
+            tr!("anchor.remove_ok_body", name = anchor.name),
         )
         .await;
 
-    tracing::info!("删除主播: {} ({})", id, anchor.name);
+    tracing::info!("{}", tr!("anchor.removed_log", anchor_id = id, name = anchor.name));
     Ok(())
 }
 
@@ -496,7 +497,7 @@ pub async fn refresh_anchor(
         .anchors
         .iter()
         .position(|a| a.id == anchor_id)
-        .ok_or_else(|| AppError::config(format!("未找到主播ID: {}", anchor_id)))?;
+        .ok_or_else(|| AppError::config(tr!("anchor.id_not_found", anchor_id = anchor_id)))?;
     let anchor = &mut config.anchors[pos];
 
     // 2. 确保有 room_id（若无，则从 url 提取）
@@ -505,7 +506,7 @@ pub async fn refresh_anchor(
             anchor.room_id = rid.clone();
             rid
         } else {
-            return Err(AppError::config("无法从 URL 提取房间号"));
+            return Err(AppError::config(tr!("anchor.cannot_extract_room_id_from_url")));
         }
     } else {
         anchor.room_id.clone()
@@ -535,8 +536,8 @@ pub async fn refresh_anchor(
     dispatcher
         .info(
             "anchor_refresh_ok",
-            "刷新成功",
-            format!("主播 “{}” 信息已更新", anchor.name),
+            tr!("anchor.refresh_ok"),
+            tr!("anchor.refresh_ok_body", name = anchor.name),
         )
         .await;
 
@@ -557,7 +558,7 @@ pub async fn update_anchor(
     // L3 审查跟进：cookie 长度上限校验（与 add_anchor 同规则），失败直接拒绝
     if let Err(err) = validate_cookie_len(anchor.cookie.as_deref()) {
         dispatcher
-            .error("anchor_update_failed", "Cookie 过长", err.message.clone())
+            .error("anchor_update_failed", tr!("anchor.cookie_too_long_title"), err.message.clone())
             .await;
         return Err(err);
     }
@@ -566,10 +567,10 @@ pub async fn update_anchor(
     if let Some(new_room_id) = MissevanClient::extract_room_id(&anchor.url) {
         anchor.room_id = new_room_id;
     } else {
-        let err = AppError::config("无法从主页地址提取房间号")
-            .with_suggestion("请确保URL格式为 https://fm.missevan.com/live/数字");
+        let err = AppError::config(tr!("anchor.cannot_extract_room_id"))
+            .with_suggestion(tr!("anchor.url_format_hint"));
         dispatcher
-            .error("anchor_update_failed", "更新失败", err.message.clone())
+            .error("anchor_update_failed", tr!("anchor.update_failed"), err.message.clone())
             .await;
         return Err(err);
     }
@@ -580,7 +581,7 @@ pub async fn update_anchor(
         .anchors
         .iter()
         .find(|a| a.id == anchor_id)
-        .ok_or_else(|| AppError::config(format!("主播 {} 不存在", anchor_id)))?
+        .ok_or_else(|| AppError::config(tr!("anchor.not_found", anchor_id = anchor_id)))?
         .clone();
 
     // 3. 调用 API 获取最新主播名和头像（L2/M6 软门槛：网络失败**不阻断本地
@@ -621,15 +622,12 @@ pub async fn update_anchor(
             )
             .await;
             if stopped {
-                tracing::info!("关闭检测开关，已停止录制: {}", anchor_id);
+                tracing::info!("{}", tr!("anchor.check_disabled_stopped", anchor_id = anchor_id));
                 dispatcher
                     .info(
                         "anchor_update_stop",
-                        "录制已停止",
-                        format!(
-                            "已关闭「启用检测与自动录制」，主播“{}”的录制已停止",
-                            anchor.name
-                        ),
+                        tr!("anchor.recording_stopped_title"),
+                        tr!("anchor.recording_stopped_body", name = anchor.name),
                     )
                     .await;
             }
@@ -637,8 +635,8 @@ pub async fn update_anchor(
                 dispatcher
                     .info(
                         "anchor_update_ok",
-                        "更新成功",
-                        format!("主播“{}”已更新", anchor.name),
+                        tr!("anchor.update_ok"),
+                        tr!("anchor.update_ok_body", name = anchor.name),
                     )
                     .await;
             } else {
@@ -649,23 +647,20 @@ pub async fn update_anchor(
                 dispatcher
                     .warning(
                         "anchor_update_partial",
-                        "已保存，但网络校验失败",
-                        format!(
-                            "主播“{}”的配置已保存到本地；无法联网获取最新名称/头像，可在网络恢复后点击「刷新信息」",
-                            anchor.name
-                        ),
+                        tr!("anchor.partial_saved_title"),
+                        tr!("anchor.partial_saved_body", name = anchor.name),
                     )
                     .await;
             }
-            tracing::info!("更新主播: {} -> {}", anchor_id, anchor.name);
+            tracing::info!("{}", tr!("anchor.updated_log", anchor_id = anchor_id, name = anchor.name));
             Ok(())
         }
         Err(e) => {
             if let Err(rollback_err) = config_manager.add_anchor(&old_anchor) {
-                tracing::error!("回滚主播配置失败: {:?}", rollback_err);
+                tracing::error!("{}", tr!("anchor.rollback_failed", err = format!("{:?}", rollback_err)));
             }
             dispatcher
-                .error("anchor_update_failed", "更新失败", e.message.clone())
+                .error("anchor_update_failed", tr!("anchor.update_failed"), e.message.clone())
                 .await;
             Err(e)
         }
@@ -694,9 +689,12 @@ fn apply_profile_result(
         }
         Err(e) => {
             tracing::warn!(
-                "[update_anchor] 网络获取主播 {} 信息失败（本地保存不受影响，名称/头像未自动更新）: {}",
-                anchor.id,
-                e
+                "{}",
+                tr!(
+                    "anchor.network_fetch_failed",
+                    anchor_id = anchor.id,
+                    err = e
+                )
             );
             if anchor.name.trim().is_empty() {
                 anchor.name = fallback_name.to_string();
@@ -1135,7 +1133,15 @@ mod tests {
     #[test]
     fn cookie_length_validation_rejects_oversized_values() {
         let err = validate_cookie_len(Some(&"a".repeat(COOKIE_MAX_LEN + 1))).unwrap_err();
-        assert!(err.message.contains("Cookie 过长"), "错误: {}", err.message);
+        assert!(
+            err.message.contains(&tr!(
+                "anchor.cookie_too_long",
+                len = COOKIE_MAX_LEN + 1,
+                max = COOKIE_MAX_LEN
+            )),
+            "错误: {}",
+            err.message
+        );
         // 消息应包含实际长度与上限（便于用户理解）
         assert!(err.message.contains(&(COOKIE_MAX_LEN + 1).to_string()));
         assert!(err.message.contains(&COOKIE_MAX_LEN.to_string()));

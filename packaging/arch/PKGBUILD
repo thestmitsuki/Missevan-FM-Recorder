@@ -1,16 +1,62 @@
-# PKGBUILD 模板（Arch Linux 打包；由 release.yml 从本文件复制并注入版本号）
-# 版本号经 __PKGVER__ 占位符 + sed 注入（不依赖转义，见 release.yml）
+# Maintainer: Missevan Recorder Team <https://github.com/thestmitsuki/Missevan-FM-Recorder>
+# 猫耳FM录制器（Missevan Recorder）— Tauri 2 + Rust + Vue 3 桌面应用
+# 本地源码构建包：在 packaging/arch 目录执行 `makepkg -si` 即可构建并安装。
+# 仓库代码不在 AUR 发布、无远程 source；source 与 sha256sums 均为空（本地构建无下载无校验）
+# （源码本地构建，无外部源文件可校验）。
+
 pkgname=missevan-recorder
-pkgver=__PKGVER__
+pkgver=0.1.0
 pkgrel=1
-pkgdesc="猫耳 FM 直播自动录制工具"
+pkgdesc="猫耳 FM 直播自动录制工具（Missevan 猫耳录制器）"
 arch=('x86_64')
 url="https://github.com/thestmitsuki/Missevan-FM-Recorder"
 license=('MIT')
-depends=('webkit2gtk-4.1' 'gtk3' 'libsoup3' 'librsvg' 'libappindicator-gtk3')
+depends=('webkit2gtk-4.1' 'gtk3' 'libsoup3' 'librsvg' 'ffmpeg' 'gcc-libs' 'xdg-utils')
+# xdg-utils：tauri-plugin-opener 在 Linux 后端仍经 xdg-open 打开文件夹
+makedepends=('cargo' 'rust' 'nodejs' 'npm' 'base-devel')
+
+# 源码为本地仓库（不在线分发），source 留空；
+# source 与 sha256sums 均为空数组：makepkg 要求两数组长度一致，本地构建无下载无校验
 source=()
+sha256sums=()
+
+build() {
+  # $startdir 指向 PKGBUILD 所在目录（packaging/arch），仓库根目录在其上一级
+  local repo_root="$startdir/.."
+  cd "$repo_root"
+
+  # 前端：安装依赖并构建（vue-tsc -b && vite build → dist/）
+  npm ci
+  npm run build
+
+  # 后端：Rust release 构建（custom-protocol 会把 dist/ 前端资源内嵌进二进制，
+  # 输出 src-tauri/target/release/missevan-recorder）
+  cargo build --release --features custom-protocol --manifest-path src-tauri/Cargo.toml
+}
+
 package() {
-  # 必须复制 usr 目录本身(而非 usr/.),否则 bin/share 会错位到
-  # 包根,产生顶层 /bin 与 Arch filesystem 包冲突(usrmerge 布局)
-  cp -a "$srcdir/usr" "$pkgdir/"
+  local repo_root="$startdir/.."
+
+  # 主程序 → /usr/bin/
+  install -Dm755 "$repo_root/src-tauri/target/release/missevan-recorder" \
+    "$pkgdir/usr/bin/missevan-recorder"
+
+  # 图标 → /usr/share/pixmaps/（desktop 文件 Icon=missevan-recorder 与其对应）
+  install -Dm644 "$repo_root/src-tauri/icons/128x128.png" \
+    "$pkgdir/usr/share/pixmaps/missevan-recorder.png"
+
+  # 桌面入口 → /usr/share/applications/
+  install -d "$pkgdir/usr/share/applications"
+  cat > "$pkgdir/usr/share/applications/missevan-recorder.desktop" <<'EOF'
+[Desktop Entry]
+Type=Application
+Name=猫耳FM录制器
+Name[en]=Missevan Recorder
+Comment=猫耳 FM 直播自动录制工具
+Exec=missevan-recorder
+Icon=missevan-recorder
+Terminal=false
+Categories=AudioVideo;Audio;
+StartupWMClass=missevan-recorder
+EOF
 }

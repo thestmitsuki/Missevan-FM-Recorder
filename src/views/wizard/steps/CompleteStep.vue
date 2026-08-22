@@ -3,6 +3,7 @@
  * 向导第四页：完成页（规格「引导菜单」第四页）
  *
  * 绿色对勾 + 「一切就绪，开始录制吧！」+ 「进入应用」按钮。
+ * 视觉：成功徽标光环 + 轻微弹入动画、标题渐变、告警区卡片化。
  *
  * 写入时机（修复子代理 B 核心）：点击「进入应用」时**先全量落盘、再完成向导**：
  * 1. save_config：stagedToConfigPatch（全量 staged，含 autostart / trayMinimize→
@@ -21,7 +22,7 @@
  */
 import { ref } from "vue";
 import { useI18n } from "vue-i18n";
-import { CircleCheck, LoaderCircle, RotateCw } from "@lucide/vue";
+import { CircleCheck, RotateCw } from "@lucide/vue";
 
 import { api } from "@/services/api";
 import { isLinuxPlatform } from "@/services/platform";
@@ -30,6 +31,7 @@ import { useWizardStore } from "@/stores/wizardStore";
 import { stagedToConfigPatch } from "../stagedToConfig";
 
 import { Button } from "@/components/ui/button";
+import { Spinner } from "@/components/ui/spinner";
 
 const { t } = useI18n();
 const configStore = useConfigStore();
@@ -80,20 +82,29 @@ async function enterApp() {
 </script>
 
 <template>
-  <div class="flex flex-1 flex-col items-center justify-center text-center">
-    <div
-      class="flex size-24 items-center justify-center rounded-full bg-emerald-500/10"
-    >
-      <CircleCheck class="size-14 text-emerald-500" aria-hidden="true" />
+  <div class="flex flex-1 flex-col items-center justify-center py-4 text-center">
+    <!-- 成功徽标：光环 + 弹入动画 -->
+    <div class="relative">
+      <div
+        class="absolute -inset-5 rounded-full bg-emerald-500/15 blur-2xl"
+        aria-hidden="true"
+      />
+      <div
+        class="animate-pop-in relative flex size-28 items-center justify-center rounded-full bg-gradient-to-br from-emerald-400 to-emerald-600 text-white shadow-lg"
+      >
+        <CircleCheck class="size-14" aria-hidden="true" />
+      </div>
     </div>
 
-    <h2 class="mt-6 text-2xl font-semibold tracking-tight">
+    <h2
+      class="mt-7 bg-gradient-to-r from-foreground via-foreground to-emerald-600 bg-clip-text text-3xl font-bold tracking-tight text-transparent"
+    >
       {{ t("wizard.completeTitle") }}
     </h2>
 
     <div
       v-if="error"
-      class="mt-6 flex w-full max-w-md items-center justify-between gap-3 rounded-lg border border-destructive/40 bg-destructive/10 px-4 py-3"
+      class="mt-7 flex w-full max-w-md items-center justify-between gap-3 rounded-xl border border-destructive/40 bg-destructive/10 px-4 py-3"
       role="alert"
     >
       <span class="text-left text-xs text-destructive">
@@ -108,7 +119,7 @@ async function enterApp() {
     <!-- 开机自启（注册表）设置失败：配置已保存，仅提示该项，不阻断进入应用（I3） -->
     <div
       v-if="autostartWarn"
-      class="mt-6 flex w-full max-w-md items-center justify-between gap-3 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3"
+      class="mt-7 flex w-full max-w-md items-center justify-between gap-3 rounded-xl border border-amber-500/40 bg-amber-500/10 px-4 py-3"
       role="alert"
     >
       <span class="text-left text-xs text-amber-600 dark:text-amber-400">
@@ -116,9 +127,34 @@ async function enterApp() {
       </span>
     </div>
 
-    <Button size="lg" class="mt-8 min-w-40" :disabled="finishing" @click="enterApp">
-      <LoaderCircle v-if="finishing" class="size-4 animate-spin" />
+    <Button
+      size="lg"
+      class="mt-10 min-w-44 shadow-md"
+      :disabled="finishing"
+      @click="enterApp"
+    >
+      <Spinner v-if="finishing" class="size-4" />
+      <CircleCheck v-else class="size-4" />
       {{ t("wizard.enterApp") }}
     </Button>
   </div>
 </template>
+
+<style scoped>
+@keyframes pop-in {
+  0% {
+    opacity: 0;
+    transform: scale(0.85);
+  }
+  60% {
+    transform: scale(1.04);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+.animate-pop-in {
+  animation: pop-in 0.45s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+</style>

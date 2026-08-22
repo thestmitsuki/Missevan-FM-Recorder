@@ -29,6 +29,7 @@
 
 use std::path::Path;
 
+use crate::tr;
 use tauri_winrt_notification::{Sound, Toast};
 use windows::core::{Interface, PWSTR};
 use windows::Win32::{
@@ -71,10 +72,10 @@ pub fn show_toast(title: &str, body: &str, sound: bool) -> Result<(), String> {
 /// 返回 `Ok(true)` 表示本次新建了注册，`Ok(false)` 表示已存在。
 pub fn ensure_aumid_registered() -> Result<bool, String> {
     let exe = std::env::current_exe()
-        .map_err(|e| format!("获取当前可执行文件路径失败: {e}"))?;
+        .map_err(|e| tr!("app.exe_path_failed", err = e))?;
     let exe_dir = exe
         .parent()
-        .ok_or_else(|| "无法获取可执行文件所在目录".to_string())?;
+        .ok_or_else(|| tr!("app.exe_dir_failed").to_string())?;
 
     // 1. 用户/机器“开始菜单”已存在带本 AUMID 的快捷方式（安装器注册）→ 跳过
     for dir in start_menu_programs_dirs() {
@@ -83,13 +84,16 @@ pub fn ensure_aumid_registered() -> Result<bool, String> {
             match shortcut_aumid(&lnk) {
                 Ok(Some(id)) if id == AUMID => return Ok(false),
                 Ok(_) => tracing::debug!(
-                    "开始菜单快捷方式 {} 的 AUMID 不匹配，将重新注册",
-                    lnk.display()
+                    "{}",
+                    tr!("log.shortcut_aumid_mismatch", path = lnk.display())
                 ),
                 Err(e) => tracing::debug!(
-                    "读取快捷方式 AUMID 失败（{}），将重新注册: {}",
-                    lnk.display(),
-                    e
+                    "{}",
+                    tr!(
+                        "log.shortcut_aumid_read_failed",
+                        path = lnk.display(),
+                        err = e
+                    )
                 ),
             }
         }
@@ -97,10 +101,10 @@ pub fn ensure_aumid_registered() -> Result<bool, String> {
 
     // 2. 未注册 → 在用户“开始菜单”目录创建带 AUMID 的快捷方式
     let user_programs = user_start_menu_programs_dir()
-        .ok_or_else(|| "无法定位用户“开始菜单”目录（%APPDATA% 缺失）".to_string())?;
+        .ok_or_else(|| tr!("app.start_menu_dir_failed").to_string())?;
     create_aumid_shortcut(&user_programs.join(SHORTCUT_NAME), &exe, exe_dir)
-        .map_err(|e| format!("创建通知注册快捷方式失败: {e}"))?;
-    tracing::info!("已注册通知 AUMID（{}）——toast 将以本应用身份显示", AUMID);
+        .map_err(|e| tr!("app.shortcut_create_failed", err = e))?;
+    tracing::info!("{}", tr!("log.aumid_registered", aumid = AUMID));
     Ok(true)
 }
 
@@ -173,7 +177,7 @@ fn create_aumid_shortcut(
         shell_link.SetPath(PWSTR(exe_wide.as_ptr() as *mut u16))?;
         shell_link.SetWorkingDirectory(PWSTR(dir_wide.as_ptr() as *mut u16))?;
         shell_link.SetIconLocation(PWSTR(exe_wide.as_ptr() as *mut u16), 0)?;
-        let desc_wide = wide("missevan-recorder 通知注册快捷方式");
+        let desc_wide = wide(tr!("app.shortcut_description"));
         shell_link.SetDescription(PWSTR(desc_wide.as_ptr() as *mut u16))?;
     }
 

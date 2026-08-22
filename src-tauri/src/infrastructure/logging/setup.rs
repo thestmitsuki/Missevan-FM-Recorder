@@ -13,6 +13,7 @@ use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::fmt;
 
 use super::buffer::{LogBuffer, LogLayer, sanitize_message};
+use crate::tr;
 
 /// 日志级别白名单（与 `init_logging` 启动级别同规则）：仅接受
 /// error/warn/info/debug/trace，非法值回退 `info`。纯函数，供启动与
@@ -100,7 +101,7 @@ impl LogLevelReload {
             match self.inner.write() {
                 Ok(mut f) => *f = EnvFilter::new(level),
                 Err(e) => {
-                    tracing::warn!("日志级别热更新失败（保持原级别）: {}", e);
+                    tracing::warn!("{}", tr!("log.reload_failed", err = e));
                     return false;
                 }
             }
@@ -112,7 +113,7 @@ impl LogLevelReload {
         // 重新注册——日志级别变更频率极低，开销可忽略（官方文档推荐此 API
         // 用于低频配置变化场景）。
         tracing::callsite::rebuild_interest_cache();
-        tracing::info!("日志级别已热更新为 {}", level);
+        tracing::info!("{}", tr!("log.level_reloaded", level = level));
         true
     }
 }
@@ -237,9 +238,8 @@ fn spawn_daily_log_cleanup(
                     let removed = clean_old_logs(&log_dir, prefix, retention_days);
                     if removed > 0 {
                         tracing::debug!(
-                            "[日志] 周期清理过期日志文件 {} 个（保留 {} 天）",
-                            removed,
-                            retention_days
+                            "{}",
+                            tr!("log.daily_cleanup", count = removed, days = retention_days)
                         );
                     }
                 }
@@ -301,10 +301,7 @@ impl<W> CountingWriter<W> {
     fn handle_write_error(&self) {
         let count = self.note_failure();
         if self.should_notify() {
-            tracing::error!(
-                "[日志] 日志文件写入失败（磁盘满或权限不足），错误日志不再落盘（已失败 {} 次）",
-                count
-            );
+            tracing::error!("{}", tr!("log.write_failed", count = count));
         }
     }
 }
@@ -447,10 +444,8 @@ pub fn init_logging(
     // tracing 链路，控制台可见）；tracing::error! 经控制台/调试缓冲可见，
     // 文件层写失败由 CountingWriter 静默计数不刷屏。
     if !probe_log_file_writable(&log_dir) {
-        eprintln!(
-            "[日志] 警告：日志文件不可写（磁盘满或权限不足），本次运行日志不会落盘"
-        );
-        tracing::error!("[日志] 日志文件不可写（磁盘满或权限不足），本次运行日志不会落盘");
+        eprintln!("{}", tr!("log.file_unwritable_warn"));
+        tracing::error!("{}", tr!("log.file_unwritable"));
     }
 
     (

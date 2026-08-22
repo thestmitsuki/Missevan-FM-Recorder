@@ -28,8 +28,10 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Popover, PopoverAnchor, PopoverContent } from "@/components/ui/popover";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 const anchorStore = useAnchorStore();
 const { t } = useI18n();
@@ -38,6 +40,26 @@ const { t } = useI18n();
 const filterOpen = ref(false);
 const showScrollTop = ref(false);
 const contentRef = ref<HTMLElement | null>(null);
+
+// ── 筛选面板 Popover 无障碍：ESC/关闭后焦点归还触发器按钮 ──
+// 触发器是 PopoverAnchor + 手动 Button（非 PopoverTrigger），reka 的
+// closeAutoFocus 拿不到 triggerElement 不会自动归还焦点（焦点落 body），
+// 因此监听 escape-key-down 在关闭瞬间手动把焦点还给筛选按钮。
+const filterBtnEl = ref<HTMLElement | null>(null);
+
+/** Button 组件 ref 回调：取组件根元素（原生 button） */
+function onFilterBtnRef(el: unknown) {
+    if (el && typeof el === "object" && "$el" in el) {
+        filterBtnEl.value = (el as { $el?: unknown }).$el as HTMLElement | null;
+    } else {
+        filterBtnEl.value = el as HTMLElement | null;
+    }
+}
+
+/** ESC 关闭筛选面板后把焦点还给触发器按钮 */
+function onFilterEscapeKeyDown() {
+    filterBtnEl.value?.focus();
+}
 
 // ── 卡片网格：自适应列数（等宽列 + 显式宽度过渡）──
 // 原 auto-fill/minmax(300px,1fr) 在列数 +1 的瞬间（≈692/1012px）卡片宽会从
@@ -169,13 +191,8 @@ const railItems = computed<NavRailItem[]>(() => [
     },
     {
         id: "filter",
-        icon: Filter,
         label: t("live.filterAnchors"),
-        active: filterOpen.value,
-        expanded: filterOpen.value,
-        onClick: () => {
-            filterOpen.value = !filterOpen.value;
-        },
+        slotName: "filter", // 自定义触发器：PopoverTrigger 接管展开/收起（见模板 #filter 插槽）
     },
 ]);
 
@@ -244,27 +261,67 @@ onBeforeUnmount(() => {
 
 <template>
     <div class="relative flex h-full min-w-0 flex-1">
-        <!-- 左侧竖排操作栏（NavRail 通用组件，配置式） -->
-        <NavRail
-            :items="railItems"
-            :aria-label="t('nav.liveMonitor')"
-            :show-scroll-top="showScrollTop"
-            :scroll-top-label="t('live.backToTop')"
-            @scroll-top="scrollToTop"
-        />
+        <!-- 左侧竖排操作栏 + 筛选面板（Popover 平替手写浮层：锚定筛选按钮，点击外部/ESC 自动关闭） -->
+        <Popover v-model:open="filterOpen">
+            <NavRail
+                :items="railItems"
+                :aria-label="t('nav.liveMonitor')"
+                :show-scroll-top="showScrollTop"
+                :scroll-top-label="t('live.backToTop')"
+                @scroll-top="scrollToTop"
+            >
+                <!-- 筛选触发器：PopoverAnchor 提供锚点；展开/收起由按钮手动切换。
+                    注意 1：PopoverAnchor 必须放在 <Tooltip> 外层——Tooltip 内部自建
+                    PopperRoot，锚点若在 Tooltip 内会注册到 Tooltip 的 PopperRoot，
+                    PopoverContent 读到的仍是空锚点，浮层永不定位（错位/不可见）。
+                    注意 2：PopoverAnchor 不是 PopoverTrigger，DismissableLayer 不会把
+                    它当作 trigger 排除——面板打开时点击按钮，pointerdown 冒泡到
+                    document 触发「外部点击关闭」、mousedown 聚焦按钮触发 focusin
+                    的「外部焦点关闭」，与按钮 toggle 竞争（闪关闪开，点按钮关不掉）。
+                    因此在按钮上阻止 pointerdown / focusin 冒泡，让 toggle 独占。 -->
+                <template #filter="{ item }">
+                    <PopoverAnchor as-child>
+                        <Tooltip>
+                            <TooltipTrigger as-child>
+                                <Button
+                                    :ref="onFilterBtnRef"
+                                    size="icon"
+                                    variant="ghost"
+                                    class="size-10 max-[720px]:size-9"
+                                    :class="
+                                        filterOpen
+                                            ? 'bg-accent text-accent-foreground'
+                                            : ''
+                                    "
+                                    :aria-label="item.label"
+                                    :aria-expanded="filterOpen"
+                                    aria-haspopup="dialog"
+                                    :data-state="filterOpen ? 'open' : 'closed'"
+                                    @click="filterOpen = !filterOpen"
+                                    @pointerdown.stop
+                                    @focusin.stop
+                                >
+                                    <Filter
+                                        class="size-5 max-[720px]:size-4"
+                                    />
+                                </Button>
+                            </TooltipTrigger>
+                            <TooltipContent side="right">
+                                {{ item.label }}
+                            </TooltipContent>
+                        </Tooltip>
+                    </PopoverAnchor>
+                </template>
+            </NavRail>
 
-        <!-- 遮罩层：点击外部关闭面板（z-20 低于面板 z-30） -->
-        <div
-            v-if="filterOpen"
-            class="fixed inset-0 z-20 bg-transparent"
-            @click="filterOpen = false"
-        />
-        <!-- 筛选面板（悬浮覆盖在内容区之上，不挤压内容布局；实时生效，条件持久化 localStorage） -->
-        <aside
-            v-if="filterOpen"
-            class="absolute h-[55vh] max-h-[90vh] left-14 top-0 z-30 flex w-64 flex-col gap-5 overflow-y-auto bg-background/95 p-4 backdrop-blur rounded-lg max-[720px]:left-12"
-            :aria-label="t('live.filterTitle')"
-        >
+            <PopoverContent
+                side="right"
+                align="start"
+                :side-offset="0"
+                class="flex max-h-[55vh] w-64 flex-col gap-5 overflow-y-auto"
+                :aria-label="t('live.filterTitle')"
+                @escape-key-down="onFilterEscapeKeyDown"
+            >
             <div class="flex items-center justify-between">
                 <h2 class="text-sm font-semibold">
                     {{ t("live.filterTitle") }}
@@ -361,7 +418,8 @@ onBeforeUnmount(() => {
                     </label>
                 </RadioGroup>
             </div>
-        </aside>
+            </PopoverContent>
+        </Popover>
 
         <!-- 内容区（本页滚动容器；居中限宽显示，不贴边） -->
         <section

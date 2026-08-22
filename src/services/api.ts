@@ -41,6 +41,8 @@ export const api = {
 
   // ── Config ──
   getConfig: () => invoke<GlobalConfig>("get_config"),
+  /** 同步前端语言到后端（后端通知/错误提示/日志按此语言输出；语言存前端 localStorage） */
+  setLocale: (locale: string) => invoke<void>("set_locale", { locale }),
   saveConfig: (config: GlobalConfig) => invoke<void>("save_config", { config }),
   /** 开机自启注册表写入（save_config 只落盘字段、不写注册表；Task 14 Concern，Task 20 前端接线） */
   setAutostart: (enabled: boolean) => invoke<void>("set_autostart", { enabled }),

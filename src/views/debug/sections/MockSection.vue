@@ -201,7 +201,7 @@ onBeforeUnmount(() => {
             />
         </div>
 
-        <div v-if="errorMsg" class="mb-3 rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2 text-xs text-red-600 dark:text-red-400" role="alert">
+        <div v-if="errorMsg" class="mb-3 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive" role="alert">
             {{ errorMsg }}
         </div>
         <p v-if="actionMsg" class="mb-3 text-xs text-muted-foreground" role="status">

@@ -3,6 +3,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::domain::config::manager::ConfigManager;
 use crate::infrastructure::error::types::AppError;
+use crate::tr;
 use std::sync::Arc;
 use std::time::Duration;
 use tauri::Emitter;
@@ -110,7 +111,7 @@ pub async fn start_ffmpeg_recording(
     config_manager: Arc<ConfigManager>,
 ) -> Result<(), AppError> {
     if stream_url.trim().is_empty() {
-        return Err(AppError::config("流地址为空，无法启动录制"));
+        return Err(AppError::config(tr!("recorder.stream_url_empty")));
     }
     // M6（SSRF 纵深）：stream_url 来自外部 API（或 mock 配置），作为 ffmpeg
     // `-i` 输入前校验 scheme 为 http/https 且非回环/私网地址——拒绝 file:、
@@ -174,15 +175,15 @@ pub async fn start_ffmpeg_recording(
         std::fs::create_dir_all(parent).map_err(|e| {
             AppError::system(
                 "DIR_CREATE_FAIL",
-                format!("创建输出目录失败: {}", parent.display()),
+                tr!("recorder.create_output_dir_failed", path = parent.display()),
             )
             .with_technical(format!("{}", e))
         })?;
     }
-    tracing::info!("[录制] 文件路径: {}", output_path);
+    tracing::info!("{}", tr!("recorder.file_path", path = output_path));
     // 如果需要打印绝对路径（解决相对路径问题）
     if let Ok(abs_path) = std::path::absolute(&output_path) {
-        tracing::info!("[录制] 绝对路径: {}", abs_path.display());
+        tracing::info!("{}", tr!("recorder.absolute_path", path = abs_path.display()));
     }
 
     // S2a：磁盘预检查（disk_space_limit_gb 接入录制主链路）——每次 ffmpeg 启动
@@ -203,29 +204,36 @@ pub async fn start_ffmpeg_recording(
             notifier
                 .warning(
                     "DISK_LOW",
-                    "磁盘空间不足，暂停新录制",
-                    format!(
-                        "剩余 {} GB，低于阈值 {} GB，拒绝启动录制: {}",
-                        available_gb, threshold_gb, anchor_name
+                    tr!("recorder.disk_low_pause_title"),
+                    tr!(
+                        "recorder.disk_low_reject_body",
+                        available_gb = available_gb,
+                        threshold_gb = threshold_gb,
+                        name = anchor_name
                     ),
                 )
                 .await;
         }
         tracing::error!(
-            "[录制] 磁盘空间不足（剩余 {} GB < 阈值 {} GB），拒绝启动录制: {}",
-            available_gb,
-            threshold_gb,
-            anchor_name
+            "{}",
+            tr!(
+                "recorder.disk_low_reject_log",
+                available_gb = available_gb,
+                threshold_gb = threshold_gb,
+                name = anchor_name
+            )
         );
         return Err(
             AppError::recording(
                 crate::infrastructure::error::types::RC_DISK_LOW,
-                format!(
-                    "磁盘空间不足（剩余 {} GB < 阈值 {} GB），拒绝启动录制: {}",
-                    available_gb, threshold_gb, anchor_name
+                tr!(
+                    "recorder.disk_low_reject_msg",
+                    available_gb = available_gb,
+                    threshold_gb = threshold_gb,
+                    name = anchor_name
                 ),
             )
-            .with_suggestion("请清理磁盘空间，或降低磁盘阈值设置（disk_space_limit_gb）"),
+            .with_suggestion(tr!("recorder.disk_low_suggestion")),
         );
     }
 
@@ -246,7 +254,7 @@ pub async fn start_ffmpeg_recording(
     let mut child: Child = ffmpeg_cmd.spawn().map_err(|e| {
         // spawn 失败：本次录制未开始，移除刚写入的活动标记（防残留）
         remove_recording_marker(&output_path);
-        AppError::system("FFMPEG_SPAWN_FAIL", "启动 FFmpeg 进程失败")
+        AppError::system("FFMPEG_SPAWN_FAIL", tr!("recorder.ffmpeg_spawn_failed"))
             .with_technical(format!("{}", e))
     })?;
 
@@ -275,7 +283,7 @@ pub async fn start_ffmpeg_recording(
     if let Err(e) = recorder.insert_process(anchor_id.clone(), child).await {
         // 重复注册被拒：刚 spawn 的 child 已被终止，移除活动标记（无残留）
         remove_recording_marker(&output_path);
-        tracing::warn!("拒绝重复录制启动（进程表已存在同主播）: {}", e);
+        tracing::warn!("{}", tr!("recorder.duplicate_start_rejected", err = e));
         return Err(e);
     }
 
@@ -299,9 +307,9 @@ pub async fn start_ffmpeg_recording(
 
     let monitor_handle: JoinHandle<()> = tokio::spawn(async move {
         if let Ok(meta) = tokio::fs::metadata(&output_path_for_monitor).await {
-            tracing::info!("[录制] 当前文件大小: {} 字节", meta.len());
+            tracing::info!("{}", tr!("recorder.current_file_size", bytes = meta.len()));
         } else {
-            tracing::warn!("[录制] 文件尚未创建: {}", output_path_for_monitor);
+            tracing::warn!("{}", tr!("recorder.file_not_created", path = output_path_for_monitor));
         }
         monitor_recording(
             anchor_id_for_monitor, // 直接移动
@@ -495,8 +503,8 @@ impl FfmpegRecorder {
             Ok(None) => ChildProbe::Running,
             Err(e) => {
                 tracing::warn!(
-                    "[录制] 探测子进程状态失败（按 Unknown 处理，不误判崩溃）: {}",
-                    e
+                    "{}",
+                    tr!("recorder.probe_failed", err = e)
                 );
                 ChildProbe::Unknown
             }
@@ -518,7 +526,7 @@ impl FfmpegRecorder {
         let ids = self.active_anchor_ids();
         for id in ids {
             if let Err(e) = self.stop(&id).await {
-                tracing::warn!("[录制] 退出前强制终止失败: {}", e);
+                tracing::warn!("{}", tr!("recorder.force_terminate_failed", err = e));
             }
         }
     }
@@ -581,18 +589,24 @@ impl FfmpegRecorder {
         match (action, outcome) {
             (StopAction::Reaped, Ok(Ok(status))) => {
                 tracing::info!(
-                    "[录制] FFmpeg 进程已退出 (pid={:?}, status={})",
-                    pid,
-                    status
+                    "{}",
+                    tr!(
+                        "recorder.ffmpeg_exited",
+                        pid = format!("{:?}", pid),
+                        status = status
+                    )
                 );
             }
             // wait 出错（罕见，句柄状态异常）：不强杀（进程状态未知，强杀可能
             // 误伤；交由 kill_on_drop 兜底）。
             (StopAction::SkipForceKill, Ok(Err(e))) => {
                 tracing::warn!(
-                    "[录制] 等待 FFmpeg 进程退出失败 (pid={:?}): {}（不强杀，kill_on_drop 兜底）",
-                    pid,
-                    e
+                    "{}",
+                    tr!(
+                        "recorder.wait_exit_failed",
+                        pid = format!("{:?}", pid),
+                        err = e
+                    )
                 );
             }
             // 优雅等待超时 → 强制 kill。平台语义：Windows 无 SIGTERM，tokio
@@ -601,9 +615,12 @@ impl FfmpegRecorder {
             // IO 阻塞，SIGTERM 同样无效）。
             (StopAction::ForceKill, Err(_elapsed)) => {
                 tracing::warn!(
-                    "[录制] 优雅退出超时（{}ms），强制终止 FFmpeg (pid={:?})",
-                    graceful_timeout.as_millis(),
-                    pid
+                    "{}",
+                    tr!(
+                        "recorder.graceful_timeout",
+                        ms = graceful_timeout.as_millis(),
+                        pid = format!("{:?}", pid)
+                    )
                 );
                 match child.start_kill() {
                     Ok(()) => {
@@ -614,15 +631,15 @@ impl FfmpegRecorder {
                     }
                     Err(e) => {
                         tracing::warn!(
-                            "[录制] 强制终止 FFmpeg 失败（kill_on_drop 兜底）: {}",
-                            e
+                            "{}",
+                            tr!("recorder.force_kill_failed", err = e)
                         );
                     }
                 }
             }
             // 其余组合不可达（决策函数与等待结果一一对应）；防御性记录，不 panic
             (a, o) => {
-                tracing::warn!("[录制] 停止决策与等待结果不一致（action={:?}），忽略", a);
+                tracing::warn!("{}", tr!("recorder.stop_action_mismatch", action = format!("{:?}", a)));
                 let _ = o;
             }
         }
@@ -650,16 +667,16 @@ impl FfmpegRecorder {
 /// 运营商级 NAT（阿里云元数据服务 100.100.100.200 所在段）。
 fn validate_stream_url(url: &str) -> Result<(), AppError> {
     let parsed = url::Url::parse(url)
-        .map_err(|_| AppError::config("流地址不是有效 URL"))?;
+        .map_err(|_| AppError::config(tr!("recorder.stream_url_invalid")))?;
     let scheme = parsed.scheme();
     if scheme != "http" && scheme != "https" {
-        return Err(AppError::config(format!(
-            "流地址 scheme 不支持: {}（仅允许 http/https）",
-            scheme
+        return Err(AppError::config(tr!(
+            "recorder.scheme_unsupported",
+            scheme = scheme
         )));
     }
     let Some(host) = parsed.host() else {
-        return Err(AppError::config("流地址缺少主机名"));
+        return Err(AppError::config(tr!("recorder.stream_url_missing_host")));
     };
     // 私网/回环判定（IPv4 与 IPv6 内嵌 IPv4 共用）。is_cgnat 未稳定（Rust
     // 1.96 仍为 nightly API），100.64.0.0/10 手动判定：首字节 100 且次字节
@@ -677,7 +694,7 @@ fn validate_stream_url(url: &str) -> Result<(), AppError> {
     match host {
         url::Host::Ipv4(v4) => {
             if is_blocked_v4(&v4) {
-                return Err(AppError::config("流地址不允许使用回环/私网地址"));
+                return Err(AppError::config(tr!("recorder.loopback_private_not_allowed")));
             }
         }
         url::Host::Ipv6(v6) => {
@@ -704,7 +721,7 @@ fn validate_stream_url(url: &str) -> Result<(), AppError> {
                 });
             if let Some(v4) = embedded_v4 {
                 if is_blocked_v4(&v4) {
-                    return Err(AppError::config("流地址不允许使用回环/私网地址"));
+                    return Err(AppError::config(tr!("recorder.loopback_private_not_allowed")));
                 }
             }
             // IPv6 原生特殊段：回环 ::1 / 未指定 :: / ULA fc00::/7 / 链路本地
@@ -715,13 +732,13 @@ fn validate_stream_url(url: &str) -> Result<(), AppError> {
                 || v6.is_unique_local()
                 || link_local
             {
-                return Err(AppError::config("流地址不允许使用回环/私网地址"));
+                return Err(AppError::config(tr!("recorder.loopback_private_not_allowed")));
             }
         }
         url::Host::Domain(domain) => {
             let d = domain.to_ascii_lowercase();
             if d == "localhost" || d.ends_with(".localhost") {
-                return Err(AppError::config("流地址不允许使用 localhost"));
+                return Err(AppError::config(tr!("recorder.localhost_not_allowed")));
             }
         }
     }
@@ -767,7 +784,7 @@ pub fn sanitize_path_component(raw: &str) -> String {
 fn already_recording_err(anchor_id: &str) -> AppError {
     AppError::recording(
         crate::infrastructure::error::types::RC_ALREADY_RECORDING,
-        format!("主播 {} 已在录制中", anchor_id),
+        tr!("recorder.already_recording", anchor_id = anchor_id),
     )
 }
 
@@ -902,12 +919,13 @@ fn check_concurrency_limit(
     if max_concurrent > 0 && active_count >= max_concurrent as usize {
         let err = AppError::recording(
             crate::infrastructure::error::types::RC_CONCURRENCY_LIMIT,
-            format!(
-                "已达并发录制上限（{} 个），拒绝启动新录制: {}",
-                max_concurrent, anchor_name
+            tr!(
+                "recorder.concurrency_limit_reached",
+                max_concurrent = max_concurrent,
+                name = anchor_name
             ),
         );
-        tracing::warn!("[录制] {}", err.message);
+        tracing::warn!("{} {}", tr!("recorder.log_prefix"), err.message);
         return Err(err);
     }
     Ok(())
@@ -962,8 +980,8 @@ fn write_recording_marker(output_path: &str, segment_seconds: u64, ext: &str) {
         return;
     };
     match std::fs::write(&path, text) {
-        Ok(_) => tracing::debug!("[录制] 已创建活动标记: {}", path),
-        Err(e) => tracing::warn!("[录制] 创建活动标记失败（启动清理将无法识别本次产物）: {}: {}", path, e),
+        Ok(_) => tracing::debug!("{}", tr!("recorder.marker_created", path = path)),
+        Err(e) => tracing::warn!("{}", tr!("recorder.marker_create_failed", path = path, err = e)),
     }
 }
 
@@ -974,7 +992,7 @@ pub fn remove_recording_marker(output_path: &str) {
     match std::fs::remove_file(path) {
         Ok(_) => {}
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-        Err(e) => tracing::warn!("[录制] 移除活动标记失败: {}: {}", path.display(), e),
+        Err(e) => tracing::warn!("{}", tr!("recorder.marker_remove_failed", path = path.display(), err = e)),
     }
 }
 
@@ -986,16 +1004,16 @@ fn remove_file_entry(path: &std::path::Path) -> bool {
         return false;
     };
     if meta.file_type().is_symlink() {
-        tracing::warn!("[孤儿清理] 跳过符号链接/junction 项（不跟随链接）: {}", path.display());
+        tracing::warn!("{}", tr!("recorder.orphan_skip_symlink", path = path.display()));
         return false;
     }
     match std::fs::remove_file(path) {
         Ok(_) => {
-            tracing::info!("[孤儿清理] 已删除: {}", path.display());
+            tracing::info!("{}", tr!("recorder.orphan_deleted", path = path.display()));
             true
         }
         Err(e) => {
-            tracing::warn!("[孤儿清理] 删除失败（跳过）: {}: {}", path.display(), e);
+            tracing::warn!("{}", tr!("recorder.orphan_delete_failed", path = path.display(), err = e));
             false
         }
     }
@@ -1157,16 +1175,16 @@ pub fn cleanup_orphan_recordings(
                 // 非链接）；内容损坏/不一致仅告警不删除
                 let Ok(text) = std::fs::read_to_string(&path) else {
                     tracing::warn!(
-                        "[孤儿清理] 发现无法读取的录制标记（跳过，不删除）: {}",
-                        path.display()
+                        "{}",
+                        tr!("recorder.marker_unreadable", path = path.display())
                     );
                     warnings += 1;
                     continue;
                 };
                 let Ok(parsed) = serde_json::from_str::<RecordingMarker>(&text) else {
                     tracing::warn!(
-                        "[孤儿清理] 发现无法解析的录制标记（跳过，不删除）: {}",
-                        path.display()
+                        "{}",
+                        tr!("recorder.marker_unparseable", path = path.display())
                     );
                     warnings += 1;
                     continue;
@@ -1176,16 +1194,19 @@ pub fn cleanup_orphan_recordings(
                 let norm = parsed.output.replace('\\', "/");
                 if norm != marker_output.replace('\\', "/") || !norm.starts_with(&dir_prefix) {
                     tracing::warn!(
-                        "[孤儿清理] 录制标记内容与所在位置不一致（跳过，不删除）: {}",
-                        path.display()
+                        "{}",
+                        tr!("recorder.marker_mismatch", path = path.display())
                     );
                     warnings += 1;
                     continue;
                 }
                 tracing::info!(
-                    "[孤儿清理] 检测到上次异常退出的录制标记: {}（segmented={}），清理残留产物",
-                    marker_output,
-                    parsed.segmented
+                    "{}",
+                    tr!(
+                        "recorder.marker_detected",
+                        path = marker_output,
+                        segmented = parsed.segmented
+                    )
                 );
                 removed += cleanup_marker_products(&parsed, &path);
                 markers_cleaned += 1;
@@ -1205,8 +1226,8 @@ pub fn cleanup_orphan_recordings(
                     .unwrap_or(false);
                 if !covered_by_marker {
                     tracing::warn!(
-                        "[孤儿清理] 发现无标记的半成品文件（仅告警，不删除——无规则可循）: {}",
-                        path.display()
+                        "{}",
+                        tr!("recorder.orphan_partial_no_marker", path = path.display())
                     );
                     warnings += 1;
                 }
@@ -1216,15 +1237,18 @@ pub fn cleanup_orphan_recordings(
     }
     if removed > 0 || markers_cleaned > 0 {
         tracing::info!(
-            "[孤儿清理] 启动清理完成: 删除 {} 个文件 / 清理 {} 个录制标记 / 仅告警 {} 个",
-            removed,
-            markers_cleaned,
-            warnings
+            "{}",
+            tr!(
+                "recorder.cleanup_done",
+                removed = removed,
+                markers = markers_cleaned,
+                warnings = warnings
+            )
         );
     } else if warnings > 0 {
         tracing::warn!(
-            "[孤儿清理] 启动清理完成: 仅发现 {} 个无标记半成品（已告警，未删除）",
-            warnings
+            "{}",
+            tr!("recorder.cleanup_done_partials_only", warnings = warnings)
         );
     }
     (removed, markers_cleaned, warnings)
@@ -1308,17 +1332,19 @@ pub fn mark_crash_partials(output_path: &str, segmented: bool, ext: &str) -> usi
         match std::fs::rename(&path, &new_path) {
             Ok(_) => {
                 tracing::warn!(
-                    "[录制] 录制崩溃产物已改名标记（.part，稍后自动清理）: {} → {}",
-                    path.display(),
-                    new_path.display()
+                    "{}",
+                    tr!(
+                        "recorder.crash_partial_renamed",
+                        from = path.display(),
+                        to = new_path.display()
+                    )
                 );
                 handled += 1;
             }
             Err(e) => {
                 tracing::warn!(
-                    "[录制] 崩溃产物改名失败，直接删除: {}: {}",
-                    path.display(),
-                    e
+                    "{}",
+                    tr!("recorder.crash_rename_failed", path = path.display(), err = e)
                 );
                 if remove_file_entry(&path) {
                     handled += 1;
@@ -1330,8 +1356,8 @@ pub fn mark_crash_partials(output_path: &str, segmented: bool, ext: &str) -> usi
     // 清理改名后的 .part 残留（若在此删除，启动清理只能告警、无法自动回收）
     if handled > 0 {
         tracing::warn!(
-            "[录制] 崩溃半成品处置完成：{} 个文件已改名标记（.part）或删除；auto_cleanup 语义不适用于崩溃残留，用户可手动删除 .part 文件，下次启动将自动清理",
-            handled
+            "{}",
+            tr!("recorder.crash_partials_done", count = handled)
         );
     }
     handled

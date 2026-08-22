@@ -83,10 +83,10 @@ watch(
     (n) => {
         if (n) {
             toastMessage.value = n.message;
-            toastKey.value++; // 每次新通知都改变 key，强制重建组件
+            toastKey.value++; // 通知序号：同文案连续通知也触发 Toast 刷新（不再重建组件，避免 sonner 丢失 toast）
         } else {
             toastMessage.value = ""; // 清空消息
-            toastKey.value = 0; // 重置 key（或设为 null）
+            toastKey.value = 0; // 重置序号
         }
     },
     { immediate: false },
@@ -99,7 +99,7 @@ watch(
         <AppLayout v-else />
     </ErrorBoundary>
     <!--- ##引发过消息残留## --->
-    <Toast :key="toastKey" :message="toastMessage" :duration="3000" />
+    <Toast :message="toastMessage" :nonce="toastKey" :duration="3000" />
 </template>
 
 <style>

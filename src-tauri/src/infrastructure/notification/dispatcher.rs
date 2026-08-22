@@ -5,6 +5,7 @@ use tracing;
 
 use super::buffer::RingBuffer;
 use super::types::{Notification, NotificationLevel};
+use crate::tr;
 
 const RING_BUFFER_CAPACITY: usize = 500;
 
@@ -155,8 +156,13 @@ impl NotificationDispatcher {
         use crate::infrastructure::notification::windows_toast;
         if let Err(e) = windows_toast::show_toast(&n.title, &n.message, sound) {
             tracing::warn!(
-                "发送系统通知失败 ({}): {} —— Windows toast 需已注册 AUMID {}（启动时已注册，见日志）",
-                n.code, e, windows_toast::AUMID
+                "{}",
+                tr!(
+                    "log.system_notify_failed",
+                    code = n.code,
+                    err = e,
+                    aumid = windows_toast::AUMID
+                )
             );
         }
     }
@@ -173,7 +179,10 @@ impl NotificationDispatcher {
             builder = builder.sound("default");
         }
         if let Err(e) = builder.show() {
-            tracing::warn!("发送系统通知失败 ({}): {}", n.code, e);
+            tracing::warn!(
+                "{}",
+                tr!("log.system_notify_failed_short", code = n.code, err = e)
+            );
         }
     }
 

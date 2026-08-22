@@ -26,8 +26,8 @@ import {
 export interface NavRailItem {
     /** 唯一标识 */
     id: string;
-    /** 图标组件（@lucide/vue） */
-    icon: Component;
+    /** 图标组件（@lucide/vue）；使用 slotName 自定义触发器时可不提供 */
+    icon?: Component;
     /** 已翻译的按钮文案（Tooltip + aria-label） */
     label: string;
     /** 激活态高亮（视图模式 / 筛选面板展开等） */
@@ -38,6 +38,8 @@ export interface NavRailItem {
     expanded?: boolean;
     /** 禁用态 */
     disabled?: boolean;
+    /** 自定义触发器插槽名：提供时渲染调用方插槽（用于 Popover 等组合触发），不渲染默认按钮 */
+    slotName?: string;
     /** 点击处理（由调用方声明） */
     onClick?: () => void;
 }
@@ -75,16 +77,17 @@ const emit = defineEmits<{
         >
             <!-- 配置按钮区 -->
             <template v-for="item in props.items" :key="item.id">
-                <Tooltip>
+                <!-- 自定义触发器（Popover 组合等）：由调用方插槽提供，仍置于 TooltipProvider 内 -->
+                <slot v-if="item.slotName" :name="item.slotName" :item="item" />
+                <Tooltip v-else>
                     <TooltipTrigger as-child>
                         <Button
                             size="icon"
                             :variant="item.primary ? 'default' : 'ghost'"
-                            class="size-10 max-[720px]:size-9"
                             :class="[
                                 item.primary
                                     ? 'size-11 rounded-full shadow-sm max-[720px]:size-10'
-                                    : '',
+                                    : 'size-10 max-[720px]:size-9',
                                 item.active ? 'bg-accent text-accent-foreground' : '',
                             ]"
                             :aria-label="item.label"
@@ -92,7 +95,11 @@ const emit = defineEmits<{
                             :disabled="item.disabled"
                             @click="item.onClick"
                         >
-                            <component :is="item.icon" class="size-5 max-[720px]:size-4" />
+                            <component
+                                v-if="item.icon"
+                                :is="item.icon"
+                                class="size-5 max-[720px]:size-4"
+                            />
                         </Button>
                     </TooltipTrigger>
                     <TooltipContent side="right">

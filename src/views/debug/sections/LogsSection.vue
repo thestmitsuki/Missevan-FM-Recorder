@@ -14,6 +14,11 @@ import { api } from "@/services/api";
 import { onDebugLog } from "@/services/events";
 import type { LogEntry } from "@/types";
 import { Button } from "@/components/ui/button";
+import {
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+} from "@/components/ui/empty";
 import { Input } from "@/components/ui/input";
 import { levelActiveClass, levelClass, formatTime } from "./shared";
 import SectionCard from "./SectionCard.vue";
@@ -176,11 +181,11 @@ onBeforeUnmount(() => {
         <!-- 工具栏：级别 / 来源 / 搜索 -->
         <div class="mb-3 flex flex-wrap items-center gap-2">
             <div class="flex flex-wrap items-center gap-1.5">
-                <button
+                <Button
                     v-for="lvl in LOG_LEVELS"
                     :key="lvl"
-                    type="button"
-                    class="rounded-full border px-2.5 py-0.5 text-xs font-medium transition-colors"
+                    variant="outline"
+                    class="h-auto rounded-full px-2.5 py-0.5 text-xs font-medium transition-colors"
                     :class="
                         levelFilter.has(lvl)
                             ? levelActiveClass(lvl)
@@ -189,15 +194,15 @@ onBeforeUnmount(() => {
                     @click="toggleLevel(lvl)"
                 >
                     {{ lvl }}
-                </button>
-                <button
+                </Button>
+                <Button
                     v-if="levelFilter.size > 0"
-                    type="button"
-                    class="text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
+                    variant="link"
+                    class="h-auto px-1 text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
                     @click="levelFilter = new Set()"
                 >
                     {{ t("debug.logs.clearLevels") }}
-                </button>
+                </Button>
             </div>
 
             <Input
@@ -236,7 +241,7 @@ onBeforeUnmount(() => {
             </span>
         </div>
 
-        <div v-if="errorMsg" class="mb-2 rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2 text-xs text-red-600 dark:text-red-400">
+        <div v-if="errorMsg" class="mb-2 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
             {{ errorMsg }}
         </div>
 
@@ -246,9 +251,16 @@ onBeforeUnmount(() => {
             class="h-96 overflow-y-auto rounded-md border bg-black/90 p-2 font-mono text-xs leading-5 dark:bg-black"
             @scroll="onScroll"
         >
-            <div v-if="logs.length === 0" class="p-4 text-center text-muted-foreground">
-                {{ t("debug.logs.empty") }}
-            </div>
+            <Empty
+                v-if="logs.length === 0"
+                class="h-full rounded-none border-0 p-4 md:p-4"
+            >
+                <EmptyContent>
+                    <EmptyDescription class="text-xs">
+                        {{ t("debug.logs.empty") }}
+                    </EmptyDescription>
+                </EmptyContent>
+            </Empty>
             <div
                 v-for="(entry, idx) in filteredLogs"
                 :key="entry.timestamp + '-' + idx"

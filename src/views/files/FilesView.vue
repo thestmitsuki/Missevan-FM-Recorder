@@ -56,11 +56,15 @@ import EmptyState from "@/components/common/EmptyState.vue";
 import ConfirmDialog from "@/components/common/ConfirmDialog.vue";
 import NavRail, { type NavRailItem } from "@/components/common/NavRail.vue";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Popover, PopoverAnchor, PopoverContent } from "@/components/ui/popover";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Slider } from "@/components/ui/slider";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
     Dialog,
     DialogContent,
@@ -85,6 +89,26 @@ const searchOpen = ref(false);
 const filterOpen = ref(false);
 const showScrollTop = ref(false);
 const contentRef = ref<HTMLElement | null>(null);
+
+// ── 筛选面板 Popover 无障碍：ESC/关闭后焦点归还触发器按钮 ──
+// 触发器是 PopoverAnchor + 手动 Button（非 PopoverTrigger），reka 的
+// closeAutoFocus 拿不到 triggerElement 不会自动归还焦点（焦点落 body），
+// 因此监听 escape-key-down 在关闭瞬间手动把焦点还给筛选按钮。
+const filterBtnEl = ref<HTMLElement | null>(null);
+
+/** Button 组件 ref 回调：取组件根元素（原生 button） */
+function onFilterBtnRef(el: unknown) {
+    if (el && typeof el === "object" && "$el" in el) {
+        filterBtnEl.value = (el as { $el?: unknown }).$el as HTMLElement | null;
+    } else {
+        filterBtnEl.value = el as HTMLElement | null;
+    }
+}
+
+/** ESC 关闭筛选面板后把焦点还给触发器按钮 */
+function onFilterEscapeKeyDown() {
+    filterBtnEl.value?.focus();
+}
 
 // ── 虚拟滚动运行态：列表相对滚动位置 + 视口高度 ──
 const listRef = ref<HTMLElement | null>(null);
@@ -188,13 +212,8 @@ const railItems = computed<NavRailItem[]>(() => [
     },
     {
         id: "filter",
-        icon: SlidersHorizontal,
         label: t("files.filterFiles"),
-        active: filterOpen.value,
-        expanded: filterOpen.value,
-        onClick: () => {
-            filterOpen.value = !filterOpen.value;
-        },
+        slotName: "filter", // 自定义触发器：PopoverTrigger 接管展开/收起（见模板 #filter 插槽）
     },
     {
         id: "open-dir",
@@ -857,14 +876,9 @@ function playFiles(files: RecordingFile[]) {
     player.playFiles(files);
 }
 
-const progressPercent = computed(() => {
-    if (!player.duration) return 0;
-    return Math.min(100, (player.currentTime / player.duration) * 100);
-});
-
-function seekAudio(e: MouseEvent) {
-    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-    player.seek((e.clientX - rect.left) / rect.width);
+function seekAudio(value: number[]) {
+    const next = value[0] ?? 0;
+    if (player.duration) player.seek(next / player.duration);
 }
 
 /** 音量滑块双向绑定（Slider 组件，跟随主题；setVolume 同步到 audio） */
@@ -914,27 +928,67 @@ onBeforeUnmount(() => {
 
 <template>
     <div class="relative flex h-full min-w-0 flex-1">
-        <!-- 左侧竖排操作栏（NavRail 通用组件，配置式） -->
-        <NavRail
-            :items="railItems"
-            :aria-label="t('nav.fileManager')"
-            :show-scroll-top="showScrollTop"
-            :scroll-top-label="t('files.backToTop')"
-            @scroll-top="scrollToTop"
-        />
+        <!-- 左侧竖排操作栏 + 筛选面板（Popover 平替手写浮层：锚定筛选按钮，点击外部/ESC 自动关闭） -->
+        <Popover v-model:open="filterOpen">
+            <NavRail
+                :items="railItems"
+                :aria-label="t('nav.fileManager')"
+                :show-scroll-top="showScrollTop"
+                :scroll-top-label="t('files.backToTop')"
+                @scroll-top="scrollToTop"
+            >
+                <!-- 筛选触发器：PopoverAnchor 提供锚点；展开/收起由按钮手动切换。
+                    注意 1：PopoverAnchor 必须放在 <Tooltip> 外层——Tooltip 内部自建
+                    PopperRoot，锚点若在 Tooltip 内会注册到 Tooltip 的 PopperRoot，
+                    PopoverContent 读到的仍是空锚点，浮层永不定位（错位/不可见）。
+                    注意 2：PopoverAnchor 不是 PopoverTrigger，DismissableLayer 不会把
+                    它当作 trigger 排除——面板打开时点击按钮，pointerdown 冒泡到
+                    document 触发「外部点击关闭」、mousedown 聚焦按钮触发 focusin
+                    的「外部焦点关闭」，与按钮 toggle 竞争（闪关闪开，点按钮关不掉）。
+                    因此在按钮上阻止 pointerdown / focusin 冒泡，让 toggle 独占。 -->
+                <template #filter="{ item }">
+                    <PopoverAnchor as-child>
+                        <Tooltip>
+                            <TooltipTrigger as-child>
+                                <Button
+                                    :ref="onFilterBtnRef"
+                                    size="icon"
+                                    variant="ghost"
+                                    class="size-10 max-[720px]:size-9"
+                                    :class="
+                                        filterOpen
+                                            ? 'bg-accent text-accent-foreground'
+                                            : ''
+                                    "
+                                    :aria-label="item.label"
+                                    :aria-expanded="filterOpen"
+                                    aria-haspopup="dialog"
+                                    :data-state="filterOpen ? 'open' : 'closed'"
+                                    @click="filterOpen = !filterOpen"
+                                    @pointerdown.stop
+                                    @focusin.stop
+                                >
+                                    <SlidersHorizontal
+                                        class="size-5 max-[720px]:size-4"
+                                    />
+                                </Button>
+                            </TooltipTrigger>
+                            <TooltipContent side="right">
+                                {{ item.label }}
+                            </TooltipContent>
+                        </Tooltip>
+                    </PopoverAnchor>
+                </template>
+            </NavRail>
 
-        <!-- 遮罩层：点击外部关闭面板（z-20 低于面板 z-30） -->
-        <div
-            v-if="filterOpen"
-            class="fixed inset-0 z-20 bg-transparent"
-            @click="filterOpen = false"
-        />
-        <!-- 筛选面板（悬浮覆盖在内容区之上，不挤压内容布局；与搜索框叠加生效） -->
-        <aside
-            v-if="filterOpen"
-            class="absolute h-[45vh] max-h-[90vh] left-14 top-0 z-30 flex w-64 flex-col gap-5 overflow-y-auto bg-background/95 p-4 backdrop-blur rounded-lg max-[720px]:left-12"
-            :aria-label="t('files.filterFiles')"
-        >
+            <PopoverContent
+                side="right"
+                align="start"
+                :side-offset="0"
+                class="flex max-h-[45vh] w-64 flex-col gap-5 overflow-y-auto"
+                :aria-label="t('files.filterFiles')"
+                @escape-key-down="onFilterEscapeKeyDown"
+            >
             <div class="flex items-center justify-between">
                 <h2 class="text-sm font-semibold">
                     {{ t("files.filterFiles") }}
@@ -1010,7 +1064,8 @@ onBeforeUnmount(() => {
                     />
                 </div>
             </div>
-        </aside>
+            </PopoverContent>
+        </Popover>
 
         <!-- 内容区（本页滚动容器；居中限宽显示，不贴边） -->
         <section
@@ -1117,12 +1172,13 @@ onBeforeUnmount(() => {
                             <span class="text-sm font-semibold">{{
                                 entry.item.label
                             }}</span>
-                            <span
+                            <Badge
+                                as="span"
                                 v-if="entry.item.isCurrentMonth"
-                                class="shrink-0 rounded-full bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium leading-tight text-primary"
+                                class="bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium leading-tight text-primary"
                             >
                                 {{ t("files.thisMonth") }}
-                            </span>
+                            </Badge>
                             <span class="text-xs text-muted-foreground">
                                 {{
                                     t("files.fileCount", {
@@ -1357,16 +1413,21 @@ onBeforeUnmount(() => {
                                     >
                                         {{ entry.item.file.name }}
                                     </span>
-                                    <!-- 录制中标记：正被 FFmpeg 写入，禁删/禁重命名 -->
-                                    <span
+                                    <!-- 录制中标记：正被 FFmpeg 写入，禁删/禁重命名
+                                        颜色：以 --primary 为种子色派生（跟随主题强调色），
+                                        与「本月」徽标（primary/10）通过透明度分层保持差异
+                                        （录制中 15% 底更深 + 实心脉冲点，状态更突出） -->
+                                    <Badge
+                                        as="span"
                                         v-if="entry.item.file.is_active"
-                                        class="flex shrink-0 items-center gap-1 rounded-full bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium leading-tight text-amber-600 dark:text-amber-400"
+                                        class="bg-primary/15 px-1.5 py-0.5 text-[10px] font-medium leading-tight text-primary"
                                     >
                                         <span
-                                            class="size-1.5 animate-pulse rounded-full bg-amber-500"
+                                            class="size-1.5 animate-pulse rounded-full bg-primary"
+                                            aria-hidden="true"
                                         />
                                         {{ t("files.recordingActive") }}
-                                    </span>
+                                    </Badge>
                                 </p>
                             </div>
                             <span
@@ -1511,9 +1572,9 @@ onBeforeUnmount(() => {
         <!-- 内置播放器（底部浮条；多文件队列播放时显示进度 x/y）。
              UI 在文件页，但音频生命周期全局（playerStore 单例 audio 挂
              document.body）：切页不停止播放，切回时 UI 从 store 恢复。 -->
-        <div
+        <Card
             v-if="player.currentFile"
-            class="fixed bottom-4 left-1/2 z-50 flex w-[min(560px,calc(100vw-2rem))] -translate-x-1/2 items-center gap-3 rounded-xl border border-border/70 bg-background/95 p-3 shadow-lg backdrop-blur"
+            class="fixed bottom-4 left-1/2 z-50 flex w-[min(560px,calc(100vw-2rem))] -translate-x-1/2 flex-row items-center gap-3 rounded-xl border-border/70 bg-background/95 p-3 shadow-lg backdrop-blur"
             :aria-label="t('files.nowPlaying')"
         >
             <Button
@@ -1532,9 +1593,9 @@ onBeforeUnmount(() => {
                     <p class="truncate text-xs font-semibold">
                         {{ player.currentFile.name }}
                     </p>
-                    <span
+                    <Badge
                         v-if="player.isQueuePlay"
-                        class="shrink-0 rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary"
+                        class="shrink-0 border-transparent bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary"
                     >
                         {{
                             t("files.playerProgress", {
@@ -1542,7 +1603,7 @@ onBeforeUnmount(() => {
                                 total: player.queue.length,
                             })
                         }}
-                    </span>
+                    </Badge>
                 </div>
                 <div class="mt-1 flex items-center gap-2">
                     <span
@@ -1550,20 +1611,15 @@ onBeforeUnmount(() => {
                     >
                         {{ formatTime(player.currentTime) }}
                     </span>
-                    <div
-                        class="h-1.5 flex-1 cursor-pointer rounded-full bg-muted"
-                        role="slider"
-                        :aria-valuemin="0"
-                        :aria-valuemax="player.duration || 0"
-                        :aria-valuenow="player.currentTime"
+                    <Slider
+                        :model-value="[player.currentTime]"
+                        :min="0"
+                        :max="player.duration || 0"
+                        :step="0.1"
+                        class="h-1.5 flex-1"
                         :aria-label="t('files.playerSeek')"
-                        @click="seekAudio"
-                    >
-                        <div
-                            class="h-1.5 rounded-full bg-primary"
-                            :style="{ width: progressPercent + '%' }"
-                        />
-                    </div>
+                        @update:model-value="(v: number[] | undefined) => seekAudio(v ?? [])"
+                    />
                     <span
                         class="w-9 shrink-0 text-[10px] tabular-nums text-muted-foreground"
                     >
@@ -1595,6 +1651,6 @@ onBeforeUnmount(() => {
                     <X class="size-4" />
                 </Button>
             </div>
-        </div>
+        </Card>
     </div>
 </template>

@@ -50,7 +50,7 @@ export function formatDuration(secs: number): string {
 export function statusRowClass(status: number): string {
   if (status >= 200 && status < 300) return "bg-emerald-500/5";
   if (status === 429) return "bg-amber-500/10";
-  if (status >= 500 || status === 0) return "bg-red-500/10";
+  if (status >= 500 || status === 0) return "bg-destructive/10";
   return "";
 }
 
@@ -58,7 +58,7 @@ export function statusRowClass(status: number): string {
 export function levelClass(level: string): string {
   switch (level) {
     case "error":
-      return "text-red-500";
+      return "text-destructive";
     case "warn":
       return "text-amber-500";
     case "info":
@@ -74,7 +74,7 @@ export function levelClass(level: string): string {
 export function levelActiveClass(level: string): string {
   switch (level) {
     case "error":
-      return "border-red-500 bg-red-500/15 text-red-600 dark:text-red-400";
+      return "border-destructive bg-destructive/15 text-destructive";
     case "warn":
       return "border-amber-500 bg-amber-500/15 text-amber-600 dark:text-amber-400";
     case "info":

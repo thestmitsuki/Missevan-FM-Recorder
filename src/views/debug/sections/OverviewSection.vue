@@ -130,7 +130,7 @@ function toolLabel(s?: { found: boolean; path: string; version: string | null })
 function toolClass(s?: { found: boolean }): string {
   return s?.found
     ? "text-emerald-700 dark:text-emerald-400"
-    : "text-red-600 dark:text-red-400";
+    : "text-destructive";
 }
 </script>
 
@@ -148,15 +148,15 @@ function toolClass(s?: { found: boolean }): string {
             :class="
                 heartbeatOk
                     ? 'border-emerald-500/40 bg-emerald-500/5'
-                    : 'border-red-500/50 bg-red-500/10'
+                    : 'border-destructive/50 bg-destructive/10'
             "
             role="status"
         >
             <HeartPulse
-                :class="heartbeatOk ? 'text-emerald-500' : 'text-red-500'"
+                :class="heartbeatOk ? 'text-emerald-500' : 'text-destructive'"
                 class="size-4 shrink-0"
             />
-            <span :class="heartbeatOk ? 'text-emerald-700 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'">
+            <span :class="heartbeatOk ? 'text-emerald-700 dark:text-emerald-400' : 'text-destructive'">
                 {{ heartbeatOk ? t("debug.overview.heartbeatOk") : t("debug.overview.heartbeatFail") }}
             </span>
             <span v-if="lastHeartbeat" class="ml-auto text-xs text-muted-foreground">
@@ -167,7 +167,7 @@ function toolClass(s?: { found: boolean }): string {
             </Badge>
         </div>
 
-        <div v-if="errorMsg" class="mb-4 rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2 text-xs text-red-600 dark:text-red-400">
+        <div v-if="errorMsg" class="mb-4 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
             {{ errorMsg }}
         </div>
 

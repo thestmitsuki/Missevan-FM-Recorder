@@ -5,6 +5,7 @@ import { useI18n } from "vue-i18n";
 import { Bug, Folder, Radio, Settings } from "@lucide/vue";
 import { useAnchorStore } from "@/stores/anchorStore"; // 导入锚点 store
 import { useDebugStore } from "@/stores/debugStore";
+import { Button } from "@/components/ui/button";
 import TopBar from "@/components/layout/TopBar.vue";
 import PageContainer from "@/components/layout/PageContainer.vue";
 
@@ -36,16 +37,20 @@ const navItems = computed(() => {
                 <span class="nav-brand">{{ t("brand") }}</span>
             </div>
             <nav class="nav-items">
-                <button
+                <Button
                     v-for="item in navItems"
                     :key="item.path"
-                    class="nav-item"
-                    :class="{ active: route.path === item.path }"
+                    variant="ghost"
+                    class="nav-item h-auto w-full justify-start gap-3 rounded-lg px-3 py-2 text-sm font-medium"
+                    :class="{
+                        'bg-primary text-primary-foreground hover:bg-primary/85 hover:text-primary-foreground dark:hover:bg-primary/85 dark:hover:text-primary-foreground':
+                            route.path === item.path,
+                    }"
                     @click="router.push(item.path)"
                 >
                     <component :is="item.icon" class="size-5 shrink-0" />
                     <span class="nav-item-label">{{ t(item.labelKey) }}</span>
-                </button>
+                </Button>
             </nav>
         </aside>
 
@@ -90,31 +95,6 @@ const navItems = computed(() => {
     flex-direction: column;
     gap: 2px;
     padding: 8px 12px;
-}
-.nav-item {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    padding: 9px 12px;
-    border: none;
-    background: transparent;
-    border-radius: 8px;
-    cursor: pointer;
-    font-size: 0.875rem;
-    font-weight: 500;
-    color: var(--muted-foreground);
-    text-align: left;
-    transition:
-        background 0.15s,
-        color 0.15s;
-}
-.nav-item:hover {
-    background: var(--accent);
-    color: var(--accent-foreground);
-}
-.nav-item.active {
-    background: var(--primary);
-    color: var(--primary-foreground);
 }
 
 /* 主内容 */

@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 
+use crate::tr;
 use super::report::CheckResult;
 use crate::infrastructure::checker::report::CheckStatus;
 
@@ -64,7 +65,7 @@ fn clean_path(s: &str) -> String {
 #[async_trait]
 impl HealthCheck for FfmpegCheck {
     fn name(&self) -> &'static str {
-        "FFmpeg 存在性"
+        tr!("debug.ffmpeg_check_name")
     }
 
     async fn run(&self) -> CheckResult {
@@ -113,43 +114,59 @@ impl HealthCheck for FfmpegCheck {
                     return CheckResult {
                         check_name: self.name().to_string(),
                         status: CheckStatus::Passed,
-                        message: format!("FFmpeg 可用: {}", version),
-                        details: Some(format!("路径: {}", path.display())),
+                        message: tr!(
+                            "wizard.tool_available",
+                            name = "FFmpeg",
+                            version = version
+                        ),
+                        details: Some(tr!("wizard.tool_path", path = path.display())),
                         suggestion: None,
                         duration_ms: start.elapsed().as_millis() as u64,
                     };
                 }
                 Ok(Ok(output)) => {
                     // 候选存在但执行失败（非零退出码）——继续尝试下一个
-                    last_failure = Some(format!(
-                        "{} 执行失败（退出码: {}）",
-                        path.display(),
-                        output.status.code().unwrap_or(-1)
+                    last_failure = Some(tr!(
+                        "debug.ffmpeg_exec_failed",
+                        path = path.display(),
+                        code = output.status.code().unwrap_or(-1)
                     ));
                 }
                 Ok(Err(e)) => {
                     // 无法启动进程（如权限不足）——继续尝试下一个
-                    last_failure = Some(format!("{} 无法执行: {}", path.display(), e));
+                    last_failure = Some(tr!(
+                        "debug.ffmpeg_not_executable",
+                        path = path.display(),
+                        err = e
+                    ));
                 }
                 Err(_) => {
                     // 试运行超时（可执行文件挂起）——继续尝试下一个
-                    last_failure = Some(format!("{} 试运行超时（>5s）", path.display()));
+                    last_failure = Some(tr!(
+                        "debug.ffmpeg_probe_timeout",
+                        path = path.display()
+                    ));
                 }
             }
         }
 
         let details = match &last_failure {
-            Some(f) => format!("已检查候选：{}；最后失败：{}", checked.join("、"), f),
-            None => format!("已检查候选：{}", checked.join("、")),
+            Some(f) => tr!(
+                "debug.candidates_checked_failed",
+                candidates = checked.join("、"),
+                failure = f
+            ),
+            None => tr!(
+                "debug.candidates_checked",
+                candidates = checked.join("、")
+            ),
         };
         CheckResult {
             check_name: self.name().to_string(),
             status: CheckStatus::Failed,
-            message: "未找到 FFmpeg 可执行文件".to_string(),
+            message: tr!("debug.ffmpeg_not_found").to_string(),
             details: Some(details),
-            suggestion: Some(
-                "请在设置中指定 ffmpeg_path，或在首次启动向导中点击「下载并安装」".into(),
-            ),
+            suggestion: Some(tr!("debug.ffmpeg_not_found_suggestion").into()),
             duration_ms: start.elapsed().as_millis() as u64,
         }
     }
@@ -164,7 +181,7 @@ pub struct DiskSpaceCheck {
 #[async_trait]
 impl HealthCheck for DiskSpaceCheck {
     fn name(&self) -> &'static str {
-        "磁盘空间"
+        tr!("debug.disk_space")
     }
 
     async fn run(&self) -> CheckResult {
@@ -177,19 +194,20 @@ impl HealthCheck for DiskSpaceCheck {
                     CheckResult {
                         check_name: self.name().to_string(),
                         status: super::report::CheckStatus::Failed,
-                        message: format!(
-                            "磁盘空间不足: 剩余 {} GB，阈值 {} GB",
-                            available_gb, self.threshold_gb
+                        message: tr!(
+                            "debug.disk_low",
+                            available = available_gb,
+                            threshold = self.threshold_gb
                         ),
                         details: None,
-                        suggestion: Some("请清理磁盘空间，或降低磁盘阈值设置".to_string()),
+                        suggestion: Some(tr!("debug.disk_low_suggestion").into()),
                         duration_ms: start.elapsed().as_millis() as u64,
                     }
                 } else {
                     CheckResult {
                         check_name: self.name().to_string(),
                         status: super::report::CheckStatus::Passed,
-                        message: format!("磁盘空间充足: 剩余 {} GB", available_gb),
+                        message: tr!("debug.disk_ok", available = available_gb),
                         details: None,
                         suggestion: None,
                         duration_ms: start.elapsed().as_millis() as u64,
@@ -199,7 +217,7 @@ impl HealthCheck for DiskSpaceCheck {
             Err(e) => CheckResult {
                 check_name: self.name().to_string(),
                 status: super::report::CheckStatus::Warning,
-                message: format!("无法检测磁盘空间: {}", e),
+                message: tr!("debug.disk_check_failed", err = e),
                 details: None,
                 suggestion: None,
                 duration_ms: start.elapsed().as_millis() as u64,
@@ -215,27 +233,21 @@ mod tests {
     #[test]
     fn prepared_candidates_order_matches_tools_and_cleans_paths() {
         // 发布前修复回归：候选顺序与 domain::tools 完全一致
-        //（配置指定路径（清洗后）→ {exe_dir}/ffmpeg/ffmpeg[.exe] → PATH 裸名）
-        // 平台后缀与 domain::tools::tool_exe_name 保持一致：Windows 带 .exe，其他平台无后缀
-        let exe_suffix = if cfg!(windows) { ".exe" } else { "" };
+        //（配置指定路径（清洗后）→ {exe_dir}/ffmpeg/ffmpeg.exe → PATH 裸名）
         let cands = prepared_candidates(Some("C:\\tools\\ff\u{7}mpeg.exe"));
         assert_eq!(cands.len(), 3);
         assert_eq!(cands[0], std::path::PathBuf::from("C:\\tools\\ffmpeg.exe"));
         assert_eq!(
             cands[1],
-            crate::domain::tools::exe_dir()
-                .join("ffmpeg")
-                .join(format!("ffmpeg{}", exe_suffix))
+            crate::domain::tools::exe_dir().join("ffmpeg").join("ffmpeg.exe")
         );
         assert_eq!(cands[2], std::path::PathBuf::from("ffmpeg"));
-        // 空配置 → 从 {exe_dir}/ffmpeg/ffmpeg[.exe] 开始
+        // 空配置 → 从 {exe_dir}/ffmpeg/ffmpeg.exe 开始
         let cands = prepared_candidates(None);
         assert_eq!(cands.len(), 2);
         assert_eq!(
             cands[0],
-            crate::domain::tools::exe_dir()
-                .join("ffmpeg")
-                .join(format!("ffmpeg{}", exe_suffix))
+            crate::domain::tools::exe_dir().join("ffmpeg").join("ffmpeg.exe")
         );
         assert_eq!(cands[1], std::path::PathBuf::from("ffmpeg"));
     }

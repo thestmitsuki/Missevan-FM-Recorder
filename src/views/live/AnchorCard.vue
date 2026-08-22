@@ -18,7 +18,7 @@
  *
  * 键盘导航：卡片/列表项可聚焦，Enter 打开设置，Delete 触发删除确认。
  * 头像加载失败时回退默认主播图标；刷新（anchor 对象被替换）或 avatar_url
- * 变化后重置失败状态——失败回退不永久生效（v-if 重建 img 后重新请求）。
+ * 变化后重置失败状态——失败回退不永久生效（v-if 重建 AvatarImage 后重新请求）。
  */
 import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
@@ -34,6 +34,8 @@ import type { AnchorConfig } from "@/types";
 
 import { useAppearanceStore } from "@/stores/appearanceStore";
 import StatusBadge from "@/components/common/StatusBadge.vue";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
     DropdownMenu,
@@ -74,8 +76,9 @@ const showTags = () => appearance.prefs.cardShowTags;
 const showRoomId = () => appearance.prefs.cardShowRoomId;
 const showStatusIcon = () => appearance.prefs.cardShowStatusIcon;
 
-// 头像加载失败回退默认图标。失败回退不永久生效：
-// - anchor 对象被替换（refreshAnchor 回拉后整体替换）→ 重置，v-if 重建 img 重新请求
+// 头像加载失败回退默认图标（reka AvatarImage 内部预加载，失败时 AvatarFallback 显示 Mic）。
+// 失败回退不永久生效：
+// - anchor 对象被替换（refreshAnchor 回拉后整体替换）→ 重置，v-if 重建 AvatarImage 重新请求
 // - avatar_url 值变化 → 重置
 const imgFailed = ref(false);
 watch(
@@ -91,8 +94,9 @@ watch(
     },
 );
 
-function onAvatarError() {
-    imgFailed.value = true;
+/** reka AvatarImage 预加载状态回调：error 时置位，卸载 img 并显示 AvatarFallback */
+function onAvatarError(status: "idle" | "loading" | "loaded" | "error") {
+    if (status === "error") imgFailed.value = true;
 }
 
 /** 标签展示：≤4 个全显示；>4 个显示前 3 个 + 「+N」溢出计数药丸（规格注释，原实现遗漏） */
@@ -129,20 +133,19 @@ function requestRefresh() {
     >
         <!-- 头像区（上 3/4）：封面拉伸裁剪 + 渐变遮罩 -->
         <div class="relative h-[75%] w-full overflow-hidden">
-            <img
-                v-if="showAvatar() && !imgFailed && anchor.avatar_url"
-                :src="anchor.avatar_url"
-                alt=""
-                referrerpolicy="no-referrer"
-                class="absolute inset-0 h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
-                @error="onAvatarError"
-            />
-            <div
-                v-else
-                class="absolute inset-0 flex items-center justify-center bg-muted"
-            >
-                <Mic class="size-14 text-muted-foreground" aria-hidden="true" />
-            </div>
+            <Avatar class="absolute inset-0 size-full rounded-none">
+                <AvatarImage
+                    v-if="showAvatar() && !imgFailed && anchor.avatar_url"
+                    :src="anchor.avatar_url"
+                    referrer-policy="no-referrer"
+                    alt=""
+                    class="object-cover transition-transform duration-300 group-hover:scale-105"
+                    @loading-status-change="onAvatarError"
+                />
+                <AvatarFallback class="rounded-none">
+                    <Mic class="size-14 text-muted-foreground" aria-hidden="true" />
+                </AvatarFallback>
+            </Avatar>
             <!-- 半透明渐变遮罩：保证右上角徽标文字可读 -->
             <div
                 class="absolute inset-0 bg-gradient-to-b from-black/35 via-transparent to-black/40"
@@ -218,16 +221,16 @@ function requestRefresh() {
                     role="img"
                     :aria-label="t('live.detectionEnabled')"
                 />
-                <span
+                <Badge
                     v-for="tag in visibleTags.shown"
                     :key="tag"
-                    class="shrink-0 rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-medium leading-tight text-primary"
-                    >{{ tag }}</span
+                    class="bg-primary/10 text-primary text-[11px] leading-tight"
+                    >{{ tag }}</Badge
                 >
-                <span
+                <Badge
                     v-if="visibleTags.overflow > 0"
-                    class="shrink-0 rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-medium leading-tight text-primary"
-                    >+{{ visibleTags.overflow }}</span
+                    class="bg-primary/10 text-primary text-[11px] leading-tight"
+                    >+{{ visibleTags.overflow }}</Badge
                 >
             </div>
         </div>
@@ -244,20 +247,19 @@ function requestRefresh() {
         @keydown.enter.prevent="openSettings"
         @keydown.delete.prevent="requestRemove"
     >
-        <img
-            v-if="showAvatar() && !imgFailed && anchor.avatar_url"
-            :src="anchor.avatar_url"
-            alt=""
-            referrerpolicy="no-referrer"
-            class="size-10 shrink-0 rounded-full object-cover"
-            @error="onAvatarError"
-        />
-        <div
-            v-else
-            class="flex size-10 shrink-0 items-center justify-center rounded-full bg-muted"
-        >
-            <Mic class="size-5 text-muted-foreground" aria-hidden="true" />
-        </div>
+        <Avatar class="size-10 shrink-0">
+            <AvatarImage
+                v-if="showAvatar() && !imgFailed && anchor.avatar_url"
+                :src="anchor.avatar_url"
+                referrer-policy="no-referrer"
+                alt=""
+                class="object-cover"
+                @loading-status-change="onAvatarError"
+            />
+            <AvatarFallback>
+                <Mic class="size-5 text-muted-foreground" aria-hidden="true" />
+            </AvatarFallback>
+        </Avatar>
 
         <!-- 信息区：第一行名称+检测图标，第二行标签 -->
         <div class="min-w-0 flex-1">
@@ -289,11 +291,11 @@ function requestRefresh() {
                     v-if="showTags() && anchor.tags.length"
                     class="mt-0.5 flex flex-wrap items-center gap-1.5"
                 >
-                    <span
+                    <Badge
                         v-for="tag in anchor.tags"
                         :key="tag"
-                        class="shrink-0 rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-medium leading-tight text-primary"
-                        >{{ tag }}</span
+                        class="bg-primary/10 text-primary text-[11px] leading-tight"
+                        >{{ tag }}</Badge
                     >
                 </div>
             </div>

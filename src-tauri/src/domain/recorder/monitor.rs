@@ -16,6 +16,7 @@ use crate::domain::services::cleanup::cleanup_on_recording_end;
 use crate::domain::services::file_cache::{FileCacheHandle, FileCacheManager};
 use crate::domain::spider::MissevanClient;
 use crate::infrastructure::state::app_state::{AppStateHandle, RecordingSummary};
+use crate::tr;
 use std::sync::Arc;
 use tauri::{Emitter, Manager};
 use tauri_plugin_opener::OpenerExt;
@@ -75,21 +76,21 @@ pub async fn monitor_recording(
     notifier
         .info(
             "REC_START",
-            format!("开始录制: {}", anchor_name),
-            format!("主播 {} 的直播正在录制", anchor_name),
+            tr!("recorder.start_title", name = anchor_name),
+            tr!("recorder.start_body", name = anchor_name),
         )
         .await;
 
     loop {
         tokio::select! {
             _ = cancel_token.cancelled() => {
-                notifier.info("REC_STOP", format!("录制已取消: {}", anchor_name), "用户取消或直播结束".to_string()).await;
+                notifier.info("REC_STOP", tr!("recorder.cancelled_title", name = anchor_name), tr!("recorder.cancelled_body")).await;
                 break;
             }
             _ = sleep(Duration::from_secs(10)) => {
                 tick_count += 1;
                 if start_time.elapsed() > max_duration {
-                    notifier.error("REC_TIMEOUT", format!("录制超时: {}", anchor_name), "超过 24 小时安全阀".to_string()).await;
+                    notifier.error("REC_TIMEOUT", tr!("recorder.timeout_title", name = anchor_name), tr!("recorder.timeout_body")).await;
                     break;
                 }
 
@@ -119,21 +120,21 @@ pub async fn monitor_recording(
                     notifier
                         .error(
                             "REC_CRASH",
-                            format!("录制进程异常退出: {}", anchor_name),
-                            format!(
-                                "FFmpeg 进程意外结束（exit={:?}），录制已停止",
-                                exit_code
-                            ),
+                            tr!("recorder.crash_title", name = anchor_name),
+                            tr!("recorder.crash_body", exit = format!("{:?}", exit_code)),
                         )
                         .await;
                     // S2b：上报崩溃熔断计数（连续达阈值后，检测循环门控暂停
                     // 自动重启，退避期内不再产生 REC_START/REC_CRASH 通知对）
                     let crash_count = app_state.lock().await.record_crash(&anchor_id);
                     tracing::warn!(
-                        "[录制] 录制崩溃已记录（连续第 {} 次；连续 {} 次后暂停自动重启并指数退避）: {}",
-                        crash_count,
-                        CRASH_BACKOFF_THRESHOLD,
-                        anchor_name
+                        "{}",
+                        tr!(
+                            "recorder.crash_recorded",
+                            count = crash_count,
+                            threshold = CRASH_BACKOFF_THRESHOLD,
+                            name = anchor_name
+                        )
                     );
                     // H5：崩溃产物处置——本次崩溃产生的半成品文件（主输出 / 已写
                     // 出的分段）改名为 `.part` 标记（改名失败时直接删除）并记录
@@ -162,8 +163,8 @@ pub async fn monitor_recording(
                     notifier
                         .info(
                             "REC_ENDED",
-                            format!("录制结束: {}", anchor_name),
-                            "FFmpeg 正常结束（流 EOF），录音已保存".to_string(),
+                            tr!("recorder.ended_title", name = anchor_name),
+                            tr!("recorder.ended_body"),
                         )
                         .await;
                     break;
@@ -188,7 +189,7 @@ pub async fn monitor_recording(
                             let anchor = cfg.anchors.iter().find(|a| a.id == anchor_id);
                             let check_disabled = anchor.is_some_and(|a| !a.enable_check);
                             if check_disabled {
-                                notifier.info("REC_STOP_CHECK_DISABLED", format!("已停止录制: {}", anchor_name), "主播的「启用检测与自动录制」已关闭".to_string()).await;
+                                notifier.info("REC_STOP_CHECK_DISABLED", tr!("recorder.check_disabled_title", name = anchor_name), tr!("recorder.check_disabled_body")).await;
                                 break;
                             }
                             (
@@ -197,7 +198,7 @@ pub async fn monitor_recording(
                             )
                         }
                         Err(e) => {
-                            tracing::warn!("[录制] 读取配置失败（跳过检测开关兜底检查）: {}", e);
+                            tracing::warn!("{}", tr!("recorder.config_load_failed_skip", err = e));
                             (None, 0)
                         }
                     };
@@ -223,18 +224,22 @@ pub async fn monitor_recording(
                             notifier
                                 .warning(
                                     "DISK_LOW",
-                                    "磁盘空间不足",
-                                    format!(
-                                        "剩余 {} GB，低于阈值 {} GB；空间恢复前暂停新录制",
-                                        available_gb, threshold_gb
+                                    tr!("recorder.disk_low_warn_title"),
+                                    tr!(
+                                        "recorder.disk_low_warn_body",
+                                        available_gb = available_gb,
+                                        threshold_gb = threshold_gb
                                     ),
                                 )
                                 .await;
                         }
                         tracing::warn!(
-                            "[录制] 磁盘空间不足（剩余 {} GB < 阈值 {} GB），请及时清理",
-                            available_gb,
-                            threshold_gb
+                            "{}",
+                            tr!(
+                                "recorder.disk_low_cleanup_warn",
+                                available_gb = available_gb,
+                                threshold_gb = threshold_gb
+                            )
                         );
                     }
                 }
@@ -244,7 +249,7 @@ pub async fn monitor_recording(
                         consecutive_api_failures = 0;
                         last_api_live = result.is_live;
                         if !result.is_live {
-                            notifier.info("REC_ENDED", format!("直播结束: {}", anchor_name), "API 返回未直播状态".to_string()).await;
+                            notifier.info("REC_ENDED", tr!("recorder.live_ended_title", name = anchor_name), tr!("recorder.live_ended_body")).await;
                             break;
                         }
                     }
@@ -255,15 +260,14 @@ pub async fn monitor_recording(
                         // 误报中断进行中的录制；仅「明确离线」（Other，如 404）计失败。
                         if e.is_transient() {
                             tracing::warn!(
-                                "[录制] API 瞬时错误（不影响录制，保持直播判定）: {}: {}",
-                                anchor_name,
-                                e
+                                "{}",
+                                tr!("recorder.api_transient_error", name = anchor_name, err = e)
                             );
                         } else {
                             consecutive_api_failures += 1;
-                            notifier.warning("REC_API_ERR", format!("API 检测失败 ({}/{}): {}", consecutive_api_failures, MAX_API_FAILURES, anchor_name), e.message().to_string()).await;
+                            notifier.warning("REC_API_ERR", tr!("recorder.api_check_failed_title", count = consecutive_api_failures, max = MAX_API_FAILURES, name = anchor_name), e.message().to_string()).await;
                             if consecutive_api_failures >= MAX_API_FAILURES {
-                                notifier.error("REC_API_FAILED", format!("API 连续失败，停止录制: {}", anchor_name), "连续 3 次 API 调用失败".to_string()).await;
+                                notifier.error("REC_API_FAILED", tr!("recorder.api_failed_stop_title", name = anchor_name), tr!("recorder.api_failed_stop_body")).await;
                                 break;
                             }
                         }
@@ -317,13 +321,13 @@ pub async fn monitor_recording(
         is_recording: false,
     };
     let _ = window.emit("recording_status_changed", &update);
-    tracing::info!("录制任务已从状态中移除: {}", anchor_id);
+    tracing::info!("{}", tr!("recorder.task_removed", anchor_id = anchor_id));
 
     // 刷新文件缓存，让前端立刻看到新文件
     // （任务已从 AppState 移除，刷新时该文件不会再被标记为「录制中」）
     let cache_manager = FileCacheManager::new(window.clone(), file_cache.clone());
     if let Err(e) = cache_manager.refresh(&config_manager, &app_state).await {
-        tracing::error!("文件缓存刷新失败: {}", e);
+        tracing::error!("{}", tr!("recorder.cache_refresh_failed", err = e));
     }
 
     // 录制结束自动清理（§11.1 auto_cleanup_enabled）：正常结束/取消/错误全部
@@ -494,13 +498,13 @@ fn run_post_record_action(
                         .opener()
                         .open_path(target.to_string_lossy().into_owned(), None::<&str>)
                     {
-                        tracing::warn!("[录制后] 打开文件夹失败: {}", e);
+                        tracing::warn!("{}", tr!("recorder.post_open_folder_failed", err = e));
                     } else {
-                        tracing::info!("[录制后] 已打开文件所在文件夹: {}", output_path);
+                        tracing::info!("{}", tr!("recorder.post_folder_opened", path = output_path));
                     }
                 }
                 None => {
-                    tracing::warn!("[录制后] open_folder 未提供 AppHandle，跳过");
+                    tracing::warn!("{}", tr!("recorder.post_open_folder_no_handle"));
                 }
             }
         }
@@ -516,7 +520,7 @@ fn run_post_record_action(
                 anchor_name,
                 room_id,
             );
-            tracing::info!("[录制后] 执行自定义命令: {}", cmd);
+            tracing::info!("{}", tr!("recorder.post_executing_command", cmd = cmd));
             // 隐藏控制台（tools.rs::apply_create_no_window）：cmd /C 是控制台
             // 子系统，发布构建无控制台时会弹黑窗口。取舍：CREATE_NO_WINDOW 只
             // 隐藏 cmd 自身的控制台窗口，用户命令内启动的 GUI 程序窗口不受影响
@@ -542,9 +546,9 @@ fn run_post_record_action(
                     // 线程在子进程退出后即结束，不阻塞录制结束流程（与「spawn
                     // 后不等待」的既有语义一致）；Windows 无僵尸概念但路径统一。
                     crate::domain::tools::reap_in_background(child);
-                    tracing::info!("[录制后] 自定义命令已启动");
+                    tracing::info!("{}", tr!("recorder.post_command_started"));
                 }
-                Err(e) => tracing::warn!("[录制后] 启动自定义命令失败: {}", e),
+                Err(e) => tracing::warn!("{}", tr!("recorder.post_command_spawn_failed", err = e)),
             }
         }
         // none / 空命令 / 未知动作：不操作
@@ -591,9 +595,11 @@ mod tests {
         // 变量替换的纯函数部分：`{file}` / `{output_dir}` / `{anchor_name}` / `{room_id}`
         let output_path = r"D:\rec\主播A\2026-08-07_12-30-45_主播A.m4a";
         let cmd = "echo {file} {output_dir} {anchor_name} {room_id}".to_string();
-        // 显式给出与期望一致的目录串（勿用 Path::parent() 从 Windows 风格路径推导：
-        // Linux 上 `\` 不是分隔符，parent() 会得到空串，导致该测试在 Linux CI 失败）
-        let output_dir = r"D:\rec\主播A".to_string();
+        let output_dir = std::path::Path::new(output_path)
+            .parent()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
         let substituted =
             substitute_command_variables(&cmd, output_path, &output_dir, "主播A", "123456");
         // 无空格路径也被双引号包裹（统一包裹策略——含空格/&/| 时防拆词与解释）

@@ -1,6 +1,7 @@
 use crate::domain::config::model::GlobalConfig;
 use crate::infrastructure::error::types::AppError;
 use crate::infrastructure::logging::network::{self, NetworkLog};
+use crate::tr;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Instant;
@@ -138,9 +139,9 @@ impl MissevanClient {
         let resp = match self.client.get(&url).send().await {
             Ok(r) => r,
             Err(e) => {
-                let err = AppError::network(format!("API 请求失败: {}", e))
+                let err = AppError::network(tr!("network.api_request_failed", err = e))
                     .with_technical(format!("room_id: {}, error: {}", room_id, e))
-                    .with_suggestion("请检查网络连接和代理设置")
+                    .with_suggestion(tr!("network.check_network_suggestion"))
                     .with_source("spider");
                 self.record_request("GET", &url, 0, start, Some(room_id), Some(err.message.clone()));
                 return Err(err);
@@ -152,7 +153,7 @@ impl MissevanClient {
         let body = match resp.text().await {
             Ok(b) => b,
             Err(e) => {
-                let err = AppError::network(format!("读取响应失败: {}", e))
+                let err = AppError::network(tr!("network.read_response_failed", err = e))
                     .with_technical(format!("room_id: {}", room_id))
                     .with_source("spider");
                 self.record_request("GET", &url, 0, start, Some(room_id), Some(err.message.clone()));
@@ -164,7 +165,7 @@ impl MissevanClient {
         let json: serde_json::Value = match serde_json::from_str(&body) {
             Ok(j) => j,
             Err(e) => {
-                let err = AppError::network(format!("JSON 解析失败: {}", e))
+                let err = AppError::network(tr!("network.json_parse_failed", err = e))
                     .with_technical(format!(
                         "room_id: {}, 前200字符: {}",
                         room_id,
@@ -182,9 +183,9 @@ impl MissevanClient {
             let name = creator["username"]
                 .as_str()
                 .ok_or_else(|| {
-                    AppError::config("未找到主播名")
+                    AppError::config(tr!("network.anchor_name_missing"))
                         .with_technical(format!("room_id: {}", room_id))
-                        .with_suggestion("请确认房间号是否正确")
+                        .with_suggestion(tr!("network.verify_room_id_suggestion"))
                         .with_source("spider")
                 })?
                 .to_string();
@@ -192,9 +193,9 @@ impl MissevanClient {
             let avatar_url = creator["iconurl"]
                 .as_str()
                 .ok_or_else(|| {
-                    AppError::config("未找到头像URL")
+                    AppError::config(tr!("network.avatar_url_missing"))
                         .with_technical(format!("room_id: {}", room_id))
-                        .with_suggestion("请确认房间号是否正确")
+                        .with_suggestion(tr!("network.verify_room_id_suggestion"))
                         .with_source("spider")
                 })?
                 .to_string();
@@ -346,7 +347,7 @@ impl MissevanClient {
             "http" => format!("http://{}:{}", config.proxy_addr, config.proxy_port),
             "socks5" => format!("socks5://{}:{}", config.proxy_addr, config.proxy_port),
             other => {
-                tracing::warn!("未知代理类型（降级为直连）: {}", other);
+                tracing::warn!("{}", tr!("network.unknown_proxy_type", kind = other));
                 return None;
             }
         };
@@ -358,7 +359,7 @@ impl MissevanClient {
                 p
             }),
             Err(e) => {
-                tracing::warn!("代理配置无效（降级为直连）: {}", e);
+                tracing::warn!("{}", tr!("network.invalid_proxy_config", err = e));
                 None
             }
         }
@@ -378,7 +379,7 @@ impl MissevanClient {
         }
         let client = builder
             .build()
-            .map_err(|e| AppError::internal(format!("创建 HTTP 客户端失败: {}", e)))?;
+            .map_err(|e| AppError::internal(tr!("network.create_http_client_failed", err = e)))?;
 
         Ok(Self {
             client: Arc::new(client),
@@ -416,9 +417,9 @@ impl MissevanClient {
         let resp = match request.send().await {
             Ok(r) => r,
             Err(e) => {
-                let err = AppError::network(format!("API 请求失败: {}", e))
+                let err = AppError::network(tr!("network.api_request_failed", err = e))
                     .with_technical(format!("room_id: {}, error: {}", room_id, e))
-                    .with_suggestion("请检查网络连接和代理设置")
+                    .with_suggestion(tr!("network.check_network_suggestion"))
                     .with_source("spider");
                 self.record_request("GET", &url, 0, start, Some(room_id), Some(err.message.clone()));
                 return Err(CheckError {
@@ -433,7 +434,7 @@ impl MissevanClient {
         let body = match resp.text().await {
             Ok(b) => b,
             Err(e) => {
-                let err = AppError::network(format!("读取响应失败: {}", e))
+                let err = AppError::network(tr!("network.read_response_failed", err = e))
                     .with_technical(format!("room_id: {}", room_id))
                     .with_source("spider");
                 self.record_request("GET", &url, 0, start, Some(room_id), Some(err.message.clone()));
@@ -446,7 +447,7 @@ impl MissevanClient {
         };
 
         if !status.is_success() {
-            let err = AppError::network(format!("API 返回错误状态: {}", status))
+            let err = AppError::network(tr!("network.api_error_status", status = status))
                 .with_technical(format!(
                     "HTTP {}: {} (前200字符)",
                     status,
@@ -491,7 +492,7 @@ impl MissevanClient {
             // 格式变化（如 API 改版）不代表主播离线：记 warn + 判定「未知」
             kind: CheckErrorKind::Format,
             status: None,
-            error: AppError::network(format!("JSON 解析失败: {}", e))
+            error: AppError::network(tr!("network.json_parse_failed", err = e))
                 .with_technical(format!(
                     "room_id: {}, 前200字符: {}",
                     room_id,

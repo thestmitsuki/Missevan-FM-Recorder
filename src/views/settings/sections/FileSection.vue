@@ -16,6 +16,7 @@ import { useNumberField } from "../useNumberField";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
 const props = defineProps<{
     config: SettingsForm;
@@ -38,73 +39,79 @@ const { text: diskLimitText, invalid: diskLimitInvalid } = useNumberField(
 <template>
     <div class="space-y-6">
         <!-- ── 自动清理 ── -->
-        <div class="rounded-lg border p-4">
-            <div class="mb-4 flex items-center justify-between gap-4">
-                <div>
-                    <Label for="cfg-cleanup-enable">{{ t("settings.files.cleanupEnable") }}</Label>
-                    <p class="mt-0.5 text-xs text-muted-foreground">
-                        {{ t("settings.files.cleanupEnableHint") }}
-                    </p>
-                </div>
-                <Switch id="cfg-cleanup-enable" v-model:checked="config.auto_cleanup_enabled" />
-            </div>
-
-            <div
-                class="space-y-4"
-                :class="config.auto_cleanup_enabled ? '' : 'pointer-events-none opacity-50'"
-                :aria-disabled="!config.auto_cleanup_enabled"
-            >
-                <div class="space-y-1.5">
-                    <Label for="cfg-retention-days">{{ t("settings.files.retentionDays") }}</Label>
-                    <Input
-                        id="cfg-retention-days"
-                        v-model="retentionText"
-                        inputmode="numeric"
-                        class="w-40"
-                        :class="errors.retention_days || retentionInvalid ? 'border-destructive focus-visible:ring-destructive/40' : ''"
-                        :aria-invalid="!!errors.retention_days || retentionInvalid"
-                    />
-                    <p v-if="errors.retention_days" class="text-xs text-destructive">
-                        {{ errors.retention_days }}
-                    </p>
+        <Card class="gap-0 rounded-lg p-4 shadow-none">
+            <CardContent class="p-0">
+                <div class="mb-4 flex items-center justify-between gap-4">
+                    <div>
+                        <Label for="cfg-cleanup-enable">{{ t("settings.files.cleanupEnable") }}</Label>
+                        <p class="mt-0.5 text-xs text-muted-foreground">
+                            {{ t("settings.files.cleanupEnableHint") }}
+                        </p>
+                    </div>
+                    <Switch id="cfg-cleanup-enable" v-model:checked="config.auto_cleanup_enabled" />
                 </div>
 
-                <div class="space-y-1.5">
-                    <Label for="cfg-max-total">{{ t("settings.files.maxTotalGb") }}</Label>
-                    <Input
-                        id="cfg-max-total"
-                        v-model="maxTotalText"
-                        inputmode="numeric"
-                        class="w-40"
-                        :class="errors.max_total_gb || maxTotalInvalid ? 'border-destructive focus-visible:ring-destructive/40' : ''"
-                        :aria-invalid="!!errors.max_total_gb || maxTotalInvalid"
-                    />
-                    <p class="text-xs text-muted-foreground">{{ t("settings.files.maxTotalGbHint") }}</p>
-                    <p v-if="errors.max_total_gb" class="text-xs text-destructive">
-                        {{ errors.max_total_gb }}
-                    </p>
+                <div
+                    class="space-y-4"
+                    :class="config.auto_cleanup_enabled ? '' : 'pointer-events-none opacity-50'"
+                    :aria-disabled="!config.auto_cleanup_enabled"
+                >
+                    <div class="space-y-1.5">
+                        <Label for="cfg-retention-days">{{ t("settings.files.retentionDays") }}</Label>
+                        <Input
+                            id="cfg-retention-days"
+                            v-model="retentionText"
+                            inputmode="numeric"
+                            class="w-40"
+                            :class="errors.retention_days || retentionInvalid ? 'border-destructive focus-visible:ring-destructive/40' : ''"
+                            :aria-invalid="!!errors.retention_days || retentionInvalid"
+                        />
+                        <p v-if="errors.retention_days" class="text-xs text-destructive">
+                            {{ errors.retention_days }}
+                        </p>
+                    </div>
+
+                    <div class="space-y-1.5">
+                        <Label for="cfg-max-total">{{ t("settings.files.maxTotalGb") }}</Label>
+                        <Input
+                            id="cfg-max-total"
+                            v-model="maxTotalText"
+                            inputmode="numeric"
+                            class="w-40"
+                            :class="errors.max_total_gb || maxTotalInvalid ? 'border-destructive focus-visible:ring-destructive/40' : ''"
+                            :aria-invalid="!!errors.max_total_gb || maxTotalInvalid"
+                        />
+                        <p class="text-xs text-muted-foreground">{{ t("settings.files.maxTotalGbHint") }}</p>
+                        <p v-if="errors.max_total_gb" class="text-xs text-destructive">
+                            {{ errors.max_total_gb }}
+                        </p>
+                    </div>
                 </div>
-            </div>
-        </div>
+            </CardContent>
+        </Card>
 
         <!-- ── 磁盘空间保护 ── -->
-        <div class="rounded-lg border p-4">
-            <h3 class="mb-1 text-sm font-semibold">{{ t("settings.files.diskTitle") }}</h3>
-            <p class="mb-3 text-xs text-muted-foreground">{{ t("settings.files.diskHint") }}</p>
-            <div class="space-y-1.5">
-                <Label for="cfg-disk-limit">{{ t("settings.files.diskSpaceLimitGb") }}</Label>
-                <Input
-                    id="cfg-disk-limit"
-                    v-model="diskLimitText"
-                    inputmode="numeric"
-                    class="w-40"
-                    :class="errors.disk_space_limit_gb || diskLimitInvalid ? 'border-destructive focus-visible:ring-destructive/40' : ''"
-                    :aria-invalid="!!errors.disk_space_limit_gb || diskLimitInvalid"
-                />
-                <p v-if="errors.disk_space_limit_gb" class="text-xs text-destructive">
-                    {{ errors.disk_space_limit_gb }}
-                </p>
-            </div>
-        </div>
+        <Card class="gap-0 rounded-lg p-4 shadow-none">
+            <CardHeader class="mb-3 gap-1 p-0">
+                <CardTitle class="text-sm font-semibold">{{ t("settings.files.diskTitle") }}</CardTitle>
+                <p class="text-xs text-muted-foreground">{{ t("settings.files.diskHint") }}</p>
+            </CardHeader>
+            <CardContent class="p-0">
+                <div class="space-y-1.5">
+                    <Label for="cfg-disk-limit">{{ t("settings.files.diskSpaceLimitGb") }}</Label>
+                    <Input
+                        id="cfg-disk-limit"
+                        v-model="diskLimitText"
+                        inputmode="numeric"
+                        class="w-40"
+                        :class="errors.disk_space_limit_gb || diskLimitInvalid ? 'border-destructive focus-visible:ring-destructive/40' : ''"
+                        :aria-invalid="!!errors.disk_space_limit_gb || diskLimitInvalid"
+                    />
+                    <p v-if="errors.disk_space_limit_gb" class="text-xs text-destructive">
+                        {{ errors.disk_space_limit_gb }}
+                    </p>
+                </div>
+            </CardContent>
+        </Card>
     </div>
 </template>

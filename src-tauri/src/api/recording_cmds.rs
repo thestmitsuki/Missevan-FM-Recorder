@@ -2,6 +2,7 @@ use tauri::State;
 
 use crate::infrastructure::error::types::AppError;
 use crate::infrastructure::state::app_state::RecorderState;
+use crate::tr;
 
 /// 启动录制任务 —— 占位命令（L5 审查跟进）
 ///
@@ -25,9 +26,9 @@ pub async fn start_recording(
     _stream_url: String,
     _output_path: String,
 ) -> Result<(), AppError> {
-    Err(AppError::config(
-        "start_recording 为占位命令，当前版本未使用；请使用自动录制（检测循环）或 stop_recording 管理录制",
-    ))
+    Err(AppError::config(tr!(
+        "recorder.start_placeholder"
+    )))
 }
 
 /// 停止录制任务
@@ -43,7 +44,7 @@ pub async fn stop_recording(
             task.cancel_token.cancel();
             // 不 await handle，避免阻塞命令返回
             let _ = task.handle;
-            tracing::info!("录制已停止: anchor_id={}", anchor_id);
+            tracing::info!("{}", tr!("recorder.stopped", anchor_id = anchor_id));
             Ok(())
         }
         None => {
@@ -51,14 +52,14 @@ pub async fn stop_recording(
             // 从 pending_starts 取消（取消令牌触发后 lib.rs 的 select! 放弃启动）
             if app_state.cancel_pending_start(&anchor_id) {
                 tracing::info!(
-                    "已取消延迟中的录制启动: anchor_id={}",
-                    anchor_id
+                    "{}",
+                    tr!("recorder.cancelled_pending_start", anchor_id = anchor_id)
                 );
                 Ok(())
             } else {
                 Err(AppError::recording(
                     crate::infrastructure::error::types::RC_STREAM_UNAVAILABLE,
-                    format!("主播 {} 未在录制中", anchor_id),
+                    tr!("recorder.not_recording", anchor_id = anchor_id),
                 ))
             }
         }

@@ -2,9 +2,11 @@
 /**
  * 主播状态徽标（规格「直播页面」状态徽标）
  *
- * live=直播中：红色徽标 + 呼吸灯圆点动画；
- * recording=录制中：蓝色徽标 + 呼吸灯圆点动画（与直播红徽标同脉冲节奏，
- * 前端优化任务：录制徽标由常亮改为动态呼吸，组件级生效——卡片/列表/Sheet 统一）。
+ * live=直播中：强调色（--primary）淡底徽标 + 呼吸灯圆点动画；
+ * recording=录制中：种子混合色（--seed-recording = destructive 70% + primary 30%）
+ * 淡底徽标 + 呼吸灯圆点动画（与直播徽标同脉冲节奏）。
+ * 两态色相不同（直播=纯强调色，录制=种子混合色，种子色权重 70%）可快速区分，
+ * 且录制含 30% 强调色成分跟随主题；图标 Radio/CircleDot 双通道辅助区分。
  * 统一规则（规格「只显示一个」）：直播 + 录制同时存在时**只显示录制**
  * （录制中更重要，recording ? recording-only : live）。
  * 规则在组件内一次性实施，所有消费方（卡片/列表/设置面板）自动生效。
@@ -43,11 +45,14 @@ const { t } = useI18n();
         role="status"
         aria-live="polite"
     >
-        <!-- 直播中（红色 + 呼吸灯圆点）；录制中时隐藏（录制优先，只显示一个） -->
+        <!-- 直播中（强调色淡底 + 呼吸灯圆点）；录制中时隐藏（录制优先，只显示一个）
+        颜色：--primary 强调色淡底（bg-primary/10）
+        与录制中差异：直播=纯强调色（primary），录制=种子混合色
+        （destructive 70% + primary 30%），色相不同一眼可辨 -->
         <Badge
             v-if="live && !recording"
             variant="outline"
-            class="border-red-500/40 bg-red-500/10 text-red-600 dark:text-red-400"
+            class="border-primary/40 bg-primary/10 text-primary"
             :class="
                 size === 'sm'
                     ? 'gap-1 px-2 py-0.5 text-xs'
@@ -67,11 +72,13 @@ const { t } = useI18n();
             {{ t("live.liveNow") }}
         </Badge>
 
-        <!-- 录制中（蓝色 + 呼吸圆点，同直播红徽标动画） -->
+        <!-- 录制中（种子混合色淡底 + 呼吸圆点，同直播徽标动画）
+        颜色：--seed-recording = destructive 70% + primary 30%（种子色权重 70%），
+        与直播中（纯 primary）色相不同可快速区分；含 30% 强调色成分跟随主题 -->
         <Badge
             v-if="recording"
             variant="outline"
-            class="border-blue-500/40 bg-blue-500/10 text-blue-600 dark:text-blue-400"
+            class="border-seed-recording/40 bg-seed-recording/10 text-seed-recording"
             :class="
                 size === 'sm'
                     ? 'gap-1 px-2 py-0.5 text-xs'

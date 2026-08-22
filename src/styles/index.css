@@ -71,3 +71,24 @@ body,
   scrollbar-width: none !important;
   -ms-overflow-style: none !important;
 }
+
+/* ── 通知条（vue-sonner）文字居中 ──
+   sonner 内容 teleport 到 body 下，需全局选择器；
+   [data-sonner-toast] 是 flex 行容器、[data-content] 是 flex 列容器，
+   逐级设置 text-align + align-items 才能让标题/描述真正居中。
+   关键：vue-sonner 的 [data-content] 默认 flex-grow:0（收缩为文字宽度），
+   必须 flex:1 撑满剩余宽度，title 的 width:100% + text-align:center 才生效。 */
+[data-sonner-toast] {
+  text-align: center;
+}
+[data-sonner-toast] [data-content] {
+  flex: 1;
+  align-items: center;
+  text-align: center;
+}
+[data-sonner-toast] [data-title],
+[data-sonner-toast] [data-description] {
+  justify-content: center;
+  width: 100%;
+  text-align: center;
+}

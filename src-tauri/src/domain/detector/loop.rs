@@ -16,6 +16,7 @@ use crate::domain::spider::{CheckErrorKind, LiveCheckResult, MissevanClient};
 use crate::infrastructure::notification::dispatcher::NotificationDispatcher;
 use crate::infrastructure::state::app_state::AppState;
 use crate::infrastructure::state::mock_store::MockStore;
+use crate::tr;
 use tauri::WebviewWindow;
 
 /// 重试退避（毫秒）：以 `retry_delay_secs` 为基线指数增长（1×/2×/4×），
@@ -190,7 +191,7 @@ impl DetectionLoop {
                 _ = sleep(delay) => {}
                 _ = self.wake.notified() => {}
                 _ = self.shutdown.notified() => {
-                    tracing::info!("收到退出信号，检测循环停止");
+                    tracing::info!("{}", tr!("detector.shutdown_signal"));
                     self.stats.set_running(false);
                     break;
                 }
@@ -235,18 +236,22 @@ impl DetectionLoop {
                         self.notifier
                             .warning(
                                 "DISK_LOW",
-                                "磁盘空间不足",
-                                format!(
-                                    "剩余 {} GB，低于阈值 {} GB；空间恢复前暂停新录制",
-                                    available_gb, threshold_gb
+                                tr!("recorder.disk_low_warn_title"),
+                                tr!(
+                                    "recorder.disk_low_warn_body",
+                                    available_gb = available_gb,
+                                    threshold_gb = threshold_gb
                                 ),
                             )
                             .await;
                     }
                     tracing::warn!(
-                        "[检测] 磁盘空间不足（剩余 {} GB < 阈值 {} GB），本轮暂停自动录制启动",
-                        available_gb,
-                        threshold_gb
+                        "{}",
+                        tr!(
+                            "detector.disk_low_pause_auto",
+                            available_gb = available_gb,
+                            threshold_gb = threshold_gb
+                        )
                     );
                     true
                 }
@@ -292,9 +297,12 @@ impl DetectionLoop {
                     if rate_limited {
                         stats.record_check_unknown();
                         tracing::warn!(
-                            "[检测] 429 冷却中，本轮跳过（保持上一状态）: {} (room_id={})",
-                            anchor_clone.name,
-                            anchor_clone.room_id
+                            "{}",
+                            tr!(
+                                "detector.rate_limited_skip",
+                                name = anchor_clone.name,
+                                room_id = anchor_clone.room_id
+                            )
                         );
                         return;
                     }
@@ -302,9 +310,12 @@ impl DetectionLoop {
                     // Mock 模式：不发起真实请求，直接从 MockStore 取模拟结果
                     let result = if mock_store.is_mock_mode() {
                         tracing::debug!(
-                            "[Mock] 检测主播 {} (room_id={})",
-                            anchor_clone.name,
-                            anchor_clone.room_id
+                            "{}",
+                            tr!(
+                                "detector.mock_check",
+                                name = anchor_clone.name,
+                                room_id = anchor_clone.room_id
+                            )
                         );
                         match mock_store.get(&anchor_clone.room_id) {
                             Some(mock) => Ok(LiveCheckResult {
@@ -355,10 +366,13 @@ impl DetectionLoop {
                                             cooldown_ms(entry.consecutive) / 1000
                                         };
                                         tracing::warn!(
-                                            "[检测] 429 限流，冷却 {}s: {} (room_id={})",
-                                            cool_s,
-                                            anchor_clone.name,
-                                            anchor_clone.room_id
+                                            "{}",
+                                            tr!(
+                                                "detector.rate_limit_cooldown",
+                                                seconds = cool_s,
+                                                name = anchor_clone.name,
+                                                room_id = anchor_clone.room_id
+                                            )
                                         );
                                         break Err(e);
                                     }
@@ -369,13 +383,16 @@ impl DetectionLoop {
                                     if retryable && attempt < max_attempts {
                                         let delay = retry_delay_ms(retry_base_secs, attempt);
                                         tracing::warn!(
-                                            "[检测] 检测失败({:?})，{}s 后重试 {}/{}: {} (room_id={})",
-                                            e.kind,
-                                            delay / 1000,
-                                            attempt,
-                                            max_attempts - 1,
-                                            anchor_clone.name,
-                                            anchor_clone.room_id
+                                            "{}",
+                                            tr!(
+                                                "detector.check_failed_retry",
+                                                kind = format!("{:?}", e.kind),
+                                                seconds = delay / 1000,
+                                                attempt = attempt,
+                                                max = max_attempts - 1,
+                                                name = anchor_clone.name,
+                                                room_id = anchor_clone.room_id
+                                            )
                                         );
                                         sleep(Duration::from_millis(delay)).await;
                                         attempt += 1;
@@ -391,12 +408,15 @@ impl DetectionLoop {
                         Ok(result) => {
                             stats.record_check_success();
                             tracing::info!(
-                                "[检测] anchor={} room_id={} is_live={} enable_check={} has_stream={}",
-                                anchor_clone.name,
-                                anchor_clone.room_id,
-                                result.is_live,
-                                anchor_clone.enable_check,
-                                result.stream_url.is_some()
+                                "{}",
+                                tr!(
+                                    "detector.check_result",
+                                    name = anchor_clone.name,
+                                    room_id = anchor_clone.room_id,
+                                    is_live = result.is_live,
+                                    enable_check = anchor_clone.enable_check,
+                                    has_stream = result.stream_url.is_some()
+                                )
                             );
                             // 1. 更新头像缓存
                             if let Some(avatar) = &result.avatar {
@@ -430,9 +450,12 @@ impl DetectionLoop {
                                     // 状态探针成功 / 正常结束 / 手动操作。
                                     if app_state.lock().await.is_crash_blocked(&anchor_clone.id) {
                                         tracing::warn!(
-                                            "[检测] 录制崩溃熔断中，本轮跳过自动重启: {} (room_id={})",
-                                            anchor_clone.name,
-                                            anchor_clone.room_id
+                                            "{}",
+                                            tr!(
+                                                "detector.crash_blocked_skip",
+                                                name = anchor_clone.name,
+                                                room_id = anchor_clone.room_id
+                                            )
                                         );
                                         return;
                                     }
@@ -440,17 +463,23 @@ impl DetectionLoop {
                                     // 恢复后下轮自动恢复）
                                     if disk_low_this_round {
                                         tracing::debug!(
-                                            "[检测] 磁盘空间不足，跳过自动录制启动: {} (room_id={})",
-                                            anchor_clone.name,
-                                            anchor_clone.room_id
+                                            "{}",
+                                            tr!(
+                                                "detector.disk_low_skip_start",
+                                                name = anchor_clone.name,
+                                                room_id = anchor_clone.room_id
+                                            )
                                         );
                                         return;
                                     }
                                     let cancel = CancellationToken::new();
                                     tracing::info!(
-                                        "[检测] 触发自动录制: {} (room_id={})",
-                                        anchor_clone.name,
-                                        anchor_clone.room_id
+                                        "{}",
+                                        tr!(
+                                            "detector.trigger_auto_record",
+                                            name = anchor_clone.name,
+                                            room_id = anchor_clone.room_id
+                                        )
                                     );
                                     start_recording(
                                         anchor_clone,
@@ -459,8 +488,8 @@ impl DetectionLoop {
                                     );
                                 } else {
                                     tracing::debug!(
-                                        "[检测] 已在录制中，跳过: {}",
-                                        anchor_clone.name
+                                        "{}",
+                                        tr!("detector.already_recording_skip", name = anchor_clone.name)
                                     );
                                 }
                             }
@@ -473,16 +502,19 @@ impl DetectionLoop {
                             | CheckErrorKind::Format => {
                                 stats.record_check_unknown();
                                 tracing::warn!(
-                                    "[检测] 状态未知（保持上一状态）: {} (room_id={}): {}",
-                                    anchor_clone.name,
-                                    anchor_clone.room_id,
-                                    e
+                                    "{}",
+                                    tr!(
+                                        "detector.status_unknown",
+                                        name = anchor_clone.name,
+                                        room_id = anchor_clone.room_id,
+                                        err = e
+                                    )
                                 );
                             }
                             // 明确不可用（如 404 房间不存在）：视为离线，走归并推送
                             CheckErrorKind::Other => {
                                 stats.record_check_failed();
-                                tracing::error!("[检测] API 明确失败，视为离线: {}", e);
+                                tracing::error!("{}", tr!("detector.api_definite_failure", err = e));
                                 push_merged_status(
                                     &window,
                                     &live_cache,

@@ -49,6 +49,7 @@ use tauri_plugin_opener::OpenerExt;
 use crate::domain::config::manager::ConfigManager;
 use crate::domain::recorder::engine::FfmpegRecorder;
 use crate::infrastructure::state::app_state::{AppStateHandle, RecorderState, RecordingSummary, Task};
+use crate::tr;
 
 /// 最近录制菜单上限（规格 1.1：最多 5 条）
 const RECENT_LIMIT: usize = 5;
@@ -217,7 +218,7 @@ impl TrayManager {
     /// [`TrayManager::set_enabled`] 随时显示，无需重建托盘）。
     pub fn new(app: &AppHandle, visible: bool) -> Result<Arc<Self>, String> {
         let icon = tauri::image::Image::from_bytes(include_bytes!("../../../icons/tray-icon.png"))
-            .map_err(|e| format!("加载托盘图标失败: {}", e))?;
+            .map_err(|e| tr!("tray.icon_load_failed", err = e))?;
         let data = Arc::new(std::sync::Mutex::new(TrayMenuData::default()));
         // 锁中毒统一优雅降级（与 apply / open_recent_file 一致），setup 期不 panic
         let menu = build_menu(app, &data.lock().unwrap_or_else(|e| e.into_inner()))?;
@@ -226,7 +227,7 @@ impl TrayManager {
         let app_for_icon_events = app.clone();
         let tray = TrayIconBuilder::with_id("missevan-recorder-tray")
             .icon(icon)
-            .tooltip("Missevan 猫耳录制器")
+            .tooltip(tr!("update.app_name"))
             .menu(&menu)
             .show_menu_on_left_click(false)
             .on_menu_event(move |app, event| handle_menu_event(app, &data_for_events, event))
@@ -241,7 +242,7 @@ impl TrayManager {
                 }
             })
             .build(app)
-            .map_err(|e| format!("创建托盘失败: {}", e))?;
+            .map_err(|e| tr!("tray.create_failed", err = e))?;
         // 启动双重 NIM_ADD 修复（tray-icon 0.24.1 vendored 源码核验）：
         // `TrayIcon::new` 即 register_tray_icon（NIM_ADD，userdata.visible 初始
         // true）；随后 `set_visible(true)` 经 WM_USER_SHOW_TRAYICON **无条件再次
@@ -252,7 +253,7 @@ impl TrayManager {
         // set_enabled 随时显示，无需重建托盘）
         if !visible {
             tray.set_visible(false)
-                .map_err(|e| format!("设置托盘图标可见性失败: {}", e))?;
+                .map_err(|e| tr!("tray.set_visible_failed", err = e))?;
         }
 
         Ok(Arc::new(Self {
@@ -272,9 +273,9 @@ impl TrayManager {
     pub fn set_enabled(&self, visible: bool) {
         let changed = self.enabled.swap(visible, Ordering::SeqCst) != visible;
         if let Err(e) = self.tray.set_visible(visible) {
-            tracing::error!("设置托盘图标可见性失败: {}", e);
+            tracing::error!("{}", tr!("tray.set_visible_failed", err = e));
         } else if changed {
-            tracing::info!("托盘图标可见性: {}", visible);
+            tracing::info!("{}", tr!("tray.visibility_changed", visible = visible));
         }
     }
 
@@ -283,7 +284,7 @@ impl TrayManager {
     pub fn spawn_refresher(self: &Arc<Self>, app_state: AppStateHandle) {
         let this = self.clone();
         tauri::async_runtime::spawn(async move {
-            tracing::info!("托盘菜单轮询已启动（2s 间隔）");
+            tracing::info!("{}", tr!("tray.polling_started"));
             loop {
                 tokio::time::sleep(REFRESH_INTERVAL).await;
                 this.refresh(&app_state).await;
@@ -320,10 +321,32 @@ impl TrayManager {
         match build_menu(&self.app, &new) {
             Ok(menu) => {
                 if let Err(e) = self.tray.set_menu(Some(menu)) {
-                    tracing::error!("更新托盘菜单失败: {}", e);
+                    tracing::error!("{}", tr!("tray.menu_update_failed", err = e));
                 }
             }
-            Err(e) => tracing::error!("重建托盘菜单失败: {}", e),
+            Err(e) => tracing::error!("{}", tr!("tray.menu_rebuild_failed", err = e)),
+        }
+    }
+
+    /// 语言切换后强制重建菜单：数据未变时 [`Self::apply`] 会因快照相等跳过
+    /// 重建，但菜单文本语言已变化（tr! 按当前语言渲染）——直接重绘当前快照。
+    /// 由 `set_locale` 命令调用（M4 修复：切换语言后托盘菜单即时更新）。
+    pub fn refresh_menu_language(&self) {
+        if !self.enabled() {
+            return;
+        }
+        let snapshot = self
+            .data
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        match build_menu(&self.app, &snapshot) {
+            Ok(menu) => {
+                if let Err(e) = self.tray.set_menu(Some(menu)) {
+                    tracing::error!("{}", tr!("tray.menu_update_failed", err = e));
+                }
+            }
+            Err(e) => tracing::error!("{}", tr!("tray.menu_rebuild_failed", err = e)),
         }
     }
 }
@@ -364,8 +387,8 @@ pub fn clean_exit_marker_exists() -> bool {
     let path = crate::domain::tools::exe_dir().join(CLEAN_EXIT_MARKER);
     if path.exists() {
         tracing::warn!(
-            "检测到上次异常退出（标记文件 {} 存在）：若托盘中残留旧图标，可鼠标悬停通知区清除",
-            path.display()
+            "{}",
+            tr!("tray.clean_exit_marker_found", path = path.display())
         );
         true
     } else {
@@ -378,7 +401,7 @@ pub fn clean_exit_marker_exists() -> bool {
 pub fn write_clean_exit_marker() {
     let path = crate::domain::tools::exe_dir().join(CLEAN_EXIT_MARKER);
     if let Err(e) = std::fs::write(&path, b"") {
-        tracing::warn!("写入退出标记失败（异常退出检测将不可用）: {}", e);
+        tracing::warn!("{}", tr!("tray.marker_write_failed", err = e));
     }
 }
 
@@ -388,7 +411,7 @@ pub fn remove_clean_exit_marker() {
     let path = crate::domain::tools::exe_dir().join(CLEAN_EXIT_MARKER);
     if let Err(e) = std::fs::remove_file(&path) {
         if e.kind() != std::io::ErrorKind::NotFound {
-            tracing::warn!("移除退出标记失败: {}", e);
+            tracing::warn!("{}", tr!("tray.marker_remove_failed", err = e));
         }
     }
 }
@@ -406,22 +429,22 @@ pub fn request_shutdown(app: &AppHandle) {
 }
 
 async fn do_shutdown(app: &AppHandle) {
-    tracing::info!("开始优雅退出");
+    tracing::info!("{}", tr!("tray.shutdown_start"));
     // 1. 保存配置（幂等；失败仅记日志，不阻塞退出）
     //    根因修复（修复子代理 B）：仅当配置文件**已存在**时才保存——首次运行
     //    向导中途退出（配置尚未产生）绝不落盘，避免「第 1 步退出也产生
     //    config.toml（默认 wizard_completed=true）→ 下次启动绕过向导」。
     if let Some(config_manager) = app.try_state::<Arc<ConfigManager>>() {
         if !should_persist_on_shutdown(&**config_manager) {
-            tracing::debug!("配置不存在（首次运行向导未完成），退出不保存配置");
+            tracing::debug!("{}", tr!("tray.shutdown_no_config"));
         } else {
             match config_manager.load() {
                 Ok(config) => {
                     if let Err(e) = config_manager.save_global(&config.global) {
-                        tracing::error!("退出前保存配置失败: {}", e);
+                        tracing::error!("{}", tr!("tray.shutdown_save_failed", err = e));
                     }
                 }
-                Err(e) => tracing::warn!("退出前读取配置失败: {}", e),
+                Err(e) => tracing::warn!("{}", tr!("tray.shutdown_load_failed", err = e)),
             }
         }
     }
@@ -441,7 +464,7 @@ async fn do_shutdown(app: &AppHandle) {
 
     // 3. 等待录制任务结束（统一 ≤5s 超时；超时则放弃等待直接退出）
     if !tasks_to_wait.is_empty() {
-        tracing::info!("等待 {} 个录制任务结束（≤5s）", tasks_to_wait.len());
+        tracing::info!("{}", tr!("tray.wait_tasks", count = tasks_to_wait.len()));
         let deadline = tokio::time::Instant::now() + SHUTDOWN_WAIT;
         for task in tasks_to_wait {
             let _ = tokio::time::timeout_at(deadline, task.handle).await;
@@ -456,12 +479,12 @@ async fn do_shutdown(app: &AppHandle) {
     if let Some(recorder) = app.try_state::<Arc<FfmpegRecorder>>() {
         let alive = recorder.active_anchor_ids();
         if !alive.is_empty() {
-            tracing::info!("退出前强制终止 {} 个剩余录制进程", alive.len());
+            tracing::info!("{}", tr!("tray.force_terminate_count", count = alive.len()));
             recorder.force_terminate_all().await;
         }
     }
 
-    tracing::info!("优雅退出完成");
+    tracing::info!("{}", tr!("tray.shutdown_complete"));
     // 上次退出干净度标记：统一退出路径在此移除（崩溃/强杀时标记残留，下次
     // 启动据此提示用户清理托盘幽灵图标——见 clean_exit_marker_exists 注释）。
     // 应用退出后 TrayManager 由托管状态 drop → TrayIcon drop → NIM_DELETE，
@@ -482,14 +505,14 @@ async fn do_shutdown(app: &AppHandle) {
 /// 退出应用
 /// ```
 fn build_menu(app: &AppHandle, data: &TrayMenuData) -> Result<Menu<Wry>, String> {
-    let show_main = MenuItem::with_id(app, MENU_SHOW_MAIN, "显示主窗口", true, None::<&str>)
+    let show_main = MenuItem::with_id(app, MENU_SHOW_MAIN, tr!("tray.menu_show_main"), true, None::<&str>)
         .map_err(|e| e.to_string())?;
     let sep1 = PredefinedMenuItem::separator(app).map_err(|e| e.to_string())?;
 
     let recording = MenuItem::with_id(
         app,
         MENU_RECORDING,
-        format!("录制中：{}", data.recording_count),
+        tr!("tray.menu_recording_count", count = data.recording_count),
         data.recording_count > 0,
         None::<&str>,
     )
@@ -498,7 +521,7 @@ fn build_menu(app: &AppHandle, data: &TrayMenuData) -> Result<Menu<Wry>, String>
     let recent_submenu = build_recent_submenu(app, data)?;
 
     let sep2 = PredefinedMenuItem::separator(app).map_err(|e| e.to_string())?;
-    let exit = MenuItem::with_id(app, MENU_EXIT, "退出应用", true, None::<&str>)
+    let exit = MenuItem::with_id(app, MENU_EXIT, tr!("tray.menu_exit"), true, None::<&str>)
         .map_err(|e| e.to_string())?;
 
     let items: Vec<&dyn IsMenuItem<Wry>> =
@@ -510,9 +533,9 @@ fn build_menu(app: &AppHandle, data: &TrayMenuData) -> Result<Menu<Wry>, String>
 fn build_recent_submenu(app: &AppHandle, data: &TrayMenuData) -> Result<Submenu<Wry>, String> {
     if data.recent_files.is_empty() {
         let placeholder =
-            MenuItem::with_id(app, MENU_RECENT_EMPTY, "暂无最近录制", false, None::<&str>)
+            MenuItem::with_id(app, MENU_RECENT_EMPTY, tr!("tray.menu_recent_empty"), false, None::<&str>)
                 .map_err(|e| e.to_string())?;
-        return Submenu::with_items(app, "最近录制", true, &[&placeholder])
+        return Submenu::with_items(app, tr!("tray.menu_recent"), true, &[&placeholder])
             .map_err(|e| e.to_string());
     }
     let items_owned: Vec<MenuItem<Wry>> = data
@@ -532,7 +555,7 @@ fn build_recent_submenu(app: &AppHandle, data: &TrayMenuData) -> Result<Submenu<
         .collect::<Result<_, _>>()?;
     let items: Vec<&dyn IsMenuItem<Wry>> =
         items_owned.iter().map(|i| i as &dyn IsMenuItem<Wry>).collect();
-    Submenu::with_items(app, "最近录制", true, &items).map_err(|e| e.to_string())
+    Submenu::with_items(app, tr!("tray.menu_recent"), true, &items).map_err(|e| e.to_string())
 }
 
 /// 菜单事件分发（on_menu_event 回调；主线程调用，禁止阻塞操作）
@@ -576,7 +599,7 @@ fn open_recent_file(app: &AppHandle, data: &std::sync::Mutex<TrayMenuData>, inde
     if let Some(path) = path {
         // tauri_plugin_opener::Opener::reveal_item_in_dir(p: impl AsRef<Path>)
         if let Err(e) = app.opener().reveal_item_in_dir(Path::new(&path)) {
-            tracing::warn!("打开最近录制所在文件夹失败（{}）: {}", path, e);
+            tracing::warn!("{}", tr!("tray.open_folder_failed", path = path, err = e));
         }
     }
 }

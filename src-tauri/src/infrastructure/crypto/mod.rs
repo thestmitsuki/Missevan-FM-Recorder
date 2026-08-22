@@ -12,13 +12,15 @@
 
 use std::fmt;
 
+use crate::tr;
+
 /// 混淆失败错误（调用方决定是否回退明文）
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CryptoError(pub String);
 
 impl fmt::Display for CryptoError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "解密失败: {}", self.0)
+        write!(f, "{}", tr!("log.crypto_decrypt_failed", msg = self.0))
     }
 }
 
@@ -81,21 +83,21 @@ pub fn deobfuscate(s: &str, key: &[u8]) -> Result<String, CryptoError> {
     }
     let payload = s
         .strip_prefix(PREFIX)
-        .ok_or_else(|| CryptoError("缺少密文前缀".into()))?;
+        .ok_or_else(|| CryptoError(tr!("log.crypto_missing_prefix").into()))?;
     if payload.is_empty() {
         return Ok(String::new());
     }
     use base64::Engine;
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(payload)
-        .map_err(|e| CryptoError(format!("Base64 解码失败: {}", e)))?;
+        .map_err(|e| CryptoError(tr!("log.crypto_base64_failed", err = e)))?;
     let key = if key.is_empty() { &[0u8] } else { key };
     let plain: Vec<u8> = bytes
         .iter()
         .enumerate()
         .map(|(i, b)| b ^ key[i % key.len()])
         .collect();
-    String::from_utf8(plain).map_err(|_| CryptoError("解码结果不是有效 UTF-8".into()))
+    String::from_utf8(plain).map_err(|_| CryptoError(tr!("log.crypto_utf8_failed").into()))
 }
 
 /// 解密或回退原样：`deobfuscate` 失败时返回原文。

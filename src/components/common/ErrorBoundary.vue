@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, onErrorCaptured } from "vue";
 import { useI18n } from "vue-i18n";
+import { Button } from "@/components/ui/button";
 
 const { t } = useI18n();
 
@@ -25,7 +26,7 @@ function resetError() {
   <div v-if="hasError" class="error-boundary">
     <p class="error-title">{{ t("error.boundaryTitle") }}</p>
     <p class="error-message">{{ errorMessage }}</p>
-    <button class="error-retry" @click="resetError">{{ t("error.retry") }}</button>
+    <Button variant="outline" @click="resetError">{{ t("error.retry") }}</Button>
   </div>
   <slot v-else :key="errorKey" />
 </template>

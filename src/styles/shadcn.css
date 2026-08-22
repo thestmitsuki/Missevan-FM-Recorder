@@ -20,6 +20,10 @@
   --color-accent-foreground: var(--accent-foreground);
   --color-destructive: var(--destructive);
   --color-destructive-foreground: var(--destructive-foreground);
+  /* 状态混合色：录制中徽标 = 种子色(destructive) 70% + 强调色(primary) 30%
+     与直播中（纯 primary）色相不同，可快速区分；同时含 30% 强调色成分，
+     换主题时轻微跟随。Tailwind 类：bg-seed-recording / text-seed-recording */
+  --color-seed-recording: var(--seed-recording);
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
@@ -47,6 +51,8 @@
   --accent-foreground: oklch(0.205 0 0);
   --destructive: oklch(0.577 0.245 27.325);
   --destructive-foreground: oklch(0.985 0 0);
+  /* 录制中徽标种子混合色：70% 种子色 + 30% 强调色 */
+  --seed-recording: color-mix(in oklab, var(--destructive) 70%, var(--primary) 30%);
   --border: oklch(0.922 0 0);
   --input: oklch(0.922 0 0);
   --ring: oklch(0.55 0.2 250);
@@ -74,6 +80,8 @@
   --accent-foreground: oklch(0.985 0 0);
   --destructive: oklch(0.704 0.191 22.216);
   --destructive-foreground: oklch(0.985 0 0);
+  /* 暗色下种子混合色自动跟随（destructive/primary 变量均切换） */
+  --seed-recording: color-mix(in oklab, var(--destructive) 70%, var(--primary) 30%);
   --border: oklch(1 0 0 / 10%);
   --input: oklch(1 0 0 / 15%);
   --ring: oklch(0.65 0.2 250);
