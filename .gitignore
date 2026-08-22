@@ -1,6 +1,7 @@
 # ── 依赖与构建产物（构建时重新生成，不入库）──
 node_modules/
-dist/
+dist/*
+!dist/.gitkeep
 src-tauri/target/
 src-tauri/gen/
 *.tsbuildinfo
