@@ -64,7 +64,7 @@ pub fn exe_dir() -> PathBuf {
 /// 便携版 FFmpeg 目录内 Linux 不存放文件（向导不下载，见 wizard_cmds::download_ffmpeg），
 /// 该候选在 Linux 上通常不命中，但保持候选顺序与 Windows 一致
 ///（配置指定 → 便携目录 → PATH）。
-fn tool_exe_name(name: &str) -> String {
+pub(crate) fn tool_exe_name(name: &str) -> String {
     if cfg!(windows) {
         format!("{}.exe", name)
     } else {

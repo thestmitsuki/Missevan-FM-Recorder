@@ -239,7 +239,9 @@ mod tests {
         assert_eq!(cands[0], std::path::PathBuf::from("C:\\tools\\ffmpeg.exe"));
         assert_eq!(
             cands[1],
-            crate::domain::tools::exe_dir().join("ffmpeg").join("ffmpeg.exe")
+            crate::domain::tools::exe_dir()
+                .join("ffmpeg")
+                .join(crate::domain::tools::tool_exe_name("ffmpeg"))
         );
         assert_eq!(cands[2], std::path::PathBuf::from("ffmpeg"));
         // 空配置 → 从 {exe_dir}/ffmpeg/ffmpeg.exe 开始
@@ -247,7 +249,9 @@ mod tests {
         assert_eq!(cands.len(), 2);
         assert_eq!(
             cands[0],
-            crate::domain::tools::exe_dir().join("ffmpeg").join("ffmpeg.exe")
+            crate::domain::tools::exe_dir()
+                .join("ffmpeg")
+                .join(crate::domain::tools::tool_exe_name("ffmpeg"))
         );
         assert_eq!(cands[1], std::path::PathBuf::from("ffmpeg"));
     }
