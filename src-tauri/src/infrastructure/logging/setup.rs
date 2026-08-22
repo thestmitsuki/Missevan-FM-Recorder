@@ -934,12 +934,13 @@ mod tests {
         // rebuild_interest_cache——该 API 遍历全部已注册 callsite 并回调本 filter
         // 的 callsite_enabled（取读锁），同一线程 RwLock 非重入 → 必然死锁。
         //
-        // 本测试复刻生产注册路径：带 ReloadFilter 的 subscriber 经
-        // set_global_default 注册为全局默认（生产 init_logging 的 .init() 同路径），
+        // 本测试复刻生产注册路径：带 ReloadFilter 的 subscriber 经 with_default
+        // 注册为线程 dispatcher（与生产 init_logging 的 .init() → set_global_default
+        // 同 filter 回调路径；局部注册避免并行测试的 reload 事件污染计数），
         // 使 tracing 宏的真实 callsite 注册 / rebuild 回调均触达 ReloadFilter，
         // 若死锁回归则本测试超时挂起（cargo test 超时失败）。
         use std::sync::Mutex;
-        use tracing::subscriber::set_global_default;
+        use tracing::subscriber::with_default;
 
         // 收集层：统计到达的日志事件（验证 reload 后 debug 事件真实可观测）
         #[derive(Clone)]
@@ -960,39 +961,42 @@ mod tests {
                 inner: shared.clone(),
             }),
         );
-        // 全局 default 进程内只允许注册一次；测试并行下其余测试均用
-        // with_default 局部覆盖不受影响，重复注册（Err）静默忽略即可。
-        let _ = set_global_default(subscriber);
+        // 经 with_default 注册为线程局部 dispatcher（与生产 .init() 的
+        // set_global_default 走同一条 filter 回调路径，死锁回归仍有效）：
+        // 若用全局注册，并行测试（switches_filter_live / whitelist_via_wrapper）
+        // 的 reload 内 info! 会经全局 dispatcher 进入本收集层，把精确计数
+        // 污染成 flaky（本地复现 left=4 / right=3，云端偶发）。
+        with_default(subscriber, || {
+            tracing::info!("info 级事件");
+            tracing::debug!("debug 级事件（info filter 下应被过滤）");
+            assert_eq!(*count.lock().unwrap(), 1, "info 级别下仅 info 事件到达");
 
-        tracing::info!("info 级事件");
-        tracing::debug!("debug 级事件（info filter 下应被过滤）");
-        assert_eq!(*count.lock().unwrap(), 1, "info 级别下仅 info 事件到达");
+            let wrapper = LogLevelReload {
+                inner: shared.clone(),
+            };
+            // 若死锁回归：此调用永不返回（测试挂起直至超时）
+            assert!(wrapper.reload("debug"), "reload 应正常返回（不死锁）");
+            // reload 内自身 info!（「日志级别已热更新为 debug」）在 debug filter 下
+            // 放行，也到达收集层——此时 count = 1（前 info）+ 1（reload 内 info）
+            assert_eq!(*count.lock().unwrap(), 2, "reload 内 info 事件到达");
 
-        let wrapper = LogLevelReload {
-            inner: shared.clone(),
-        };
-        // 若死锁回归：此调用永不返回（测试挂起直至超时）
-        assert!(wrapper.reload("debug"), "reload 应正常返回（不死锁）");
-        // reload 内自身 info!（「日志级别已热更新为 debug」）在 debug filter 下
-        // 放行，也到达收集层——此时 count = 1（前 info）+ 1（reload 内 info）
-        assert_eq!(*count.lock().unwrap(), 2, "reload 内 info 事件到达");
+            tracing::debug!("reload 后 debug 级事件可见");
+            assert_eq!(
+                *count.lock().unwrap(),
+                3,
+                "reload 后 debug 事件应真实到达收集层"
+            );
 
-        tracing::debug!("reload 后 debug 级事件可见");
-        assert_eq!(
-            *count.lock().unwrap(),
-            3,
-            "reload 后 debug 事件应真实到达收集层"
-        );
-
-        // 降级到 error：info/debug 全部过滤，error 可达
-        assert!(wrapper.reload("error"));
-        // reload 内 info! 在 error filter 下被过滤，count 不变
-        assert_eq!(*count.lock().unwrap(), 3, "error filter 下 info 被过滤");
-        tracing::error!("error 级事件可见");
-        assert_eq!(
-            *count.lock().unwrap(),
-            4,
-            "降级到 error 后 error 事件到达"
-        );
+            // 降级到 error：info/debug 全部过滤，error 可达
+            assert!(wrapper.reload("error"));
+            // reload 内 info! 在 error filter 下被过滤，count 不变
+            assert_eq!(*count.lock().unwrap(), 3, "error filter 下 info 被过滤");
+            tracing::error!("error 级事件可见");
+            assert_eq!(
+                *count.lock().unwrap(),
+                4,
+                "降级到 error 后 error 事件到达"
+            );
+        });
     }
 }
