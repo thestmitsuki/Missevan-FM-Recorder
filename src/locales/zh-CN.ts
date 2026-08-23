@@ -133,12 +133,7 @@ export default {
     delete: "删除",
     // ── 录制中标记（文件正被 FFmpeg 写入，禁止删除/重命名）──
     recordingActive: "录制中",
-    // ── 播放器 ──
-    nowPlaying: "正在播放",
-    pause: "暂停",
-    playerProgress: "第 {current}/{total} 个文件",
-    playerVolume: "音量",
-    playerSeek: "播放进度",
+    // ── 播放器（播放条 i18n 已迁至 player 段；playerError 供 playerStore 使用）──
     playerError: "音频加载失败（文件可能不存在或超出内置播放器访问范围）",
     // ── 重命名对话框 ──
     renameDialogTitle: "重命名文件",
@@ -818,6 +813,16 @@ export default {
     bodyDiagnostics: "日志与诊断信息",
     bodyDiagnosticsHint:
       "（如有，请附加「调试面板」导出的诊断报告或相关日志文件）",
+  },
+
+  // ── Player（全局播放条：跨路由显示，挂在 AppLayout）──
+  player: {
+    nowPlaying: "正在播放",
+    play: "播放",
+    pause: "暂停",
+    playerProgress: "第 {current}/{total} 个文件",
+    playerVolume: "音量",
+    playerSeek: "播放进度",
   },
 
   // ── Update（启动自动检查更新弹窗）──

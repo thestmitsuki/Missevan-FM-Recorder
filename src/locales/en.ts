@@ -136,12 +136,7 @@ export default {
     delete: "Delete",
     // ── Recording-active marker (file is being written by FFmpeg; delete/rename disabled) ──
     recordingActive: "Recording",
-    // ── Player ──
-    nowPlaying: "Now Playing",
-    pause: "Pause",
-    playerProgress: "File {current}/{total}",
-    playerVolume: "Volume",
-    playerSeek: "Seek",
+    // ── Player (player bar i18n moved to the player section; playerError is used by playerStore) ──
     playerError:
       "Failed to load audio (the file may be missing or outside the built-in player's allowed scope)",
     // ── Rename dialog ──
@@ -823,6 +818,16 @@ export default {
     bodyDiagnostics: "Logs and diagnostics",
     bodyDiagnosticsHint:
       "(Attach a diagnostic report exported from the Debug Panel or relevant log files if available)",
+  },
+
+  // ── Player (global player bar, shown across routes in AppLayout) ──
+  player: {
+    nowPlaying: "Now Playing",
+    play: "Play",
+    pause: "Pause",
+    playerProgress: "File {current}/{total}",
+    playerVolume: "Volume",
+    playerSeek: "Seek",
   },
 
   // ── Update (startup auto-check dialog) ──

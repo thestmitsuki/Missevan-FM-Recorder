@@ -37,14 +37,12 @@ import {
     ListMusic,
     MoreVertical,
     Music,
-    Pause,
     Pencil,
     Play,
     RefreshCw,
     Search,
     SlidersHorizontal,
     Trash2,
-    Volume2,
     X,
 } from "@lucide/vue";
 
@@ -57,13 +55,11 @@ import ConfirmDialog from "@/components/common/ConfirmDialog.vue";
 import NavRail, { type NavRailItem } from "@/components/common/NavRail.vue";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Popover, PopoverAnchor, PopoverContent } from "@/components/ui/popover";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Slider } from "@/components/ui/slider";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
     Dialog,
@@ -678,13 +674,6 @@ function formatDateShort(date: Date): string {
     }).format(date);
 }
 
-function formatTime(sec: number): string {
-    if (!isFinite(sec) || sec < 0) return "0:00";
-    const m = Math.floor(sec / 60);
-    const s = Math.floor(sec % 60);
-    return `${m}:${String(s).padStart(2, "0")}`;
-}
-
 // ── 操作通知（走 notificationStore → App 层 Snackbar）──
 function notify(message: string, level: NotificationLevel = "Info") {
     notifStore.addNotification({
@@ -875,19 +864,6 @@ function isCurrent(file: RecordingFile) {
 function playFiles(files: RecordingFile[]) {
     player.playFiles(files);
 }
-
-function seekAudio(value: number[]) {
-    const next = value[0] ?? 0;
-    if (player.duration) player.seek(next / player.duration);
-}
-
-/** 音量滑块双向绑定（Slider 组件，跟随主题；setVolume 同步到 audio） */
-const playerVolume = computed({
-    get: () => [player.volume],
-    set: (v: number[]) => {
-        player.setVolume(v[0] ?? 0);
-    },
-});
 
 // ── 生命周期 ──
 onMounted(() => {
@@ -1568,89 +1544,5 @@ onBeforeUnmount(() => {
                 </DialogFooter>
             </DialogContent>
         </Dialog>
-
-        <!-- 内置播放器（底部浮条；多文件队列播放时显示进度 x/y）。
-             UI 在文件页，但音频生命周期全局（playerStore 单例 audio 挂
-             document.body）：切页不停止播放，切回时 UI 从 store 恢复。 -->
-        <Card
-            v-if="player.currentFile"
-            class="fixed bottom-4 left-1/2 z-50 flex w-[min(560px,calc(100vw-2rem))] -translate-x-1/2 flex-row items-center gap-3 rounded-xl border-border/70 bg-background/95 p-3 shadow-lg backdrop-blur"
-            :aria-label="t('files.nowPlaying')"
-        >
-            <Button
-                size="icon"
-                variant="ghost"
-                class="size-9 shrink-0 rounded-full"
-                :aria-label="player.playing ? t('files.pause') : t('files.play')"
-                @click="player.togglePlay()"
-            >
-                <Pause v-if="player.playing" class="size-4" />
-                <Play v-else class="size-4" />
-            </Button>
-
-            <div class="min-w-0 flex-1">
-                <div class="flex items-center gap-2">
-                    <p class="truncate text-xs font-semibold">
-                        {{ player.currentFile.name }}
-                    </p>
-                    <Badge
-                        v-if="player.isQueuePlay"
-                        class="shrink-0 border-transparent bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary"
-                    >
-                        {{
-                            t("files.playerProgress", {
-                                current: player.queueIndex + 1,
-                                total: player.queue.length,
-                            })
-                        }}
-                    </Badge>
-                </div>
-                <div class="mt-1 flex items-center gap-2">
-                    <span
-                        class="w-9 shrink-0 text-right text-[10px] tabular-nums text-muted-foreground"
-                    >
-                        {{ formatTime(player.currentTime) }}
-                    </span>
-                    <Slider
-                        :model-value="[player.currentTime]"
-                        :min="0"
-                        :max="player.duration || 0"
-                        :step="0.1"
-                        class="h-1.5 flex-1"
-                        :aria-label="t('files.playerSeek')"
-                        @update:model-value="(v: number[] | undefined) => seekAudio(v ?? [])"
-                    />
-                    <span
-                        class="w-9 shrink-0 text-[10px] tabular-nums text-muted-foreground"
-                    >
-                        {{ formatTime(player.duration) }}
-                    </span>
-                </div>
-            </div>
-
-            <div class="flex shrink-0 items-center gap-1">
-                <Volume2
-                    class="size-3.5 text-muted-foreground"
-                    aria-hidden="true"
-                />
-                <Slider
-                    v-model="playerVolume"
-                    :min="0"
-                    :max="1"
-                    :step="0.01"
-                    :aria-label="t('files.playerVolume')"
-                    class="w-14"
-                />
-                <Button
-                    size="icon"
-                    variant="ghost"
-                    class="size-8 rounded-full"
-                    :aria-label="t('common.close')"
-                    @click="player.stopPlayback()"
-                >
-                    <X class="size-4" />
-                </Button>
-            </div>
-        </Card>
     </div>
 </template>

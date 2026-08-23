@@ -8,6 +8,7 @@ import { useDebugStore } from "@/stores/debugStore";
 import { Button } from "@/components/ui/button";
 import TopBar from "@/components/layout/TopBar.vue";
 import PageContainer from "@/components/layout/PageContainer.vue";
+import PlayerBar from "@/components/player/PlayerBar.vue";
 
 const router = useRouter();
 const route = useRoute();
@@ -60,6 +61,8 @@ const navItems = computed(() => {
             <PageContainer>
                 <RouterView />
             </PageContainer>
+            <!-- 全局播放条（RouterView 外层，跨路由显示） -->
+            <PlayerBar />
         </main>
     </div>
 </template>
