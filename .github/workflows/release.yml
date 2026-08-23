@@ -158,7 +158,11 @@ jobs:
 
           # 3) makepkg 拒绝 root 运行,切换到 builder 用户执行
           useradd -m builder
-          chown -R builder:builder pkgbuild
+          # PKGBUILD build() 在仓库根（$startdir/..）执行 npm ci / npm run
+          # build / cargo build——需对整棵 checkout 树（node_modules / dist /
+          # src-tauri/target）有写权限；仅 chown pkgbuild/ 时 builder 无法
+          # 删除先前 root 运行 npm ci 创建的 node_modules/.bin（EACCES）
+          chown -R builder:builder .
           cd pkgbuild
           su builder -c "makepkg -f --nodeps --skipinteg"
 
