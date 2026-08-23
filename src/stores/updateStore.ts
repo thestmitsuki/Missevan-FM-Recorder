@@ -43,7 +43,7 @@ export const useUpdateStore = defineStore("update", () => {
     const downloadUrl = ref<string | null>(null);
 
     async function checkOnStartup(): Promise<void> {
-        const config = useConfigStore().config.value;
+        const config = useConfigStore().config;
         if (!config.check_updates) return; // 未启用 → 不执行
         if (checking.value || prompted.value) return;
         checking.value = true;
