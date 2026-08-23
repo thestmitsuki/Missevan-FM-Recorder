@@ -32,6 +32,8 @@ import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { useDebugStore } from "@/stores/debugStore";
+import { fetchUpdateInfo } from "@/stores/updateStore";
+import { compareVersions } from "@/lib/version";
 import { api } from "@/services/api";
 import type { AppInfo } from "@/types";
 
@@ -164,16 +166,7 @@ const DEPENDENCIES = computed<DependencyRow[]>(() => {
     return [...frontend, ...backend];
 });
 
-/** 语义化版本比较：a > b → 1，a < b → -1，相等 → 0（"1.2" 与 "1.2.0" 视为相等） */
-function compareVersions(a: string, b: string): number {
-    const pa = a.split(".").map((x) => parseInt(x, 10) || 0);
-    const pb = b.split(".").map((x) => parseInt(x, 10) || 0);
-    for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
-        const diff = (pa[i] ?? 0) - (pb[i] ?? 0);
-        if (diff !== 0) return diff > 0 ? 1 : -1;
-    }
-    return 0;
-}
+/** 语义化版本比较已抽至 @/lib/version（与 updateStore 共用） */
 
 async function loadInfo() {
     infoError.value = null;
@@ -190,7 +183,7 @@ async function checkUpdate() {
     checkText.value = "";
     checkUrl.value = null;
     try {
-        const result = await api.checkUpdate();
+        const result = await fetchUpdateInfo(); // 与启动检查请求级去重（并发复用）
         if (compareVersions(result.latest, result.current) > 0) {
             checkState.value = "update";
             checkText.value = t("about.updateAvailable", {

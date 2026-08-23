@@ -8,6 +8,8 @@ import { useNotificationStore } from "@/stores/notificationStore";
 import { useAnchorStore } from "@/stores/anchorStore";
 import { useConfigStore } from "@/stores/configStore";
 import { useThemeStore } from "@/stores/themeStore";
+import { useUpdateStore } from "@/stores/updateStore";
+import UpdatePromptDialog from "@/components/update/UpdatePromptDialog.vue";
 import Toast from "@/components/common/Toast.vue";
 import { isWizardWindow } from "@/services/window";
 import { onTrayOpenLivePage } from "@/services/events";
@@ -15,6 +17,7 @@ import { onTrayOpenLivePage } from "@/services/events";
 const notifStore = useNotificationStore();
 const anchorStore = useAnchorStore();
 const configStore = useConfigStore();
+const updateStore = useUpdateStore();
 const toastMessage = ref("");
 const toastKey = ref(0);
 const router = useRouter();
@@ -66,6 +69,12 @@ onMounted(async () => {
     } catch (e) {
         console.error("Failed to load config", e);
     }
+
+    // 4. 启动自动检查更新（仅主窗口；请求异步——网络慢时用户可能已切到
+    //    任意路由页面，弹窗挂在根组件跨路由显示；开关/失败静默见 updateStore）
+    if (!isWizard) {
+        void updateStore.checkOnStartup();
+    }
 });
 
 onUnmounted(() => {
@@ -98,6 +107,7 @@ watch(
         <RouterView v-if="isWizard" />
         <AppLayout v-else />
     </ErrorBoundary>
+    <UpdatePromptDialog />
     <!--- ##引发过消息残留## --->
     <Toast :message="toastMessage" :nonce="toastKey" :duration="3000" />
 </template>

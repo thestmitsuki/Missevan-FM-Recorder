@@ -825,6 +825,14 @@ export default {
       "(Attach a diagnostic report exported from the Debug Panel or relevant log files if available)",
   },
 
+  // ── Update (startup auto-check dialog) ──
+  update: {
+    promptTitle: "Update Available",
+    promptBody: "New version v{version} is available. Download now?",
+    download: "Download",
+    later: "Later",
+  },
+
   // ── Error Handling ──
   error: {
     boundaryTitle: "An Error Occurred",

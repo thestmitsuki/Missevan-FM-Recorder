@@ -141,6 +141,32 @@ pub fn parse_release(
     })
 }
 
+/// 语义化版本比较（与前端 `src/lib/version.ts::compareVersions` 一致）：
+/// 逐段比较数字（"1.2" 与 "1.2.0" 相等；预发布后缀 "-beta.1" 被忽略——
+/// 每段仅取前导数字，与 JS `parseInt` 行为一致）。
+fn compare_versions(a: &str, b: &str) -> std::cmp::Ordering {
+    let parse_segment = |seg: &str| -> u64 {
+        seg.chars()
+            .take_while(|c| c.is_ascii_digit())
+            .collect::<String>()
+            .parse()
+            .unwrap_or(0)
+    };
+    let pa: Vec<u64> = a.split('.').map(parse_segment).collect();
+    let pb: Vec<u64> = b.split('.').map(parse_segment).collect();
+    for i in 0..pa.len().max(pb.len()) {
+        let ord = pa
+            .get(i)
+            .copied()
+            .unwrap_or(0)
+            .cmp(&pb.get(i).copied().unwrap_or(0));
+        if ord != std::cmp::Ordering::Equal {
+            return ord;
+        }
+    }
+    std::cmp::Ordering::Equal
+}
+
 /// 检查更新（规格 §2.1）：GitHub Releases API 最新版本。
 ///
 /// 网络失败 / HTTP 非 2xx（含仓库未发布 404）/ 响应缺版本字段 → `Err`，
@@ -191,9 +217,18 @@ pub async fn check_update(
         .await
         .map_err(|e| AppError::internal(tr!("update.check_failed_parse", err = e)))?;
 
-    parse_release(&json, &current, AssetPlatform::current()).ok_or_else(|| {
+    let info = parse_release(&json, &current, AssetPlatform::current()).ok_or_else(|| {
         AppError::internal(tr!("update.check_failed_no_version"))
-    })
+    })?;
+    // 检测到新版本时输出 INFO 日志（check_updates 关闭时上方开关分支已返回
+    // Err——命令不执行、不输出；此处仅在开启检查后可达）
+    if compare_versions(&info.latest, &info.current) == std::cmp::Ordering::Greater {
+        tracing::info!(
+            "{}",
+            tr!("update.found_new_version", version = info.latest)
+        );
+    }
+    Ok(info)
 }
 
 /// 关于对话框静态信息（规格 §2.1：应用名称、版本号、构建日期）

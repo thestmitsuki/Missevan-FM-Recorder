@@ -100,6 +100,7 @@ check_failed_network = { zh = "检查更新失败（网络错误）：{err}", en
 check_failed_http = { zh = "检查更新失败（HTTP {status}）——项目可能尚未发布或网络受限", en = "Update check failed (HTTP {status}) — the project may not be published yet or the network is restricted" }
 check_failed_parse = { zh = "检查更新失败（响应解析错误）：{err}", en = "Update check failed (response parsing error): {err}" }
 check_failed_no_version = { zh = "检查更新失败（响应缺少版本信息）", en = "Update check failed (response missing version information)" }
+found_new_version = { zh = "检查到更新 版本:{version}", en = "Update available: v{version}" }
 app_name = { zh = "Missevan 猫耳录制器", en = "Missevan Recorder" }
 url_not_allowed = { zh = "仅支持 http/https 链接", en = "Only http/https links are supported" }
 open_browser_failed = { zh = "打开浏览器失败：{err}", en = "Failed to open browser: {err}" }

@@ -820,6 +820,14 @@ export default {
       "（如有，请附加「调试面板」导出的诊断报告或相关日志文件）",
   },
 
+  // ── Update（启动自动检查更新弹窗）──
+  update: {
+    promptTitle: "发现新版本",
+    promptBody: "检测到新版本 v{version}，是否前往下载？",
+    download: "前往下载",
+    later: "稍后再说",
+  },
+
   // ── Error Handling ──
   error: {
     boundaryTitle: "出现错误",
