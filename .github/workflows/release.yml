@@ -38,6 +38,13 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Clean stale NSIS artifacts
+        # target 缓存（restore-keys 前缀回退）会恢复旧版本构建的 bundle/nsis
+        # 残留 setup.exe；tauri bundler 生成新版本安装器时不清理旧文件，
+        # 上传 glob（*-setup.exe）会把新旧版本混入同一 artifact ZIP。
+        shell: pwsh
+        run: Remove-Item "src-tauri/target/release/bundle/nsis/*-setup.exe" -Force -ErrorAction SilentlyContinue
+
       - name: Build NSIS installer
         run: npx tauri build --bundles nsis
 
@@ -148,13 +155,15 @@ jobs:
           install -Dm644 src-tauri/icons/128x128.png \
             pkgbuild/src/usr/share/icons/hicolor/128x128/apps/missevan-recorder.png
           # 2) 从 packaging/arch/ 复制 desktop 文件与 PKGBUILD 模板（业务内容与
-          #    CI 流程分离,便于本地维护/校验;版本号经 __PKGVER__ 占位符 + sed 注入,
+          #    CI 流程分离,便于本地维护/校验;版本号经 sed 按行覆盖 pkgver,
           #    不依赖外层 sh 的转义)
           mkdir -p pkgbuild/src/usr/share/applications
           install -Dm644 packaging/arch/missevan-recorder.desktop \
             pkgbuild/src/usr/share/applications/missevan-recorder.desktop
           cp packaging/arch/PKGBUILD pkgbuild/PKGBUILD
-          sed -i "s|__PKGVER__|${version}|" pkgbuild/PKGBUILD
+          # 覆盖 pkgver 为当前版本（PKGBUILD 模板为本地构建保留真实版本号，
+          # 不依赖 __PKGVER__ 占位符——sed 按行匹配更健壮）
+          sed -i "s|^pkgver=.*|pkgver=${version}|" pkgbuild/PKGBUILD
 
           # 3) makepkg 拒绝 root 运行,切换到 builder 用户执行
           useradd -m builder
