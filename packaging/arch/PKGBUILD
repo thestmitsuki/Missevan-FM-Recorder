@@ -11,8 +11,14 @@ pkgdesc="猫耳 FM 直播自动录制工具（Missevan 猫耳录制器）"
 arch=('x86_64')
 url="https://github.com/thestmitsuki/Missevan-FM-Recorder"
 license=('MIT')
-depends=('webkit2gtk-4.1' 'gtk3' 'libsoup3' 'librsvg' 'ffmpeg' 'gcc-libs' 'xdg-utils')
+# 运行依赖：webkit2gtk-4.1（WebView 媒体栈走 GStreamer，需编解码插件才能播放
+# 内置 m4a/mp3——缺 gst-plugins-good（MP4 解封装 qtdemux）/ gst-libav（AAC 解码
+# avdec_aac）/ gst-plugins-base（基础元素）时播放报「音频不存在或无法访问」）；
 # xdg-utils：tauri-plugin-opener 在 Linux 后端仍经 xdg-open 打开文件夹
+depends=(
+  'webkit2gtk-4.1' 'gtk3' 'libsoup3' 'librsvg' 'ffmpeg' 'gcc-libs' 'xdg-utils'
+  'gst-plugins-base' 'gst-plugins-good' 'gst-libav'
+)
 makedepends=('cargo' 'rust' 'nodejs' 'npm' 'base-devel')
 
 # 源码为本地仓库（不在线分发），source 留空；
