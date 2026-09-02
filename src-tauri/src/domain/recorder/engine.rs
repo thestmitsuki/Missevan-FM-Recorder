@@ -1220,8 +1220,28 @@ pub fn cleanup_orphan_recordings(
                 let covered_by_marker = name
                     .strip_suffix(PARTIAL_SUFFIX)
                     .map(|stem| {
-                        path.with_file_name(format!("{stem}{RECORDING_MARKER_SUFFIX}"))
+                        // 直接对应：{output}.part ↔ {output}.recording（非分段 H5 改名）
+                        if path
+                            .with_file_name(format!("{stem}{RECORDING_MARKER_SUFFIX}"))
                             .exists()
+                        {
+                            return true;
+                        }
+                        // 分段对应：段 .part = {base}_{NNN}.{ext}.part ↔ 标记
+                        // {base}.recording（分段标记 output 是 base，无扩展名）。
+                        // 此前仅查直接对应，分段段 .part 会被误判为「无标记覆盖」而
+                        // 告警——且与 read_dir 遍历顺序相关（标记先处理则 .part 已删、
+                        // 跳过；.part 先遍历则误告警），修复后判定与顺序无关。
+                        if let Some((base, tail)) = stem.rsplit_once('_') {
+                            if let Some((seq, _ext)) = tail.rsplit_once('.') {
+                                if !seq.is_empty() && seq.bytes().all(|b| b.is_ascii_digit()) {
+                                    return path
+                                        .with_file_name(format!("{base}{RECORDING_MARKER_SUFFIX}"))
+                                        .exists();
+                                }
+                            }
+                        }
+                        false
                     })
                     .unwrap_or(false);
                 if !covered_by_marker {
