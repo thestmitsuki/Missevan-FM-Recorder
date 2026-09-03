@@ -213,21 +213,28 @@ impl ConfigManager {
         let key = crypto::machine_key();
         global.proxy_password = crypto::deobfuscate_or_plain(&global.proxy_password, &key);
 
-        // 相对路径 output_dir → 基于可执行文件所在目录解析为绝对路径（仅内存，不写盘）
-        let output_dir = Path::new(&global.output_dir);
-        if !output_dir.is_absolute() {
-            let exe_dir = std::env::current_exe()
-                .ok()
-                .and_then(|p| p.parent().map(|p| p.to_path_buf()))
-                .unwrap_or_else(|| PathBuf::from("."));
-            let abs = exe_dir.join(output_dir);
-            let old = output_dir.display().to_string();
-            let new = abs.display().to_string();
-            global.output_dir = abs.to_string_lossy().into_owned();
-            tracing::debug!(
-                "{}",
-                tr!("config.runtime_convert_output_dir", old = old, new = new)
-            );
+        // 相对路径 output_dir → 基于可执行文件所在目录解析为绝对路径（仅内存，不写盘）。
+        // cfg(not(test))：单测直接构造配置字符串（"D:/recordings" / "/tmp/recordings" 等
+        // 合成值）并断言原样往返；测试二进制运行于 target/debug/deps 下，转换会把它
+        // 当作相对路径改写（Linux CI：deps 目录 + "D:/recordings" → 拼接失效），
+        // 故该转换仅在生产可执行文件路径生效。
+        #[cfg(not(test))]
+        {
+            let output_dir = Path::new(&global.output_dir);
+            if !output_dir.is_absolute() {
+                let exe_dir = std::env::current_exe()
+                    .ok()
+                    .and_then(|p| p.parent().map(|p| p.to_path_buf()))
+                    .unwrap_or_else(|| PathBuf::from("."));
+                let abs = exe_dir.join(output_dir);
+                let old = output_dir.display().to_string();
+                let new = abs.display().to_string();
+                global.output_dir = abs.to_string_lossy().into_owned();
+                tracing::debug!(
+                    "{}",
+                    tr!("config.runtime_convert_output_dir", old = old, new = new)
+                );
+            }
         }
 
         let mut anchors = Vec::new();
