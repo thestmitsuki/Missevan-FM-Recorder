@@ -37,6 +37,11 @@ import_ok_body = { zh = "配置已导入，日志级别已即时生效", en = "C
 import_done = { zh = "配置导入完成: mode={mode} anchors_added={anchors_added} anchors_skipped={anchors_skipped} anchors_removed={anchors_removed}", en = "Configuration import complete: mode={mode} anchors_added={anchors_added} anchors_skipped={anchors_skipped} anchors_removed={anchors_removed}" }
 reset_done = { zh = "配置已删除，应用即将重启进入首次运行向导", en = "Configuration deleted; app is restarting into first-run setup" }
 autostart_failed = { zh = "设置开机自启失败", en = "Failed to set auto-start" }
+autostart_run_key_failed = { zh = "打开注册表 Run 键失败", en = "Failed to open the registry Run key" }
+autostart_registry_write_failed = { zh = "写入开机自启注册表失败", en = "Failed to write the auto-start registry entry" }
+autostart_unsupported_platform = { zh = "非 Windows 平台不支持开机自启注册表写入（请求: {req}）", en = "Auto-start via registry is unsupported on non-Windows platforms (request: {req})" }
+fsync_failed = { zh = "fsync 失败: {err}", en = "fsync failed: {err}" }
+toml_parse_detail = { zh = "TOML 解析错误: {err}", en = "TOML parse error: {err}" }
 shortcut_id_empty = { zh = "快捷键 id 不能为空", en = "Shortcut id cannot be empty" }
 # ── 组 3：config/manager.rs + config/model.rs（配置读写 / 导入导出 / 校验）──
 read_failed = { zh = "读取配置失败: {err}", en = "Failed to read configuration: {err}" }
@@ -231,6 +236,7 @@ sha256_not_configured = { zh = "FFmpeg zip SHA256 校验未配置（占位），
 open_zip_failed = { zh = "打开下载的 zip 失败", en = "Failed to open the downloaded zip" }
 compute_sha256_failed = { zh = "计算 zip SHA256 失败", en = "Failed to compute zip SHA256" }
 sha256_mismatch = { zh = "FFmpeg 下载校验失败（SHA256 不匹配）", en = "FFmpeg download verification failed (SHA256 mismatch)" }
+sha256_mismatch_detail = { zh = "期望 {expected}，实际 {actual}", en = "Expected {expected}, but got {actual}" }
 sha256_passed = { zh = "FFmpeg zip SHA256 校验通过: {actual}", en = "FFmpeg zip SHA256 verification passed: {actual}" }
 tool_available = { zh = "{name} 可用: {version}", en = "{name} available: {version}" }
 tool_path = { zh = "路径: {path}", en = "Path: {path}" }
@@ -362,6 +368,8 @@ unknown_proxy_type = { zh = "未知代理类型（降级为直连）: {kind}", e
 invalid_proxy_config = { zh = "代理配置无效（降级为直连）: {err}", en = "Invalid proxy configuration (falling back to direct connection): {err}" }
 create_http_client_failed = { zh = "创建 HTTP 客户端失败: {err}", en = "Failed to create HTTP client: {err}" }
 api_error_status = { zh = "API 返回错误状态: {status}", en = "API returned an error status: {status}" }
+response_parse_detail = { zh = "room_id: {room_id}, 前200字符: {snippet}", en = "room_id: {room_id}, first 200 chars: {snippet}" }
+http_error_detail = { zh = "HTTP {status}: {snippet} (前200字符)", en = "HTTP {status}: {snippet} (first 200 chars)" }
 
 [tray]
 icon_load_failed = { zh = "加载托盘图标失败: {err}", en = "Failed to load tray icon: {err}" }

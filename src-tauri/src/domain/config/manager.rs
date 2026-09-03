@@ -413,7 +413,7 @@ impl ConfigManager {
                     crate::infrastructure::error::types::IO_WRITE_FAIL,
                     tr!("config.write_failed"),
                 )
-                .with_technical(format!("fsync 失败: {}", e))
+                .with_technical(tr!("config.fsync_failed", err = e))
             })?;
         }
         std::fs::rename(&tmp, target).map_err(|e| {
@@ -928,7 +928,7 @@ pub fn validate_anchor_id(id: &str) -> Result<(), AppError> {
 /// 构造 TOML 解析错误（load 损坏 / 备份也损坏时返回）
 fn parse_error(e: &toml::de::Error) -> AppError {
     AppError::config(tr!("config.parse_failed", err = e))
-        .with_technical(format!("TOML 解析错误: {}", e))
+        .with_technical(tr!("config.toml_parse_detail", err = e))
         .with_source("config_manager")
 }
 

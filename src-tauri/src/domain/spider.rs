@@ -166,10 +166,10 @@ impl MissevanClient {
             Ok(j) => j,
             Err(e) => {
                 let err = AppError::network(tr!("network.json_parse_failed", err = e))
-                    .with_technical(format!(
-                        "room_id: {}, 前200字符: {}",
-                        room_id,
-                        truncate_bytes(&body, 200)
+                    .with_technical(tr!(
+                        "network.response_parse_detail",
+                        room_id = room_id,
+                        snippet = truncate_bytes(&body, 200)
                     ))
                     .with_source("spider");
                 self.record_request("GET", &url, status.as_u16(), start, Some(room_id), Some(err.message.clone()));
@@ -448,10 +448,10 @@ impl MissevanClient {
 
         if !status.is_success() {
             let err = AppError::network(tr!("network.api_error_status", status = status))
-                .with_technical(format!(
-                    "HTTP {}: {} (前200字符)",
-                    status,
-                    truncate_bytes(&body, 200)
+                .with_technical(tr!(
+                    "network.http_error_detail",
+                    status = status,
+                    snippet = truncate_bytes(&body, 200)
                 ))
                 .with_source("spider");
             let kind = classify_http_status(status.as_u16()).unwrap_or(CheckErrorKind::Other);
@@ -493,10 +493,10 @@ impl MissevanClient {
             kind: CheckErrorKind::Format,
             status: None,
             error: AppError::network(tr!("network.json_parse_failed", err = e))
-                .with_technical(format!(
-                    "room_id: {}, 前200字符: {}",
-                    room_id,
-                    truncate_bytes(&body, 200)
+                .with_technical(tr!(
+                    "network.response_parse_detail",
+                    room_id = room_id,
+                    snippet = truncate_bytes(&body, 200)
                 ))
                 .with_source("spider"),
         })?;

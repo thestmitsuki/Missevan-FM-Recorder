@@ -6,6 +6,7 @@
 //! 单测注入内存 mock。
 
 use crate::infrastructure::error::types::AppError;
+use crate::tr;
 
 /// Run 键路径（HKCU，无需管理员权限）
 pub const RUN_KEY_PATH: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
@@ -37,7 +38,7 @@ impl AutostartStore for WinregAutostart {
         let (run, _disposition) = hkcu.create_subkey(RUN_KEY_PATH).map_err(|e| {
             AppError::system(
                 crate::infrastructure::error::types::IO_WRITE_FAIL,
-                "打开注册表 Run 键失败",
+                tr!("config.autostart_run_key_failed"),
             )
             .with_technical(e.to_string())
         })?;
@@ -45,7 +46,7 @@ impl AutostartStore for WinregAutostart {
             Some(v) => run.set_value(name, &v).map_err(|e| {
                 AppError::system(
                     crate::infrastructure::error::types::IO_WRITE_FAIL,
-                    "写入开机自启注册表失败",
+                    tr!("config.autostart_registry_write_failed"),
                 )
                 .with_technical(e.to_string())
             })?,
@@ -80,8 +81,11 @@ pub struct NoopAutostart;
 impl AutostartStore for NoopAutostart {
     fn set_run_entry(&self, _name: &str, value: Option<&str>) -> Result<(), AppError> {
         tracing::warn!(
-            "非 Windows 平台不支持开机自启注册表写入（请求: {:?}）",
-            value.map(|_| "enabled")
+            "{}",
+            tr!(
+                "config.autostart_unsupported_platform",
+                req = format!("{:?}", value.map(|_| "enabled"))
+            )
         );
         Ok(())
     }

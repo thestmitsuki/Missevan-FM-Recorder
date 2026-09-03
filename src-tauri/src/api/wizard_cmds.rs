@@ -74,7 +74,11 @@ fn verify_ffmpeg_zip_sha256(zip_path: &std::path::Path) -> Result<(), AppError> 
         .collect::<String>();
     if !actual.eq_ignore_ascii_case(expected) {
         return Err(AppError::system(IO_WRITE_FAIL, tr!("wizard.sha256_mismatch"))
-            .with_technical(format!("期望 {}，实际 {}", expected, actual))
+            .with_technical(tr!(
+                "wizard.sha256_mismatch_detail",
+                expected = expected,
+                actual = actual
+            ))
             .with_suggestion(tr!("wizard.manual_download_hint")));
     }
     tracing::info!("{}", tr!("wizard.sha256_passed", actual = actual));
