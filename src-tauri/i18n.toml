@@ -464,3 +464,9 @@ crypto_utf8_failed = { zh = "解码结果不是有效 UTF-8", en = "Decoded resu
 [mock]
 mode_enabled = { zh = "模拟模式已启用", en = "Mock mode enabled" }
 mode_disabled = { zh = "模拟模式已禁用", en = "Mock mode disabled" }
+
+[player]
+service_unavailable = { zh = "内置播放服务不可用", en = "Built-in playback service unavailable" }
+not_a_file = { zh = "不是文件: {path}", en = "Not a file: {path}" }
+file_not_found = { zh = "文件不存在: {path}", en = "File not found: {path}" }
+service_start_failed = { zh = "启动回环 HTTP 服务失败: {err}", en = "Failed to start loopback HTTP service: {err}" }

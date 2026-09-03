@@ -8,6 +8,8 @@ use std::sync::Arc;
 
 use tauri::State;
 
+use crate::tr;
+
 use super::http_audio::HttpAudioServer;
 
 /// 请求播放某个录音文件，返回可设给 `<audio>.src` 的流式 URL。
@@ -21,7 +23,7 @@ pub async fn play_http(
     path: String,
 ) -> Result<String, String> {
     let Some(server) = server.as_ref() else {
-        return Err("播放服务不可用".into());
+        return Err(tr!("player.service_unavailable").into());
     };
     server.register(&std::path::PathBuf::from(&path))
 }

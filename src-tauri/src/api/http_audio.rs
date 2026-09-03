@@ -34,6 +34,8 @@ use std::sync::{Arc, Mutex};
 
 use rand::Rng;
 
+use crate::tr;
+
 /// 服务内部状态（线程间共享）：id → 绝对路径 映射与当前 token。
 #[derive(Default)]
 struct Inner {
@@ -56,7 +58,7 @@ impl HttpAudioServer {
     pub fn start() -> Result<Self, String> {
         // 随机端口：tiny_http 绑定 127.0.0.1:0（OS 分配空闲端口）。
         let server = tiny_http::Server::http("127.0.0.1:0")
-            .map_err(|e| format!("启动回环 HTTP 服务失败: {e}"))?;
+            .map_err(|e| tr!("player.service_start_failed", err = e))?;
         let port = server.server_addr().to_ip().map(|s| s.port()).unwrap_or(0);
         let base_url = format!("http://127.0.0.1:{port}");
 
@@ -279,8 +281,8 @@ impl HttpAudioServer {
     pub fn register(&self, path: &std::path::Path) -> Result<String, String> {
         match std::fs::metadata(path) {
             Ok(m) if m.is_file() => {}
-            Ok(_) => return Err(format!("不是文件: {}", path.display())),
-            Err(_) => return Err(format!("文件不存在: {}", path.display())),
+            Ok(_) => return Err(tr!("player.not_a_file", path = path.display())),
+            Err(_) => return Err(tr!("player.file_not_found", path = path.display())),
         }
         let mut guard = self.inner.lock().unwrap();
         let id = next_id(&mut guard);
