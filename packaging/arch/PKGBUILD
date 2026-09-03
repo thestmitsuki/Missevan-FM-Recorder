@@ -5,7 +5,7 @@
 # （源码本地构建，无外部源文件可校验）。
 
 pkgname=missevan-recorder
-pkgver=0.2.1
+pkgver=0.2.2
 pkgrel=1
 pkgdesc="猫耳 FM 直播自动录制工具（Missevan 猫耳录制器）"
 arch=('x86_64')
