@@ -213,6 +213,23 @@ impl ConfigManager {
         let key = crypto::machine_key();
         global.proxy_password = crypto::deobfuscate_or_plain(&global.proxy_password, &key);
 
+        // 相对路径 output_dir → 基于可执行文件所在目录解析为绝对路径（仅内存，不写盘）
+        let output_dir = Path::new(&global.output_dir);
+        if !output_dir.is_absolute() {
+            let exe_dir = std::env::current_exe()
+                .ok()
+                .and_then(|p| p.parent().map(|p| p.to_path_buf()))
+                .unwrap_or_else(|| PathBuf::from("."));
+            let abs = exe_dir.join(output_dir);
+            let old = output_dir.display().to_string();
+            let new = abs.display().to_string();
+            global.output_dir = abs.to_string_lossy().into_owned();
+            tracing::debug!(
+                "{}",
+                tr!("config.runtime_convert_output_dir", old = old, new = new)
+            );
+        }
+
         let mut anchors = Vec::new();
         let anchors_dir = self.anchors_dir();
         if anchors_dir.exists() {

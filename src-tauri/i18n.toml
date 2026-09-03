@@ -93,6 +93,7 @@ error_detector_concurrency_max = { zh = "检测并发数不能超过 64", en = "
 error_detector_jitter_max = { zh = "检测抖动上限不能超过 86400 秒", en = "Detector jitter limit cannot exceed 86400 seconds" }
 error_bitrate_max = { zh = "码率不能超过 320 kbps", en = "Bitrate cannot exceed 320 kbps" }
 error_record_format = { zh = "录制格式不支持（仅支持 m4a / mp3）", en = "Recording format not supported (only m4a / mp3 are supported)" }
+runtime_convert_output_dir = { zh = "运行时转换 output_dir: '{old}' → '{new}' (仅内存)", en = "Runtime convert output_dir: '{old}' → '{new}' (memory only)" }
 
 [update]
 check_disabled = { zh = "检查更新已禁用（设置 > 通用 > 检查更新）", en = "Update check is disabled (Settings > General > Check for updates)" }
@@ -391,8 +392,9 @@ open_folder_failed = { zh = "打开最近录制所在文件夹失败（{path}）
 unknown_location = { zh = "<未知位置>", en = "<unknown location>" }
 non_string_panic_payload = { zh = "<非字符串 panic 载荷>", en = "<non-string panic payload>" }
 main_window_not_found = { zh = "未找到主窗口", en = "Main window not found" }
+set_borderless_window_failed = { zh = "设置无边框窗口失败 ({label}): {err}", en = "Failed to set a borderless window ({label}): {err}" }
 tray_ghost_title = { zh = "检测到上次异常退出 (Abnormal exit detected)", en = "Abnormal exit detected" }
-tray_ghost_body = { zh = "若托盘中残留旧图标，可将鼠标悬停通知区清除。If an old tray icon remains, hover over the notification area to clear it.", en = "If an old tray icon remains, hover over the notification area to clear it." }
+tray_ghost_body = { zh = "若托盘中残留旧图标，可将鼠标悬停通知区清除。", en = "If an old tray icon remains, hover over the notification area to clear it." }
 exe_path_failed = { zh = "获取当前可执行文件路径失败: {err}", en = "Failed to get the current executable path: {err}" }
 exe_dir_failed = { zh = "无法获取可执行文件所在目录", en = "Failed to determine the executable directory" }
 start_menu_dir_failed = { zh = "无法定位用户“开始菜单”目录（%APPDATA% 缺失）", en = "Failed to locate the user's Start Menu directory (%APPDATA% missing)" }
@@ -470,3 +472,4 @@ service_unavailable = { zh = "内置播放服务不可用", en = "Built-in playb
 not_a_file = { zh = "不是文件: {path}", en = "Not a file: {path}" }
 file_not_found = { zh = "文件不存在: {path}", en = "File not found: {path}" }
 service_start_failed = { zh = "启动回环 HTTP 服务失败: {err}", en = "Failed to start loopback HTTP service: {err}" }
+http_service_start_error = { zh = "内置播放器 HTTP 服务启动失败(播放将不可用): {err}", en = "Built-in player HTTP service failed to start (playback will be unavailable): {err}" }

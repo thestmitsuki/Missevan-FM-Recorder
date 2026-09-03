@@ -1,0 +1,11 @@
+# 权限定义：音频播放（api/audio_cmds.rs）
+
+[[permission]]
+identifier = "allow-play-http"
+description = "启用 play_http 命令（获取音频流式 URL）"
+commands = { allow = ["play_http"], deny = [] }
+
+[[permission]]
+identifier = "allow-stop-http"
+description = "启用 stop_http 命令（释放音频流）"
+commands = { allow = ["stop_http"], deny = [] }

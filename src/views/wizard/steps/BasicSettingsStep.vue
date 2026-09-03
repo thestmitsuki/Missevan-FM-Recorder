@@ -21,7 +21,6 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Switch } from "@/components/ui/switch";
 
 const { t } = useI18n();
@@ -50,7 +49,7 @@ const languageOptions = [
   { value: "en" as AppLocale, labelKey: "wizard.languageEn" },
 ];
 
-const formatOptions = [
+const formatOptions: { value: "m4a" | "mp3"; labelKey: string }[] = [
   { value: "m4a", labelKey: "wizard.formatM4A" },
   { value: "mp3", labelKey: "wizard.formatMP3" },
 ];
@@ -64,6 +63,10 @@ const themeOptions: { value: ThemeMode; labelKey: string }[] = [
 function selectLanguage(locale: AppLocale) {
   wizardStore.setStaged({ language: locale });
   setLocale(locale); // 即时生效并持久化（localStorage['locale']）
+}
+
+function selectFormat(format: "m4a" | "mp3") {
+  wizardStore.setStaged({ recordFormat: format });
 }
 
 function selectTheme(mode: ThemeMode) {
@@ -141,20 +144,22 @@ function handleNext() {
       <!-- 1. 语言 -->
       <div>
         <Label>{{ t("wizard.language") }}</Label>
-        <RadioGroup
-          :model-value="staged.language"
-          class="mt-2 flex gap-5"
-          @update:model-value="(v: unknown) => selectLanguage(v as AppLocale)"
-        >
-          <div
+        <div class="mt-2 inline-flex rounded-md border bg-muted/40 p-0.5">
+          <button
             v-for="opt in languageOptions"
             :key="opt.value"
-            class="flex items-center gap-2"
+            type="button"
+            class="rounded-md px-4 py-1.5 text-sm transition-colors"
+            :class="
+              staged.language === opt.value
+                ? 'bg-primary text-primary-foreground shadow-sm'
+                : 'text-muted-foreground hover:text-foreground'
+            "
+            @click="selectLanguage(opt.value)"
           >
-            <RadioGroupItem :id="`wizard-lang-${opt.value}`" :value="opt.value" />
-            <Label :for="`wizard-lang-${opt.value}`">{{ t(opt.labelKey) }}</Label>
-          </div>
-        </RadioGroup>
+            {{ t(opt.labelKey) }}
+          </button>
+        </div>
       </div>
 
       <!-- 2. 音频输出路径 -->
@@ -190,16 +195,22 @@ function handleNext() {
       <!-- 3. 录制格式 -->
       <div>
         <Label>{{ t("wizard.format") }}</Label>
-        <RadioGroup v-model="staged.recordFormat" class="mt-2 flex gap-5">
-          <div
+        <div class="mt-2 inline-flex rounded-md border bg-muted/40 p-0.5">
+          <button
             v-for="fmt in formatOptions"
             :key="fmt.value"
-            class="flex items-center gap-2"
+            type="button"
+            class="rounded-md px-4 py-1.5 text-sm transition-colors"
+            :class="
+              staged.recordFormat === fmt.value
+                ? 'bg-primary text-primary-foreground shadow-sm'
+                : 'text-muted-foreground hover:text-foreground'
+            "
+            @click="selectFormat(fmt.value)"
           >
-            <RadioGroupItem :id="`wizard-fmt-${fmt.value}`" :value="fmt.value" />
-            <Label :for="`wizard-fmt-${fmt.value}`">{{ t(fmt.labelKey) }}</Label>
-          </div>
-        </RadioGroup>
+            {{ t(fmt.labelKey) }}
+          </button>
+        </div>
       </div>
 
       <!-- 4. 音频分段间隔 -->
@@ -278,20 +289,22 @@ function handleNext() {
       <!-- 8. 主题颜色 -->
       <div>
         <Label>{{ t("wizard.theme") }}</Label>
-        <RadioGroup
-          :model-value="staged.theme"
-          class="mt-2 flex gap-5"
-          @update:model-value="(v: unknown) => selectTheme(v as ThemeMode)"
-        >
-          <div
+        <div class="mt-2 inline-flex rounded-md border bg-muted/40 p-0.5">
+          <button
             v-for="opt in themeOptions"
             :key="opt.value"
-            class="flex items-center gap-2"
+            type="button"
+            class="rounded-md px-4 py-1.5 text-sm transition-colors"
+            :class="
+              staged.theme === opt.value
+                ? 'bg-primary text-primary-foreground shadow-sm'
+                : 'text-muted-foreground hover:text-foreground'
+            "
+            @click="selectTheme(opt.value)"
           >
-            <RadioGroupItem :id="`wizard-theme-${opt.value}`" :value="opt.value" />
-            <Label :for="`wizard-theme-${opt.value}`">{{ t(opt.labelKey) }}</Label>
-          </div>
-        </RadioGroup>
+            {{ t(opt.labelKey) }}
+          </button>
+        </div>
       </div>
     </div>
 

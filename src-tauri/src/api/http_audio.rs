@@ -181,6 +181,10 @@ impl HttpAudioServer {
             reader
         };
 
+        // 禁用分块：tiny_http 默认对超过 chunked_threshold（32KB）的 body 走
+        // Transfer-Encoding: chunked，与上方 Content-Length / Content-Range 头
+        // 互斥——播放器拿不到总长度就无法 206 seek。置 usize::MAX 后已知长度的
+        // 响应始终带 Content-Length 发送。
         tiny_http::Response::new(
             tiny_http::StatusCode(status as u16),
             headers,
@@ -188,6 +192,7 @@ impl HttpAudioServer {
             Some(len as usize),
             None,
         )
+        .with_chunked_threshold(usize::MAX)
     }
 
     /// 解析 Range 头，返回 (start, len)。纯字节范围，不做多段。

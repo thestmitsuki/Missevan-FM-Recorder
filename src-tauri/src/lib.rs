@@ -210,7 +210,7 @@ pub fn run() {
         match crate::api::http_audio::HttpAudioServer::start() {
             Ok(s) => Some(Arc::new(s)),
             Err(e) => {
-                tracing::error!("内置播放器 HTTP 服务启动失败(播放将不可用): {e}");
+                tracing::error!("{}", tr!("player.http_service_start_error", err = e));
                 None
             }
         };
@@ -378,7 +378,10 @@ pub fn run() {
                 for label in ["main", "wizard"] {
                     if let Some(w) = app.get_webview_window(label) {
                         if let Err(e) = w.set_decorations(false) {
-                            tracing::warn!("设置无边框窗口失败 ({}): {}", label, e);
+                            tracing::warn!(
+                                "{}",
+                                tr!("app.set_borderless_window_failed", label = label, err = e)
+                            );
                         }
                     }
                 }

@@ -58,6 +58,8 @@
     "allow-stop-recording",
     "allow-check-update",
     "allow-get-app-info",
-    "allow-open-browser"
+    "allow-open-browser",
+    "allow-play-http",
+    "allow-stop-http"
   ]
 }
