@@ -1,10 +1,9 @@
 import { defineStore } from "pinia";
 import { computed, ref } from "vue";
-import { convertFileSrc } from "@tauri-apps/api/core";
+import { invoke } from "@tauri-apps/api/core";
 import type { RecordingFile } from "@/types";
 import { useNotificationStore } from "@/stores/notificationStore";
 import { i18n } from "@/locales";
-import { isLinuxPlatform } from "@/services/platform";
 
 /**
  * 全局播放器 store（Task：播放器组件跨页面不注销）
@@ -16,12 +15,18 @@ import { isLinuxPlatform } from "@/services/platform";
  * - 多文件队列播放（「播放全部」）= queue 顺序播放，ended 自动切下一个
  *   （仍在全局 audio 上）。
  *
+ * 音源（H6，全平台统一）：后端启一个仅 127.0.0.1 回环 + 随机端口 + token 的 HTTP
+ * 流式服务，前端 `play_http` 拿到带 token 的 URL 设给 `<audio>`。WebKitGTK 与
+ * Chromium 都原生支持 127.0.0.1 http（含 Range/206 seek），不整文件进内存
+ * （边下边播），也不暴露绝对路径。替换此前的 blob URL / convertFileSrc(asset://)
+ * 方案（Linux 上 asset:// 不被 GStreamer 认、blob 整文件进内存卡顿）。
+ *
  * 加载失败提示（修复「切到文件页误报音频加载失败」根因）：
  * - 旧实现把 `<audio :src="audioUrl">` 放在组件内，页面每次挂载时 src 为空串，
  *   Chromium 对空 src 触发 error 事件 → 误报「音频加载失败」（音频实际正常）。
  * - 本 store 从不绑定空 src（无 src 的 Audio 实例不会触发 error 事件），
- *   @error 仅在**真实错误**（文件缺失/被移动/asset scope 拦截，src 非空且
- *   有播放意图）时提示；加载中、成功、空 src 均不提示。
+ *   @error 仅在**真实错误**（文件缺失/服务未启动/URL 失效，src 非空且有播放意图）
+ *   时提示；加载中、成功、空 src 均不提示。
  */
 export const usePlayerStore = defineStore("player", () => {
   // ── 状态（UI 直接消费）──
@@ -41,22 +46,10 @@ export const usePlayerStore = defineStore("player", () => {
   // ── audio 单例（跨页面存活；首次播放时惰性创建）──
   let audio: HTMLAudioElement | null = null;
 
-  // ── blob URL 生命周期管理（Linux 播放方案：fetch asset:// → blob URL）──
-  // Linux（WebKitGTK）媒体管道走 GStreamer，不认 asset:// 自定义 scheme
-  //（gsturidecodebin 无 "asset" URI handler）；fetch 走 WebKit 资源加载层可读
-  // asset://，转 blob URL 后 WebKitGTK 媒体栈原生支持 blob: 播放（Windows 保持
-  // convertFileSrc 直挂，零变更）。严格 revoke：任意时刻至多一个有效 blob URL
-  //（当前播放文件），换源/停止时释放上一个，避免历史音频累积进内存。
-  let blobUrl: string | null = null;
-  // 播放意图代际：fetch 为异步，期间切歌/停止后旧结果必须丢弃（防覆盖新 src）
+  // ── HTTP 流式音源生命周期管理（H6）──
+  // 播放意图代际：play_http 为异步，期间切歌/停止后旧结果必须丢弃（防覆盖新 src）。
+  // 换源/停止时调用后端 stop_http 撤销 token，令旧 URL 立即 404（内存/安全双释放）。
   let playbackSeq = 0;
-
-  function revokeBlobUrl() {
-    if (blobUrl) {
-      URL.revokeObjectURL(blobUrl);
-      blobUrl = null;
-    }
-  }
 
   function ensureAudio(): HTMLAudioElement {
     if (audio) return audio;
@@ -94,12 +87,21 @@ export const usePlayerStore = defineStore("player", () => {
       if (!el.currentSrc && !el.getAttribute("src")) return;
       // 误报防护 2：无播放意图的残余 error 事件（同一次失败的重复触发）→ 忽略
       if (queue.value.length === 0) return;
-      // 真实错误：文件缺失 / 被移动 / asset scope 拦截 → 停止并提示
+      // 真实错误：文件缺失 / 被移动 / URL 失效 → 停止并提示
       notifyLoadError();
     });
   }
 
-  /** 加载失败统一提示（@error 事件与 Linux fetch 失败共用；停止并清空队列） */
+  /** 换源/停止时撤销旧 HTTP URL（切歌/停止后旧文件不再可访问、立即 404） */
+  async function releaseHttp() {
+    try {
+      await invoke("stop_http");
+    } catch {
+      /* 服务不可用等降级场景忽略 */
+    }
+  }
+
+  /** 加载失败统一提示（@error 事件与 play_http 失败共用；停止并清空队列） */
   function notifyLoadError() {
     stopPlayback();
     useNotificationStore().addNotification({
@@ -128,37 +130,23 @@ export const usePlayerStore = defineStore("player", () => {
     if (!file) return;
     const el = ensureAudio();
     const seq = ++playbackSeq;
-    // 换源前释放上一个 blob（切歌/换队列时旧文件不再驻留内存）
-    revokeBlobUrl();
     el.volume = volume.value;
     playing.value = false;
     try {
-      if (isLinuxPlatform()) {
-        // Linux：asset:// 仅 WebKit 资源加载层可用，媒体管道不认——先 fetch 读为
-        // blob 再播；blob URL 不暴露绝对路径（相对 asset URL 更隐私）。
-        // 先清空 src（removeAttribute 不触发 load，无空 src 误报），避免旧 blob
-        // URL 残留：fetch 失败时 el.src 为空才能被识别为「fetch 阶段失败」。
-        el.removeAttribute("src");
-        const resp = await fetch(convertFileSrc(file.path));
-        if (!resp.ok) throw new Error(`load failed: HTTP ${resp.status}`);
-        const blob = await resp.blob();
-        // 竞态防护：等待期间已切歌/停止（seq 过期）→ 丢弃本次结果（blob 未
-        // createObjectURL，随 GC 释放，无泄漏）
-        if (seq !== playbackSeq) return;
-        blobUrl = URL.createObjectURL(blob);
-        el.src = blobUrl;
-      } else {
-        // Windows（WebView2）：http://asset.localhost 由 Chromium 网络栈处理，直挂
-        el.src = convertFileSrc(file.path);
+      // 向 HTTP 服务注册当前文件，拿带 token 的流式 URL
+      const url = await invoke<string>("play_http", { path: file.path });
+      // 竞态防护：等待期间已切歌/停止（seq 过期）→ 丢弃本次结果（并撤销其 token）
+      if (seq !== playbackSeq) {
+        void releaseHttp();
+        return;
       }
+      el.src = url;
       await el.play();
       playing.value = true;
     } catch {
-      // AbortError（换源/停止竞态）静默；其余失败（文件缺失/格式不支持）
-      // 由 @error 统一提示，避免重复 toast
       playing.value = false;
-      // fetch 阶段失败（Linux）：src 未设置，@error 不会触发 → 主动提示
-      if (seq === playbackSeq && isLinuxPlatform() && !el.src) {
+      // play_http 失败（文件缺失/服务未启动）：src 未设置，@error 不会触发 → 主动提示
+      if (seq === playbackSeq && !el.src) {
         notifyLoadError();
       }
     }
@@ -193,9 +181,9 @@ export const usePlayerStore = defineStore("player", () => {
 
   /** 停止并清空队列（用户点击关闭按钮时调用） */
   function stopPlayback() {
-    // 使在途 fetch 结果过期 + 释放当前 blob（严格 revoke）
+    // 使在途 play_http 结果过期 + 撤销旧 URL（服务端 404）
     playbackSeq += 1;
-    revokeBlobUrl();
+    void releaseHttp();
     if (audio) {
       audio.pause();
       audio.removeAttribute("src"); // removeAttribute 不触发 load，无空 src 误报

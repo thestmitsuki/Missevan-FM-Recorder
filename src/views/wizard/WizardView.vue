@@ -49,6 +49,10 @@ const stepList = [
     { key: "done", labelKey: "wizard.steps.done" },
 ] as const;
 
+// Linux（WebKitGTK UA 含 "Linux"）：无边框窗口需自绘拖拽条（见 lib.rs setup）；
+// 关闭/最小化由窗口管理器接管，应用内不渲染控制按钮。
+const isLinux = navigator.userAgent.includes("Linux");
+
 // ── 关闭确认（M4：窗口关闭按钮 → 确认对话框，是=exitApp，否=留当前页） ──
 const closeConfirmOpen = ref(false);
 let unlistenClose: UnlistenFn | null = null;
@@ -104,6 +108,15 @@ onUnmounted(() => {
     <div
         class="flex h-screen flex-col overflow-hidden bg-background text-foreground"
     >
+        <!-- ── Linux 无边框拖拽条（Arch 包无顶部操作栏，见 lib.rs setup；应用内
+             只提供拖拽区，最小化/关闭由窗口管理器 Hyprland rules 接管）── -->
+        <div
+            v-if="isLinux"
+            class="flex h-8 shrink-0 items-center justify-between bg-background/95 px-3 text-xs text-muted-foreground"
+            data-tauri-drag-region
+        >
+            <span class="select-none" data-tauri-drag-region>Missevan Recorder</span>
+        </div>
         <!-- ── 顶部步骤条：已完成绿勾 / 当前蓝点 / 未完成灰点 + 第 X/4 步 ── -->
         <header class="shrink-0 border-b-0 bg-background/95 px-6 pt-4 pb-3">
             <div class="mb-2 text-right text-xs text-muted-foreground">

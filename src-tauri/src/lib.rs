@@ -201,6 +201,20 @@ pub fn run() {
     // 才跨启动调用生效（此前每次录制 new 一个实例，进程表形同虚设）
     let recorder_shared: Arc<FfmpegRecorder> = Arc::new(FfmpegRecorder::new());
 
+    // 内置播放器 HTTP 流式音源（H6）：全平台统一。启动即创建回环服务（随机端口），
+    // 服务线程在 setup 期 spawn；.manage 供 play_http/stop_http 命令取用。
+    // 失败（端口绑定异常，极罕见）则降级：播放命令返回错误、前端提示失败，
+    // 不阻断应用其余功能。仅回环 + token + id 白名单，无目录遍历。
+    // 以 Option 管理：服务无法启动时为 None，命令内降级处理。
+    let http_server: Option<Arc<crate::api::http_audio::HttpAudioServer>> =
+        match crate::api::http_audio::HttpAudioServer::start() {
+            Ok(s) => Some(Arc::new(s)),
+            Err(e) => {
+                tracing::error!("内置播放器 HTTP 服务启动失败(播放将不可用): {e}");
+                None
+            }
+        };
+
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
@@ -230,6 +244,7 @@ pub fn run() {
         .manage(log_buffer.clone()) // 调试日志环形缓冲（get_logs / clear_logs）
         .manage(network_store.clone()) // 网络请求插桩缓冲（get_network_logs / clear_network_logs）
         .manage(log_level_reload.clone()) // 日志级别热更新句柄（U5：save_config/import_config 落盘后调用）
+        .manage(http_server.clone()) // 内置播放器 HTTP 流式音源（H6）；None=服务未启动
         // ── 关闭行为（Task 17：规格 1.1 / 设计 §11.5）──
         // 决策见 infrastructure::tray::decide_close_action（close_behavior × 托盘实际可用性）：
         //   close_behavior=tray 且托盘存在且可见 → prevent_close + hide（驻留托盘）
@@ -275,6 +290,8 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            crate::api::audio_cmds::play_http,
+            crate::api::audio_cmds::stop_http,
             crate::api::anchor_cmds::get_anchors,
             crate::api::anchor_cmds::add_anchor,
             crate::api::anchor_cmds::get_anchor_profile,
@@ -341,6 +358,31 @@ pub fn run() {
                 .get_webview_window("main")
                 .expect(tr!("app.main_window_not_found"));
             let window_for_recording = window.clone();
+
+            // 内置播放器 HTTP 服务线程（H6）：若服务已启动，spawn_blocking 阻塞运行 recv
+            // 循环（独立 OS 线程），直到应用退出置位 serving 停止。
+            {
+                let server_slot = app.state::<Option<Arc<crate::api::http_audio::HttpAudioServer>>>();
+                if let Some(srv) = server_slot.as_ref() {
+                    let srv = srv.clone();
+                    tauri::async_runtime::spawn_blocking(move || srv.run());
+                }
+            }
+
+            // Linux：无系统标题栏（无顶部操作栏）——前端 TopBar / 向导拖拽区提供
+            // data-tauri-drag-region 拖拽窗口。仅 Linux 生效（Hyprland/Wayland 下
+            // 窗口管理器负责装饰与关闭；应用内只保留拖拽区，不渲染控制按钮）；
+            // Windows/macOS 保留系统标题栏（与现有外观一致）。
+            #[cfg(target_os = "linux")]
+            {
+                for label in ["main", "wizard"] {
+                    if let Some(w) = app.get_webview_window(label) {
+                        if let Err(e) = w.set_decorations(false) {
+                            tracing::warn!("设置无边框窗口失败 ({}): {}", label, e);
+                        }
+                    }
+                }
+            }
 
             {
                 let state: tauri::State<'_, RecorderState> = app.state();

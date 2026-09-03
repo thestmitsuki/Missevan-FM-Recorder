@@ -49,6 +49,10 @@ uuid = { version = "1", features = ["v4"] }
 async-trait = "0.1"
 fs2 = "0.4"
 rand = "0.8"
+# 本地 HTTP 流式播放服务（全平台统一音源：后端回环服务 + 前端 <audio> 直连）。
+# 仅 127.0.0.1 回环 + token 鉴权 + id 映射白名单，无目录遍历；支持 Range/206 供 seek。
+# 轻量零依赖（不拉 axum 全家桶），持久监听一次（Q1=A），应用退出即停。
+tiny_http = "0.12"
 dirs = "6"
 toml = "0.8"
 # base64 0.22（rust-version 1.60 ≤ MSRV 1.89.0；已在锁文件——Task 18 敏感字段混淆）
