@@ -8,6 +8,7 @@ use tauri::State;
 use tauri_plugin_opener::OpenerExt;
 
 use crate::domain::config::manager::ConfigManager;
+use crate::domain::config::model::resolve_output_dir;
 use crate::infrastructure::error::types::AppError;
 use crate::tr;
 
@@ -18,9 +19,11 @@ pub(crate) async fn open_output_dir(
     config_manager: State<'_, Arc<ConfigManager>>,
 ) -> Result<(), AppError> {
     let config = config_manager.load()?;
-    let dir = std::path::Path::new(&config.global.output_dir);
+    // 打开/创建的是真实目录：磁盘原值（相对可能）先解析为物理位置
+    //（model::resolve_output_dir），相对值会落到进程 CWD（开错目录不报错）
+    let dir = resolve_output_dir(&config.global.output_dir);
     if !dir.exists() {
-        std::fs::create_dir_all(dir).map_err(|e| {
+        std::fs::create_dir_all(&dir).map_err(|e| {
             AppError::system(
                 crate::infrastructure::error::types::IO_WRITE_FAIL,
                 tr!("app.create_output_dir_failed"),

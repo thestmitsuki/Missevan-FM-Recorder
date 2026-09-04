@@ -7,6 +7,7 @@ use tokio::sync::{Mutex, Notify, Semaphore};
 use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
 
+use crate::domain::config::model::resolve_output_dir;
 use crate::domain::config::model::AnchorStatusUpdate;
 use crate::domain::config::model::{AnchorConfig, Config};
 use crate::domain::detector::merge_live_state;
@@ -223,8 +224,13 @@ impl DetectionLoop {
             // 1) 节流发 DISK_LOW 预警（无人值守也可见，不再零预警）；
             // 2) 本轮暂停自动录制启动（避免每轮反复尝试 → 启动前检查拒绝的
             //    日志刷屏）。0 = 不限制；查询失败放行。
+            // S3 检查的是真实磁盘卷：output_dir 为磁盘原值（相对可能），先解析为
+            // 物理位置（model::resolve_output_dir）——相对值直接 statfs 会落到 CWD
+            let output_dir = resolve_output_dir(&config.global.output_dir)
+                .to_string_lossy()
+                .into_owned();
             let disk_low_this_round = match check_disk_space(
-                &config.global.output_dir,
+                &output_dir,
                 config.global.disk_space_limit_gb,
             ) {
                 DiskSpaceStatus::Low {

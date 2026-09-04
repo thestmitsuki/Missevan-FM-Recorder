@@ -10,6 +10,7 @@ use tauri::Emitter;
 use tauri::WebviewWindow;
 use tokio::task::JoinHandle;
 
+use crate::domain::config::model::resolve_output_dir;
 use crate::domain::config::model::AnchorStatusUpdate;
 use crate::domain::config::model::{AnchorConfig, GlobalConfig};
 use crate::domain::recorder::builder::FfmpegCommandBuilder;
@@ -148,7 +149,12 @@ pub async fn start_ffmpeg_recording(
     // 输出路径（filename_template 渲染，H1：主播名/房间号来自外部 API/用户输入/
     // 导入配置，渲染后逐路径组件消毒——剔除 Windows 非法字符、控制字符与路径穿越段；
     // 模板含子目录时自动创建）
-    let output_dir = config.output_dir.trim_end_matches(['/', '\\']);
+    // output_dir 字段是磁盘原值（相对可能，便携语义）——ffmpeg 实际写盘前
+    // 必须先解析为物理位置（model::resolve_output_dir：基于可执行文件目录）：
+    // 直接拿原值做 fs 操作会静默落到进程 CWD（启动方式不同位置漂移）
+    let output_dir = resolve_output_dir(&config.output_dir);
+    let output_dir = output_dir.to_string_lossy();
+    let output_dir = output_dir.trim_end_matches(['/', '\\']).to_string();
     let ext = &config.record_format;
     let rendered = crate::domain::recorder::template::render_filename_template(
         &config.filename_template,
@@ -160,7 +166,7 @@ pub async fn start_ffmpeg_recording(
         },
     );
     let output_path =
-        build_recording_output_path(output_dir, &rendered, ext, config.segment_seconds);
+        build_recording_output_path(&output_dir, &rendered, ext, config.segment_seconds);
     // 分段模式残留段文件可达性测试（`-n` 不覆盖模式配套）：输出目录已存在
     // `{前缀}_NNN.{ext}` 残留段文件（上次异常退出/强杀残留未被启动清理移除）时
     // 前缀去重（`_2`/`_3`…），避免 ffmpeg `-n` 模式下因首段文件已存在而拒绝

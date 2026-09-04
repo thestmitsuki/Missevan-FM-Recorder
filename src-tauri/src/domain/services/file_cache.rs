@@ -1,4 +1,5 @@
 use crate::domain::config::manager::ConfigManager;
+use crate::domain::config::model::resolve_output_dir;
 use crate::domain::services::fs_walk;
 use crate::infrastructure::error::types::AppError;
 use crate::infrastructure::state::app_state::AppStateHandle;
@@ -249,7 +250,10 @@ impl FileCacheManager {
     ) -> Result<(), AppError> {
         let scan_start = std::time::Instant::now();
         let config = config_manager.load()?;
-        let output_dir = Path::new(&config.global.output_dir).to_path_buf();
+        // 扫描根 = 物理位置：磁盘原值（相对可能）先解析（model::resolve_output_dir）——
+        // 这里产出的 RecordingFile 路径全部为绝对路径，是前端播放（play_http /
+        // convertFileSrc / rename / delete）路径串的唯一来源，必须是真实目录
+        let output_dir = resolve_output_dir(&config.global.output_dir);
 
         // 活跃录制输出路径（先取路径集再锁缓存，避免与命令侧锁顺序反转造成死锁）
         let active_paths = {

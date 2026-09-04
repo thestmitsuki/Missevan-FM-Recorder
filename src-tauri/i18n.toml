@@ -98,7 +98,6 @@ error_detector_concurrency_max = { zh = "检测并发数不能超过 64", en = "
 error_detector_jitter_max = { zh = "检测抖动上限不能超过 86400 秒", en = "Detector jitter limit cannot exceed 86400 seconds" }
 error_bitrate_max = { zh = "码率不能超过 320 kbps", en = "Bitrate cannot exceed 320 kbps" }
 error_record_format = { zh = "录制格式不支持（仅支持 m4a / mp3）", en = "Recording format not supported (only m4a / mp3 are supported)" }
-runtime_convert_output_dir = { zh = "运行时转换 output_dir: '{old}' → '{new}' (仅内存)", en = "Runtime convert output_dir: '{old}' → '{new}' (memory only)" }
 
 [update]
 check_disabled = { zh = "检查更新已禁用（设置 > 通用 > 检查更新）", en = "Update check is disabled (Settings > General > Check for updates)" }

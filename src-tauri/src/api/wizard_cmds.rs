@@ -24,6 +24,7 @@ use tauri::Emitter;
 use tauri::{Manager, State};
 
 use crate::domain::config::manager::ConfigManager;
+use crate::domain::config::model::resolve_output_dir;
 use crate::domain::services::file_cache::{FileCacheHandle, FileCacheManager};
 use crate::infrastructure::checker::checks::{DiskSpaceCheck, FfmpegCheck, HealthCheck};
 use crate::infrastructure::checker::report::{CheckResult, CheckStatus, DiagnosticReport};
@@ -179,6 +180,12 @@ pub(crate) async fn run_wizard_health_check(
     disk_threshold_gb: u64,
     config_manager: State<'_, Arc<ConfigManager>>,
 ) -> Result<DiagnosticReport, AppError> {
+    // 检查做的是真实文件系统操作（写权限探测建目录写文件 / statfs 磁盘检查）：
+    // 向导暂存值可能是相对 "./recordings"（默认取自配置）——先解析为物理位置
+    //（model::resolve_output_dir）。暂存原值本身不落盘：完成时随 save_config
+    // 原样写入，磁盘保持用户原值（相对便携不破坏）
+    let output_dir = resolve_output_dir(&output_dir).to_string_lossy().into_owned();
+
     // 1. 收集候选可执行文件路径（候选顺序：配置指定（若非空）→ `{exe_dir}/ffmpeg/`（上次下载结果）→ PATH，
     //    与 domain::tools::resolve_ffmpeg_executable 的语义一致）
     let (ffmpeg_candidates, ffprobe_candidates) = match config_manager.load() {

@@ -10,6 +10,7 @@
 //! 每日定时调度（cleanup_scheduler）已移除。
 
 use crate::domain::config::manager::ConfigManager;
+use crate::domain::config::model::resolve_output_dir;
 use crate::domain::config::model::GlobalConfig;
 use crate::domain::services::file_cache::{
     FileCacheHandle, FileCacheManager, OutputScan, RecordingFile,
@@ -100,7 +101,9 @@ pub async fn run_cleanup(
     app_state: AppStateHandle,
 ) -> Result<CleanupSummary, AppError> {
     let config = config_manager.load()?;
-    let output_dir = Path::new(&config.global.output_dir).to_path_buf();
+    // 扫描/删除的是真实目录：磁盘原值（相对可能）先解析为物理位置
+    //（model::resolve_output_dir），相对值 read_dir 会落到进程 CWD
+    let output_dir = resolve_output_dir(&config.global.output_dir);
     // 录制中的文件跳过清理（FFmpeg 正在写入，删除会损坏录制）
     //（闭包 move 用克隆；原值后续传给 refresh_from_files 标记缓存活跃态）
     let active_paths = app_state.lock().await.active_output_paths();

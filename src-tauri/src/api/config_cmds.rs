@@ -2,6 +2,7 @@ use std::sync::Arc;
 use tauri::{Manager, State};
 
 use crate::domain::config::manager::{redact_proxy_url, ConfigManager, ImportSummary};
+use crate::domain::config::model::resolve_output_dir;
 use crate::domain::config::model::GlobalConfig;
 use crate::domain::services::cleanup::{run_cleanup, CleanupSummary};
 use crate::domain::services::file_cache::FileCacheHandle;
@@ -173,8 +174,11 @@ pub(crate) fn allow_output_dir(
 ) -> Result<(), AppError> {
     let config = config_manager.load()?;
     if !config.global.output_dir.trim().is_empty() {
+        // scope 匹配的是真实绝对路径：磁盘原值（相对可能）先解析为物理位置
+        //（model::resolve_output_dir）——放行相对字面量与实际文件路径不匹配
+        let output_dir = resolve_output_dir(&config.global.output_dir);
         app.asset_protocol_scope()
-            .allow_directory(std::path::Path::new(&config.global.output_dir), true)
+            .allow_directory(&output_dir, true)
             .map_err(|e| AppError::internal(tr!("config.allow_dir_failed", err = e)))?;
     }
     Ok(())

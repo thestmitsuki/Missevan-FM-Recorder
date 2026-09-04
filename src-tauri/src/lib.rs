@@ -764,9 +764,15 @@ pub fn run() {
             // 循环启动**之前**完成——清理只认残留标记，若与新录制并发，可能误删
             // 刚创建的活动标记对应文件（竞态）。失败静默（函数内部容错），不阻断启动。
             {
-                let orphan_output_dir = startup_config.global.output_dir.clone();
+                // 清理对象是真实目录：磁盘原值（相对可能）先解析为物理位置
+                //（model::resolve_output_dir），标记扫描目录用同一解析结果——
+                // 相对原值 read_dir 会落到进程 CWD，扫描不到任何残留
+                let orphan_output_dir = crate::domain::config::model::resolve_output_dir(
+                    &startup_config.global.output_dir,
+                );
+                let orphan_output_dir_s = orphan_output_dir.to_string_lossy().into_owned();
                 let (removed, markers, warned) = crate::domain::recorder::engine::
-                    cleanup_orphan_recordings(&orphan_output_dir, std::path::Path::new(&orphan_output_dir));
+                    cleanup_orphan_recordings(&orphan_output_dir_s, &orphan_output_dir);
                 tracing::info!(
                     "{}",
                     tr!(
@@ -774,7 +780,7 @@ pub fn run() {
                         removed = removed,
                         markers = markers,
                         warned = warned,
-                        path = orphan_output_dir
+                        path = orphan_output_dir_s
                     )
                 );
                 // R4：孤儿 ffmpeg **进程**终止（当前占位：不做事）。位于产物清理

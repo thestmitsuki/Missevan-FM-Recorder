@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
 use crate::tr;
 
@@ -100,6 +101,47 @@ pub const RECORD_FORMAT_WHITELIST: [&str; 2] = ["m4a", "mp3"];
 /// record_format 白名单校验（大小写敏感：前端与导出文件均为小写）
 pub fn is_valid_record_format(format: &str) -> bool {
     RECORD_FORMAT_WHITELIST.contains(&format)
+}
+
+/// 相对 output_dir → 基于可执行文件所在目录解析为绝对路径（物理位置派生函数）。
+///
+/// # 语义分层（20a7d50 回归教训——禁止在 load/save 路径改写 `output_dir` 字段）
+///
+/// `GlobalConfig.output_dir` 是**磁盘上的用户原值**（可为相对 `"./recordings"`，
+/// 便携语义：绿色版程序目录整体搬移后配置仍指向程序旁位置）。真实文件系统操作
+/// 需要**绝对路径**，由本函数在**使用点**派生，派生结果**绝不回写配置字段**：
+/// - 绝对原值（用户经目录选择器选定、或手写死的路径）→ 原样直通，不做任何拼接；
+/// - 相对原值（默认 `./recordings` 与用户手写的相对路径）→ 基于**可执行文件
+///   所在目录**解析（Windows 下配置目录即 `{exe_dir}/config`，同一基准）。
+///
+/// # 谁必须调用本函数
+///
+/// engine 录制输出路径、文件缓存扫描根、canonicalize 校验基准、磁盘空间检查、
+/// asset scope 放行、向导写权限探测等一切把 `output_dir` 当真目录使用的代码。
+/// **不得**把原值字段直接交给 fs API——相对值会静默落到进程 CWD 下（启动方式
+/// 不同则位置漂移，文件"丢了"但不报错，即 20a7d50 之前的隐患）。
+///
+/// # 谁必须**不**改写字段
+///
+/// 任何路径（load / save_global / import / 序列化）都**不得**把本函数结果写回
+/// `GlobalConfig.output_dir`：save_global 按入参原样序列化落盘，运行时派生值一旦
+/// 进入字段就会被持久化，磁盘配置随即失去便携性且原相对字符串永久丢失
+///（commit 20a7d50 在 load 期改写 → echo 保存污染磁盘；7c55ef7 仅把转换关进
+/// `#[cfg(not(test))]` 掩盖了症状——本次修复删除转换、改消费点显式调用本函数）。
+///
+/// 空串镜像历史转换语义（`exe_dir.join("")` = exe 目录本身）；仅手改配置
+/// 可能出现，保持零行为漂移。`current_exe()` 失败（理论不可达）时退化为
+/// 原样返回——消费方对目录不存在/不可读均有既有容错。
+pub fn resolve_output_dir(output_dir: &str) -> PathBuf {
+    let p = Path::new(output_dir);
+    if p.is_absolute() {
+        return p.to_path_buf();
+    }
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|p| p.to_path_buf()))
+        .unwrap_or_else(|| PathBuf::from("."));
+    exe_dir.join(p)
 }
 
 impl Default for GlobalConfig {
@@ -536,5 +578,74 @@ enable_check = true
                 errs
             );
         }
+    }
+
+    // ── output_dir 运行时解析（回归护栏：20a7d50 教训）──
+    //
+    // 语义分层（commit 分析定稿）：
+    // - `GlobalConfig.output_dir` = 磁盘上的用户原值（可为相对 "./recordings"，
+    //   便携语义）。任何写路径（save_global / import / 备份恢复回写）都**原样
+    //   落盘**，绝不把运行时解析值写进配置——20a7d50 在 load 期改写字段导致
+    //   echo 保存把解析值持久化、配置失去便携性；
+    // - 物理位置 = resolve_output_dir() 派生：绝对原值直通，相对原值基于
+    //   可执行文件所在目录解析（绿色版目录整体搬移后位置仍正确）。
+    //   所有真实文件系统操作（engine 写盘、文件缓存扫描、canonicalize 校验、
+    //   磁盘空间检查、向导写权限探测等）调用本函数后使用返回值。
+
+    fn exe_dir() -> std::path::PathBuf {
+        std::env::current_exe()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .to_path_buf()
+    }
+
+    #[test]
+    fn resolve_output_dir_absolute_paths_pass_through() {
+        // 绝对原值直通：任何解析基准都不得改变用户已写死的绝对路径
+        let abs = std::env::temp_dir()
+            .join("resolve-abs-x")
+            .to_string_lossy()
+            .into_owned();
+        let resolved = resolve_output_dir(&abs);
+        assert_eq!(resolved, std::path::PathBuf::from(&abs));
+        assert!(resolved.is_absolute());
+    }
+
+    #[test]
+    fn resolve_output_dir_relative_is_anchored_to_exe_dir() {
+        // 相对原值（默认 "./recordings" 及用户手写相对路径）必须解析为
+        // 「可执行文件所在目录」下的绝对路径，而不是进程 CWD 下的路径
+        //（后者随启动方式漂移，是 20a7d50 之前的隐患——文件落错位置不报错）
+        let exe = exe_dir();
+        let cwd = std::env::current_dir().unwrap();
+        for raw in ["./recordings", "recordings", "sub/dir/out"] {
+            let resolved = resolve_output_dir(raw);
+            assert!(resolved.is_absolute(), "raw={raw} 解析结果必须为绝对路径");
+            assert!(
+                resolved.starts_with(&exe),
+                "raw={raw} 必须以可执行文件目录为基准: {resolved:?}"
+            );
+            // 判别基准不是 CWD 拼接（测试运行期 exe 目录 target/debug/deps 本身
+            // 就在项目 CWD 之下，starts_with(CWD) 恒真）——直接比较结果是否等于
+            // CWD.join(raw)：等于即解析到了 CWD，是 20a7d50 之前的隐患回归
+            assert_ne!(
+                resolved,
+                cwd.join(raw),
+                "raw={raw} 不得解析到进程 CWD: {resolved:?}"
+            );
+        }
+        // 语义基准断言：默认值与 "./recordings" 等价
+        assert_eq!(
+            resolve_output_dir("./recordings"),
+            resolve_output_dir("recordings")
+        );
+    }
+
+    #[test]
+    fn resolve_output_dir_empty_mirrors_exe_dir() {
+        // 空串镜像 20a7d50 的转换语义（Path::join("") = exe 目录本身）——
+        // 仅手改配置可能出现，保持零行为漂移
+        assert_eq!(resolve_output_dir(""), exe_dir());
     }
 }

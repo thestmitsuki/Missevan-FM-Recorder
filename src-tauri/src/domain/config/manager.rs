@@ -213,29 +213,15 @@ impl ConfigManager {
         let key = crypto::machine_key();
         global.proxy_password = crypto::deobfuscate_or_plain(&global.proxy_password, &key);
 
-        // 相对路径 output_dir → 基于可执行文件所在目录解析为绝对路径（仅内存，不写盘）。
-        // cfg(not(test))：单测直接构造配置字符串（"D:/recordings" / "/tmp/recordings" 等
-        // 合成值）并断言原样往返；测试二进制运行于 target/debug/deps 下，转换会把它
-        // 当作相对路径改写（Linux CI：deps 目录 + "D:/recordings" → 拼接失效），
-        // 故该转换仅在生产可执行文件路径生效。
-        #[cfg(not(test))]
-        {
-            let output_dir = Path::new(&global.output_dir);
-            if !output_dir.is_absolute() {
-                let exe_dir = std::env::current_exe()
-                    .ok()
-                    .and_then(|p| p.parent().map(|p| p.to_path_buf()))
-                    .unwrap_or_else(|| PathBuf::from("."));
-                let abs = exe_dir.join(output_dir);
-                let old = output_dir.display().to_string();
-                let new = abs.display().to_string();
-                global.output_dir = abs.to_string_lossy().into_owned();
-                tracing::debug!(
-                    "{}",
-                    tr!("config.runtime_convert_output_dir", old = old, new = new)
-                );
-            }
-        }
+        // 【禁止改写 output_dir 字段——20a7d50 回归教训】
+        // 此处曾做「相对路径 → 基于可执行文件目录解析为绝对路径（仅内存，不写盘）」：
+        // 字段一旦被改写，本方法返回的配置对象（含缓存与 get_config → 前端 echo
+        // 回传）就携带解析值，save_global 会把它原样持久化——磁盘上的相对原值
+        // 永久丢失、配置失去便携性；单测往返断言也被改写（7c55ef7 仅用
+        // cfg(not(test)) 门控掩盖症状）。
+        // 语义分层（模型注释 resolve_output_dir）：output_dir = 磁盘用户原值，
+        // 永不在此或任何写路径被派生值覆盖；真实文件系统操作需要绝对路径时，
+        // 由消费点显式调用 model::resolve_output_dir 在**使用点**派生。
 
         let mut anchors = Vec::new();
         let anchors_dir = self.anchors_dir();
@@ -306,6 +292,14 @@ impl ConfigManager {
     /// 1. 写盘前备份旧文件（`config.toml.bak.<时间戳>`，保留最近 5 份）
     /// 2. proxy_password 混淆后落盘（读取时解密；旧明文配置读兼容）
     /// 3. 成功后同步通知设置到分发器（系统通知开关 / 事件勾选即时生效）
+    ///
+    /// # output_dir 落盘不变式（20a7d50 回归教训）
+    /// 本方法是全局配置的**唯一落盘入口**（save_config / import_json / 备份恢复
+    /// 回写 / finish_wizard 兜底全部收敛于此）。output_dir 按入参**原样序列化**
+    /// ——入参必须始终是磁盘语义的用户原值（相对路径保持相对，便携不破坏）。
+    /// 运行时解析出的绝对路径（model::resolve_output_dir 派生）**永远不允许**
+    /// 进入传给本方法的 GlobalConfig：load()/get_config 曾在读路径改写字段，
+    /// 经前端整包 echo 回传后此处把解析值落盘，磁盘相对原值永久丢失。
     pub fn save_global(&self, config: &GlobalConfig) -> Result<(), AppError> {
         // M7：写开始——旧缓存条目失效（写期间 load 回退磁盘）
         self.invalidate();
@@ -1015,6 +1009,41 @@ mod tests {
         let latest = backups.last().unwrap();
         let parsed: GlobalConfig = toml::from_str(&std::fs::read_to_string(latest).unwrap()).unwrap();
         assert_eq!(parsed.output_dir, "D:/rec-5");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── output_dir 磁盘原值不变式（20a7d50 → 7c55ef7 回归护栏）──
+    // load/save 任何路径都不得改写 output_dir：相对原值必须原样贯穿「写盘 →
+    // 读回 → echo 保存（前端整包回传形态）→ 再读盘」。真实文件系统操作的
+    // 绝对路径解析在消费点由 resolve_output_dir 完成（见 model.rs），与
+    // 本字段无关。若有人在此测试可见的路径上重新引入读期改写，本测试即失败。
+
+    #[test]
+    fn load_and_echo_save_preserve_relative_output_dir() {
+        let dir = unique_dir("rel-outdir");
+        let manager = ConfigManager::new(dir.clone());
+
+        let mut cfg = GlobalConfig::default();
+        cfg.output_dir = "./recordings".to_string();
+        manager.save_global(&cfg).unwrap();
+
+        // 读回：字段必须是磁盘原值，不得被解析成绝对路径
+        let loaded = manager.load().unwrap();
+        assert_eq!(
+            loaded.global.output_dir, "./recordings",
+            "load 不得改写相对 output_dir"
+        );
+
+        // echo 形态保存（get_config 返回值原样回传的等价路径）：磁盘必须仍是
+        // 相对原值——解析值落盘会永久丢失便携语义
+        manager.save_global(&loaded.global).unwrap();
+        let on_disk: GlobalConfig =
+            toml::from_str(&std::fs::read_to_string(manager.global_config_path()).unwrap())
+                .unwrap();
+        assert_eq!(
+            on_disk.output_dir, "./recordings",
+            "echo 保存后磁盘必须保持相对原值"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -3,6 +3,7 @@ use tauri::State;
 use tauri_plugin_dialog::DialogExt;
 
 use crate::domain::config::manager::ConfigManager;
+use crate::domain::config::model::resolve_output_dir;
 use crate::domain::services::file_cache::{
     build_folder_tree, mark_active, FileCacheHandle, FileCacheManager, RecordingFile,
 };
@@ -82,7 +83,12 @@ pub async fn rename_recording_file(
     }
     // H4：路径必须位于输出目录内（canonicalize 前缀匹配）；new_name 服务端消毒
     let config = config_manager.load()?;
-    let old = ensure_within_output_dir(Path::new(&old_path), &config.global.output_dir)?;
+    // 校验基准 = 真实物理目录：磁盘原值（相对可能）先解析（model::resolve_output_dir）
+    // ——相对基准经 canonicalize 会按进程 CWD 解析，与绝对候选路径比对必然失真
+    let output_dir = resolve_output_dir(&config.global.output_dir)
+        .to_string_lossy()
+        .into_owned();
+    let old = ensure_within_output_dir(Path::new(&old_path), &output_dir)?;
     let ext = old
         .extension()
         .and_then(|e| e.to_str())
@@ -127,7 +133,11 @@ pub async fn delete_recording_file(
     }
     // H4：路径必须位于输出目录内（canonicalize 前缀匹配）——杜绝任意文件删除
     let config = config_manager.load()?;
-    let canonical = ensure_within_output_dir(Path::new(&path), &config.global.output_dir)?;
+    // 校验基准 = 真实物理目录（相对原值先解析，理由同 rename_recording_file）
+    let output_dir = resolve_output_dir(&config.global.output_dir)
+        .to_string_lossy()
+        .into_owned();
+    let canonical = ensure_within_output_dir(Path::new(&path), &output_dir)?;
     std::fs::remove_file(&canonical)?;
 
     // 删除后刷新缓存

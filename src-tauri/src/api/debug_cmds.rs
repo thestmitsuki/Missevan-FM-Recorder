@@ -8,6 +8,7 @@ use tauri::State;
 use tokio::sync::Mutex;
 
 use crate::domain::config::manager::{redact_proxy_url, ConfigManager};
+use crate::domain::config::model::resolve_output_dir;
 use crate::domain::config::model::GlobalConfig;
 use crate::domain::detector::r#loop::DetectionLoop;
 use crate::domain::detector::stats::DetectorStatsSnapshot;
@@ -183,7 +184,11 @@ async fn perform_health_checks(config: &GlobalConfig, mock_mode: bool) -> Diagno
         ffmpeg_path: config.ffmpeg_path.clone(),
     }));
     runner.register(Box::new(DiskSpaceCheck {
-        output_dir: config.output_dir.clone(),
+        // 磁盘检查针对真实目录：磁盘原值（相对可能）先解析为物理位置
+        //（model::resolve_output_dir），相对值 statfs 会落到进程 CWD
+        output_dir: resolve_output_dir(&config.output_dir)
+            .to_string_lossy()
+            .into_owned(),
         threshold_gb: config.disk_space_limit_gb,
     }));
 
