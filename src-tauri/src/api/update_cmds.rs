@@ -174,8 +174,8 @@ fn compare_versions(a: &str, b: &str) -> std::cmp::Ordering {
 #[tauri::command]
 pub async fn check_update(
     config_manager: State<'_, Arc<ConfigManager>>,
-    /// true = 手动检查（用户主动点击「检查更新」），永远放行；
-    /// false / None = 自动检查（启动时 / 定时），受 `check_updates` 开关约束。
+    // true = 手动检查（用户主动点击「检查更新」），永远放行；
+    // false / None = 自动检查（启动时 / 定时），受 `check_updates` 开关约束。
     manual: Option<bool>,
 ) -> Result<UpdateInfo, AppError> {
     let current = env!("CARGO_PKG_VERSION").to_string();
