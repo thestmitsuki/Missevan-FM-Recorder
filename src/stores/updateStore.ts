@@ -10,13 +10,20 @@ const RELEASES_FALLBACK_URL =
     "https://github.com/thestmitsuki/Missevan-FM-Recorder/releases";
 
 /**
- * 请求级并发去重：启动自动检查与 AboutDialog 手动检查并发时复用同一请求
- * （请求只发一次，结果各自消费——手动检查仍在对话框内展示，互不干扰）。
+ * 请求级并发去重：自动检查与手动检查并发时复用同一请求。
+ *
+ * `manual` 语义：
+ * - `false`（默认，启动检查）：后端受 `check_updates` 开关约束；
+ * - `true`（AboutDialog 手动检查）：后端永远放行。
+ *
+ * 复用规则：仅当已有进行中的请求时复用；不存在 inFlight 时按本次 `manual`
+ * 新建。由于失败路径 `finally` 会立即清空 `inFlight`，被开关拒绝的自动请求
+ * 不会污染紧随其后的手动请求。
  */
 let inFlight: Promise<UpdateInfo> | null = null;
-export function fetchUpdateInfo(): Promise<UpdateInfo> {
+export function fetchUpdateInfo(manual = false): Promise<UpdateInfo> {
     if (!inFlight) {
-        inFlight = api.checkUpdate().finally(() => {
+        inFlight = api.checkUpdate(manual).finally(() => {
             inFlight = null;
         });
     }
