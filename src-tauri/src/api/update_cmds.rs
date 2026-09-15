@@ -174,12 +174,15 @@ fn compare_versions(a: &str, b: &str) -> std::cmp::Ordering {
 #[tauri::command]
 pub async fn check_update(
     config_manager: State<'_, Arc<ConfigManager>>,
+    /// true = 手动检查（用户主动点击「检查更新」），永远放行；
+    /// false / None = 自动检查（启动时 / 定时），受 `check_updates` 开关约束。
+    manual: Option<bool>,
 ) -> Result<UpdateInfo, AppError> {
     let current = env!("CARGO_PKG_VERSION").to_string();
-    // 「检查更新」开关（设置 > 通用）：关闭时手动检查也拒绝（与规格「检查更新」设置一致）；
+    // 「检查更新」开关（设置 > 通用）：仅自动路径受开关约束；手动路径永远执行；
     // 配置加载失败按默认（开启）处理，与旧逻辑一致
     let config = config_manager.load().unwrap_or_default();
-    if !config.global.check_updates {
+    if !config.global.check_updates && !manual.unwrap_or(false) {
         return Err(AppError::config(tr!("update.check_disabled")));
     }
 
