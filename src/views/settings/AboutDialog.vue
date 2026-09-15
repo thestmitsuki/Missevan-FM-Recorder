@@ -45,6 +45,34 @@ const info = ref<AppInfo | null>(null);
 const infoError = ref<string | null>(null);
 const depsOpen = ref(false);
 
+/**
+ * 从 Tauri 命令错误中提取可读文案。
+ *
+ * Tauri 会把后端的 `AppError` 序列化成对象（含 `code` / `message` 等字段），
+ * 直接 `String(e)` 会得到 `"[object Object]"`——必须显式取 message。
+ */
+function errMsg(e: unknown): string {
+    if (typeof e === "string") return e;
+    if (e instanceof Error) return e.message;
+    if (e && typeof e === "object") {
+        const rec = e as Record<string, unknown>;
+        // 常见字段：message / error / msg（含嵌套 { error: { message } }）
+        for (const key of ["message", "error", "msg"] as const) {
+            const v = rec[key];
+            if (typeof v === "string" && v) return v;
+            if (v && typeof v === "object") {
+                const m = (v as Record<string, unknown>).message;
+                if (typeof m === "string" && m) return m;
+            }
+        }
+    }
+    try {
+        return JSON.stringify(e);
+    } catch {
+        return String(e);
+    }
+}
+
 /** 报告问题：GitHub Issues 新建页面（预填标题与系统信息，规格 §2.2） */
 const ISSUES_BASE_URL =
     "https://github.com/thestmitsuki/Missevan-FM-Recorder/issues/new";
@@ -75,7 +103,7 @@ function reportIssue() {
     ].join("\n");
     const url = `${ISSUES_BASE_URL}?title=${encodeURIComponent(title)}&body=${encodeURIComponent(body)}`;
     api.openBrowser(url).catch((e) => {
-        reportError.value = t("help.reportFailed", { error: String(e) });
+        reportError.value = t("help.reportFailed", { error: errMsg(e) });
     });
 }
 
@@ -173,7 +201,7 @@ async function loadInfo() {
     try {
         info.value = await api.getAppInfo();
     } catch (e) {
-        infoError.value = String(e);
+        infoError.value = errMsg(e);
     }
 }
 
@@ -183,7 +211,8 @@ async function checkUpdate() {
     checkText.value = "";
     checkUrl.value = null;
     try {
-        const result = await fetchUpdateInfo(); // 与启动检查请求级去重（并发复用）
+        // manual=true：手动路径不受「设置 > 通用 > 检查更新」开关约束
+        const result = await fetchUpdateInfo(true);
         if (compareVersions(result.latest, result.current) > 0) {
             checkState.value = "update";
             checkText.value = t("about.updateAvailable", {
@@ -199,7 +228,7 @@ async function checkUpdate() {
         }
     } catch (e) {
         checkState.value = "error";
-        checkText.value = t("about.checkFailed", { error: String(e) });
+        checkText.value = t("about.checkFailed", { error: errMsg(e) });
     }
 }
 
@@ -208,7 +237,7 @@ async function openDownloadUrl(url: string) {
         await api.openBrowser(url);
     } catch (e) {
         checkState.value = "error";
-        checkText.value = t("about.checkFailed", { error: String(e) });
+        checkText.value = t("about.checkFailed", { error: errMsg(e) });
     }
 }
 
