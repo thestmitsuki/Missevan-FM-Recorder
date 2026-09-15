@@ -59,7 +59,8 @@ export const api = {
 
   // ── Update / About（Task 20：规格 §2.1）──
   /** 检查更新：GitHub Releases API 最新版本；失败抛「检查更新失败」错误 */
-  checkUpdate: () => invoke<UpdateInfo>("check_update"),
+  checkUpdate: (manual = false) =>
+    invoke<UpdateInfo>("check_update", { manual }),
   /** 关于窗口静态信息（应用名/版本/构建日期/OS/Rust/Tauri） */
   getAppInfo: () => invoke<AppInfo>("get_app_info"),
   /** 用默认浏览器打开 URL（仅 http/https） */
