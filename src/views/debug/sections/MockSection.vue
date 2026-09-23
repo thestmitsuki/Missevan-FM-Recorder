@@ -222,7 +222,7 @@ onBeforeUnmount(() => {
         </div>
 
         <!-- 模拟主播表格 -->
-        <div class="overflow-x-auto rounded-md border">
+        <div class="min-w-0 max-w-full overflow-x-auto rounded-md border">
             <Table>
                 <TableHeader>
                     <TableRow class="hover:bg-transparent">
